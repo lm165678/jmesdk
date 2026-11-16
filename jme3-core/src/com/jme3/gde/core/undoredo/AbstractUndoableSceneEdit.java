@@ -59,7 +59,9 @@ public abstract class AbstractUndoableSceneEdit extends AbstractUndoableEdit {
 
     @Override
     public void undo() throws CannotUndoException {
-        super.undo();
+        if (!canUndo()) {
+            throw new CannotUndoException();
+        }
         try {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
@@ -69,16 +71,24 @@ public abstract class AbstractUndoableSceneEdit extends AbstractUndoableEdit {
                 }
             }).get();
         } catch (InterruptedException ex) {
-            Exceptions.printStackTrace(ex);
+            Thread.currentThread().interrupt();
+            CannotUndoException failure = new CannotUndoException();
+            failure.initCause(ex);
+            throw failure;
         } catch (ExecutionException ex) {
-            Exceptions.printStackTrace(ex);
+            CannotUndoException failure = new CannotUndoException();
+            failure.initCause(ex.getCause());
+            throw failure;
         }
+        super.undo();
         awtUndo();
     }
 
     @Override
     public void redo() throws CannotRedoException {
-        super.redo();
+        if (!canRedo()) {
+            throw new CannotRedoException();
+        }
         try {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
@@ -88,10 +98,16 @@ public abstract class AbstractUndoableSceneEdit extends AbstractUndoableEdit {
                 }
             }).get();
         } catch (InterruptedException ex) {
-            Exceptions.printStackTrace(ex);
+            Thread.currentThread().interrupt();
+            CannotRedoException failure = new CannotRedoException();
+            failure.initCause(ex);
+            throw failure;
         } catch (ExecutionException ex) {
-            Exceptions.printStackTrace(ex);
+            CannotRedoException failure = new CannotRedoException();
+            failure.initCause(ex.getCause());
+            throw failure;
         }
+        super.redo();
         awtRedo();
    }
 }

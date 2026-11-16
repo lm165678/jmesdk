@@ -36,7 +36,7 @@ public class GElementNode extends AbstractNode{
         this.element = element;
         this.setName(element.getID());
         String name = this.element.getClass().getSimpleName();
-        this.setName(name);
+        this.setDisplayName(name + " (" + element.getID() + ")");
         this.setIconBaseWithExtension(basePath+"/"+name+".png");
         
     }
@@ -129,7 +129,8 @@ public class GElementNode extends AbstractNode{
         public void setValue(Object val) throws IllegalAccessException, IllegalArgumentException {
             try {
                 EditAttributeCommand command = CommandProcessor.getInstance().getCommand(EditAttributeCommand.class); 
-               command.setAttribute(attributeName);
+               command.setElement(element);
+                command.setAttribute(attributeName);
                 command.setValue(val.toString());
                CommandProcessor.getInstance().excuteCommand(command);
             } catch (Exception ex) {
@@ -150,7 +151,13 @@ public class GElementNode extends AbstractNode{
         @Override
         public void actionPerformed(ActionEvent e) {
             VisibilityCommand command = CommandProcessor.getInstance().getCommand(VisibilityCommand.class);
-           command.setVisibility(param);
+            CommandProcessor.getInstance().getGuiEditor().selectElement(element);
+            command.setVisibility(param);
+            try {
+                CommandProcessor.getInstance().excuteCommand(command);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(null, ex.getMessage());
+            }
         }
     }
 }

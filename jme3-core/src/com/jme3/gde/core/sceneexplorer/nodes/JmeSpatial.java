@@ -107,7 +107,8 @@ public class JmeSpatial extends AbstractSceneExplorerNode {
             return this;
         }
 
-        Node[] children = getChildren().getNodes();
+        // Picking must resolve collapsed/asynchronously populated explorer nodes too.
+        Node[] children = getChildren().getNodes(true);
         for (Node node: children) {
             if (node instanceof JmeSpatial) {
                 JmeSpatial jmeSpatial = (JmeSpatial) node;
@@ -139,6 +140,7 @@ public class JmeSpatial extends AbstractSceneExplorerNode {
                 };
         } else {
             return new Action[]{
+                        com.jme3.gde.core.assets.AnimationEditorSupport.nodeAction(spatial),
                         new NewControlPopup(this),
                         new NewLightPopup(this),
                         new ControlsPopup(this),
@@ -161,12 +163,12 @@ public class JmeSpatial extends AbstractSceneExplorerNode {
 
     @Override
     public boolean canCut() {
-        return !((JmeSpatialChildren) jmeChildren).readOnly;
+        return canDestroy();
     }
 
     @Override
     public boolean canDestroy() {
-        return !((JmeSpatialChildren) jmeChildren).readOnly;
+        return !((JmeSpatialChildren) jmeChildren).readOnly && getParentNode() instanceof JmeNode;
     }
 
     @Override
@@ -201,101 +203,82 @@ public class JmeSpatial extends AbstractSceneExplorerNode {
 
     @Override
     public void destroy() throws IOException {
+        if (!canDestroy()) {
+            throw new IOException("The scene root cannot be deleted.");
+        }
+        final JmeNode parentExplorer = (JmeNode) getParentNode();
         try {
-            fireSave(true);
-            SceneApplication.getApplication().enqueue(new Callable<Void>() {
-
-                @Override
-                public Void call() throws Exception {
-                    spatial.removeFromParent();
-                    return null;
-                }
+            SceneApplication.getApplication().enqueue(() -> {
+                com.jme3.scene.Node parent = spatial.getParent();
+                int index = parent.getChildIndex(spatial);
+                spatial.removeFromParent();
+                org.openide.util.Lookup.getDefault().lookup(com.jme3.gde.core.undoredo.SceneUndoRedoManager.class)
+                        .addEdit(this, new com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit() {
+                    public void sceneUndo() {
+                        parent.attachChildAt(spatial, Math.min(index, parent.getQuantity()));
+                    }
+                    public void sceneRedo() {
+                        spatial.removeFromParent();
+                    }
+                    public void awtUndo() {
+                        parentExplorer.refresh(false);
+                        fireSave(true);
+                    }
+                    public void awtRedo() {
+                        awtUndo();
+                    }
+                });
+                return null;
             }).get();
-            if (getParentNode() instanceof JmeNode) {
-                JmeNode node = ((JmeNode) getParentNode());
-                if (node != null) {
-                    node.refresh(false);
-                }
-            }
-        } catch (InterruptedException ex) {
-            Exceptions.printStackTrace(ex);
-        } catch (ExecutionException ex) {
-            Exceptions.printStackTrace(ex);
+            fireSave(true);
+            parentExplorer.refresh(false);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IOException(error);
+        } catch (ExecutionException error) {
+            throw new IOException(error.getCause());
         }
     }
 
     @Override
     public Transferable clipboardCopy() throws IOException {
-        Transferable trans = new Transferable() {
-            @Override
-            public DataFlavor[] getTransferDataFlavors() {
-                return new DataFlavor[] { SPATIAL_FLAVOR };
-            }
-
-            @Override
-            public boolean isDataFlavorSupported(DataFlavor flavor) {
-                return SPATIAL_FLAVOR.equals(flavor);
-            }
-
-            @Override
-            public Object getTransferData(DataFlavor flavor) 
-                    throws UnsupportedFlavorException, IOException {
-                if (SPATIAL_FLAVOR.equals(flavor)) {
-                    return new ClipboardSpatial(spatial);
-                } else {
-                    throw new UnsupportedFlavorException(flavor);
-                }
-            }
-        };
-        return trans;
+        return captureClipboard(false);
     }
 
     @Override
     public Transferable clipboardCut() throws IOException {
-        fireSave(true);
-        Transferable trans = new Transferable() {
-            @Override
-            public DataFlavor[] getTransferDataFlavors() {
-                return new DataFlavor[]{ SPATIAL_FLAVOR };
-            }
+        if (!canDestroy()) {
+            throw new IOException("The scene root cannot be cut.");
+        }
+        return captureClipboard(true);
+    }
 
-            @Override
+    /** Capture once on the render thread; getTransferData must be side-effect free. */
+    private Transferable captureClipboard(boolean cut) throws IOException {
+        final ClipboardSpatial captured;
+        try {
+            captured = SceneApplication.getApplication().enqueue(() ->
+                    cut ? ClipboardSpatial.cut(spatial) : new ClipboardSpatial(spatial)).get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IOException(error);
+        } catch (ExecutionException error) {
+            throw new IOException(error.getCause());
+        }
+        return new Transferable() {
+            public DataFlavor[] getTransferDataFlavors() {
+                return new DataFlavor[]{SPATIAL_FLAVOR};
+            }
             public boolean isDataFlavorSupported(DataFlavor flavor) {
                 return SPATIAL_FLAVOR.equals(flavor);
             }
-
-            @Override
-            public Object getTransferData(DataFlavor flavor) throws 
-                    UnsupportedFlavorException, IOException {
-                if (SPATIAL_FLAVOR.equals(flavor)) {
-                    try {
-                        SceneApplication.getApplication().enqueue(new Callable<Void>() {
-                            @Override
-                            public Void call() throws Exception {
-                                spatial.removeFromParent();
-                                return null;
-                            }
-                        }).get();
-                        
-                        // @TODO: not a good cast
-                        JmeNode node = ((JmeNode) getParentNode());
-                        if (node != null) {
-                            node.refresh(false);
-                        }
-                        
-                        return new ClipboardSpatial(spatial);
-                    } catch (InterruptedException ex) {
-                        Exceptions.printStackTrace(ex);
-                    } catch (ExecutionException ex) {
-                        Exceptions.printStackTrace(ex);
-                    }
-                    return null;
-                } else {
+            public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException {
+                if (!isDataFlavorSupported(flavor)) {
                     throw new UnsupportedFlavorException(flavor);
                 }
+                return captured;
             }
         };
-        return trans;
     }
 
     @Override

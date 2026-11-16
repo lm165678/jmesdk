@@ -123,6 +123,9 @@ public class ShortcutManager {
         if (checkCommandeKey(kie)) {
             return null;
         }
+        if (!kie.isPressed() || kie.isRepeating() || ctrlDown || altDown) {
+            return null;
+        }
         for (ShortcutTool s : shortcutList) {
             if (s != currentShortcut) {
                 if (s.isActivableBy(kie)) {

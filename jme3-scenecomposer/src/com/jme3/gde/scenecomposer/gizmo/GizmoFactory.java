@@ -20,6 +20,10 @@ import com.jme3.scene.Spatial;
 public class GizmoFactory {
 
     public static Spatial createGizmo(AssetManager assetManager, AbstractSceneExplorerNode node) {
+        com.jme3.environment.gi.GiProbeVolume volume = node.getLookup().lookup(com.jme3.environment.gi.GiProbeVolume.class);
+        if (volume != null) {
+            return GiProbeGizmo.create(assetManager, volume);
+        }
         if (node instanceof JmeLight) {
             return LightGizmoFactory.createGizmo(assetManager, (JmeLight) node);
         } else if (node instanceof JmeAudioNode) {

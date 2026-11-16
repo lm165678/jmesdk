@@ -37,10 +37,10 @@
 
   <Layout class="org.netbeans.modules.form.compat2.layouts.DesignBorderLayout"/>
   <SubComponents>
-    <Component class="com.jme3.gde.assetbrowser.AssetBrowser" name="assetBrowser1">
+    <Component class="com.jme3.gde.assetbrowser.AssetContentPanel" name="assetBrowser1">
       <Constraints>
         <Constraint layoutClass="org.netbeans.modules.form.compat2.layouts.DesignBorderLayout" value="org.netbeans.modules.form.compat2.layouts.DesignBorderLayout$BorderConstraintsDescription">
-          <BorderConstraints direction="South"/>
+          <BorderConstraints direction="Center"/>
         </Constraint>
       </Constraints>
     </Component>

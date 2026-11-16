@@ -29,6 +29,48 @@ public class RotateTool extends SceneEditTool {
     private Quaternion lastRotate;
     private boolean wasDragging = false;
     private PickManager pickManager;
+    private float previousAngle;
+    private float accumulatedAngle;
+    private float appliedAngle;
+
+    /**
+     * Render-thread HUD value: degrees since this drag began, or NaN when idle.
+     * Shift snaps the drag delta to whole degrees; release restores continuous rotation.
+     * Resets on every handle press; release, cancellation and tool removal hide it.
+     * <pre>
+     * // 第一步：按 E 选择旋转工具；第二步：拖动旋转环查看本次累计角度，按住 Shift 吸附整度。
+     * // 第三步：松开鼠标隐藏提示；再次拖动从零开始。
+     * </pre>
+     * @return signed accumulated degrees, or NaN outside a drag
+     */
+    public float getDragDegrees() {
+        return wasDragging ? appliedAngle * com.jme3.math.FastMath.RAD_TO_DEG : Float.NaN;
+    }
+
+    @Override
+    public void hideMarker() {
+        wasDragging = false;
+        pickedMarker = null;
+        if (pickManager != null) {
+            pickManager.reset();
+        }
+        super.hideMarker();
+    }
+
+    /**
+     * Keep the displayed rings in the same frame as PickManager's drag plane.
+     * Called on the render thread; release/cancel restores normal tracking on
+     * the next update. This prevents direction-only light gizmos from changing
+     * the displayed axes while a handle is held.
+     */
+    @Override
+    public void doUpdateToolsTransformation() {
+        if (!wasDragging) {
+            super.doUpdateToolsTransformation();
+        } else {
+            updateAxisMarkerScale();
+        }
+    }
 
     public RotateTool() {
         axisPickType = SceneEditTool.AxisMarkerPickType.planeOnly;
@@ -48,7 +90,9 @@ public class RotateTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             if (wasDragging) {
-                actionPerformed(new RotateUndo(toolController.getSelectedSpatial(), startRotate, lastRotate));
+                if (!startRotate.equals(lastRotate)) {
+                    actionPerformed(new RotateUndo(toolController.getSelectedSpatial(), startRotate, lastRotate));
+                }
                 wasDragging = false;
             }
             pickManager.reset();
@@ -71,7 +115,11 @@ public class RotateTool extends SceneEditTool {
                     pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_YZ, getTransformType(), camera, screenCoord);
                 }
                 startRotate = toolController.getSelectedSpatial().getLocalRotation().clone();
+                lastRotate = startRotate.clone();
                 startWorldRotate = toolController.getSelectedSpatial().getWorldRotation().clone();
+                previousAngle = 0;
+                accumulatedAngle = 0;
+                appliedAngle = 0;
                 wasDragging = true;
             }
         }
@@ -86,11 +134,8 @@ public class RotateTool extends SceneEditTool {
 
     @Override
     public void mouseMoved(Vector2f screenCoord, JmeNode rootNode, DataObject currentDataObject) {
-        if (pickedMarker == null) {
+        if (!wasDragging) {
             highlightAxisMarker(camera, screenCoord, axisPickType);
-        } else {
-            pickedMarker = null;
-            pickManager.reset();
         }
     }
 
@@ -101,7 +146,9 @@ public class RotateTool extends SceneEditTool {
             pickedMarker = null; // mouse released, reset selection
 
             if (wasDragging) {
-                actionPerformed(new RotateUndo(toolController.getSelectedSpatial(), startRotate, lastRotate));
+                if (!startRotate.equals(lastRotate)) {
+                    actionPerformed(new RotateUndo(toolController.getSelectedSpatial(), startRotate, lastRotate));
+                }
                 wasDragging = false;
             }
             pickManager.reset();
@@ -111,7 +158,21 @@ public class RotateTool extends SceneEditTool {
             }
 
             if (pickedMarker.equals(QUAD_XY) || pickedMarker.equals(QUAD_XZ) || pickedMarker.equals(QUAD_YZ)) {
-                Quaternion rotation = startRotate.mult(pickManager.getRotation(startWorldRotate.inverse()));
+                float angle = pickManager.getSignedAngle();
+                float delta = angle - previousAngle;
+                if (delta > com.jme3.math.FastMath.PI) {
+                    delta -= com.jme3.math.FastMath.TWO_PI;
+                } else if (delta < -com.jme3.math.FastMath.PI) {
+                    delta += com.jme3.math.FastMath.TWO_PI;
+                }
+                accumulatedAngle += delta;
+                previousAngle = angle;
+                appliedAngle = toolController.isRotationSnapEnabled()
+                        ? Math.round(accumulatedAngle * com.jme3.math.FastMath.RAD_TO_DEG)
+                                * com.jme3.math.FastMath.DEG_TO_RAD
+                        : accumulatedAngle;
+                Quaternion rotation = startRotate.mult(
+                        pickManager.getRotationForAngle(startWorldRotate.inverse(), appliedAngle));
                 toolController.updateSelectedRotation(rotation, pickedMarker);
                 lastRotate = rotation;
             }
@@ -143,20 +204,22 @@ public class RotateTool extends SceneEditTool {
 
         RotateUndo(Spatial spatial, Quaternion before, Quaternion after) {
             this.spatial = spatial;
-            this.before = before;
-            this.after = after;
+            this.before = before.clone();
+            this.after = after.clone();
         }
 
         @Override
         public void sceneUndo() {
             spatial.setLocalRotation(before);
             toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
 
         @Override
         public void sceneRedo() {
             spatial.setLocalRotation(after);
             toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
     }
 }

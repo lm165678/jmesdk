@@ -34,6 +34,8 @@ configurations.examplelibs {
     transitive = false
 }
 
+apply from: 'gradle/local-engine.gradle'
+
 dependencies {
     corelibs dep("com.badlogicgames.gdx:gdx-ai:1.8.2", true, true)
     corelibs dep("javax.help:javahelp:2.0.05", false, false)
@@ -73,7 +75,9 @@ dependencies {
 
 def dep(coords, javadoc = false, sources = false) {
     def result = [dependencies.create(coords)]
-    if (javadoc) result << dependencies.create("$coords:javadoc")
+    def localArtifact = coords instanceof CharSequence && coords.toString().startsWith('org.jmonkeyengine:')
+            && localEngineModules.contains(coords.toString().split(':')[1])
+    if (javadoc && !localArtifact) result << dependencies.create("$coords:javadoc")
     if (sources) result << dependencies.create("$coords:sources")
     result
 }
@@ -117,6 +121,21 @@ tasks.register('copyBaseLibs') {
     doLast {
         description = "Copies the library files needed to run the SDK to " +
                 "jme3-core-baselibs and jme3-core-libraries"
+
+        // These directories are generated; synchronize after dependency resolution succeeded.
+        def resolvedRuntime = configurations.corelibs.files
+        ['jme3-core-baselibs', 'jme3-core-libraries'].each { moduleName ->
+            def target = file(moduleName + '/release/modules/ext')
+            def expected = resolvedRuntime.findAll { artifact ->
+                def isEngine = artifact.name.startsWith('jme3')
+                        || artifact.name.contains('Minie') || artifact.name.contains('Heart')
+                !isSourceOrJavadoc(artifact.name)
+                        && (moduleName == 'jme3-core-baselibs' ? isEngine : !isEngine)
+            }.collect { it.name }.toSet()
+            target.listFiles()?.findAll { it.name.endsWith('.jar') && !expected.contains(it.name) }?.each {
+                delete it
+            }
+        }
 
         // for each dependency in corelibs..
         //project.configurations.corelibs.dependencies.each {dep ->
@@ -309,7 +328,7 @@ createBaseXml.inputs.files configurations.corelibs.resolve()
 createBaseXml.outputs.file "jme3-core-baselibs/nbproject/project.xml"
 createBaseXml.outputs.file "jme3-core-libraries/nbproject/project.xml"
 
-tasks.register('copyProjectBaseLibraries', Copy) {
+tasks.register('copyProjectBaseLibraries', Sync) {
     description = 'Copies JME base libraries (jars, sources, javadocs)'
 
     from(configurations.corelibs)
@@ -326,7 +345,7 @@ tasks.register('copyProjectBaseLibraries', Copy) {
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
 }
 
-tasks.register('copyProjectLibraries', Copy) {
+tasks.register('copyProjectLibraries', Sync) {
     description = 'Copies third-party project libraries'
 
     from(configurations.corelibs)
@@ -634,8 +653,71 @@ tasks.register('updateNetbeans', Exec) {
     }
 }
 
+// Bundle Minie desktop natives at build time. Runtime uses the engine's supported
+// pre-extracted-library mode, avoiding writes to shared temporary/cache folders.
+tasks.register('prepareSdkPhysicsNatives', Sync) {
+    from({ configurations.corelibs.files.findAll { it.name.startsWith('Libbulletjme-') }.collect { zipTree(it) } })
+    include 'native/**/bulletjme.dll', 'native/**/libbulletjme.so', 'native/**/libbulletjme.dylib'
+    includeEmptyDirs = false
+    eachFile { details ->
+        def parts = details.relativePath.segments
+        def architecture = parts[parts.length - 2]
+        def filename = parts[parts.length - 1]
+        def suffix = filename.lastIndexOf('.')
+        def renamed = filename.substring(0, suffix) + '-' + architecture + filename.substring(suffix)
+        details.relativePath = new org.gradle.api.file.RelativePath(true, parts[1], architecture, renamed)
+    }
+    into 'jme3-core-baselibs/release/native-libs'
+}
+
+tasks.register('verifyLocalEngine') {
+    group = 'verification'
+    description = 'Checks the local engine coordinates and required custom feature classes.'
+    doLast {
+        if (!localEngineEnabled) {
+            throw new GradleException('This SDK fork requires the custom local engine.')
+        }
+        def libraries = configurations.corelibs.resolvedConfiguration.resolvedArtifacts
+        def required = [
+            'jme3-core': ['com/jme3/renderer/pipeline/FrameGraphPipeline.class',
+                          'com/jme3/renderer/RenderPath.class'],
+            'jme3-plugins': ['com/jme3/scene/plugins/sdf/SdfVolume.class',
+                             'com/jme3/scene/plugins/sdf/SurfaceBakeData.class']
+        ]
+        required.each { module, entries ->
+            def artifact = libraries.find { it.name == module && !it.classifier }
+            if (artifact == null || artifact.moduleVersion.id.version != localEngineVersion) {
+                throw new GradleException('Missing local engine module: ' + module)
+            }
+            new ZipFile(artifact.file).withCloseable { jar ->
+                entries.each { entry ->
+                    if (jar.getEntry(entry) == null) {
+                        throw new GradleException(module + ' does not contain ' + entry)
+                    }
+                }
+            }
+        }
+        [configurations.corelibs, configurations.optlibs, configurations.examplelibs,
+                configurations.testdatalibs].each { configuration ->
+            configuration.resolvedConfiguration.resolvedArtifacts.each { artifact ->
+                if (artifact.moduleVersion.id.group == 'org.jmonkeyengine'
+                        && localEngineModules.contains(artifact.name)
+                        && artifact.moduleVersion.id.version != localEngineVersion) {
+                    throw new GradleException('Mixed engine versions: ' + artifact.moduleVersion.id)
+                }
+            }
+        }
+        def report = file('build/local-engine-libraries.txt')
+        report.parentFile.mkdirs()
+        report.text = libraries.findAll { !it.classifier }.collect {
+            it.moduleVersion.id.toString() + ' -> ' + it.file.absolutePath
+        }.sort().join(System.lineSeparator()) + System.lineSeparator()
+        logger.lifecycle('LOCAL_ENGINE_VERIFY_PASS ' + localEngineVersion)
+    }
+}
+
 tasks.register('buildSdk') {
-    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig
+    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig, verifyLocalEngine, prepareSdkPhysicsNatives
     doLast {
         ant.propertyfile(file: "nbproject/project.properties") {
             entry(key: "plugins.version", value: "${jmeVersion}")

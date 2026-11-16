@@ -22,13 +22,11 @@ public class SceneApplication extends SimpleApplication {
 
     public SceneApplication() {
         super(new StatsAppState());
+        com.jme3.gde.core.scene.SdkNativeLibraries.configure();
         AppSettings newSetting = new AppSettings(true);
         newSetting.setFrameRate(30);
-        if (System.getProperty("os.name").toLowerCase().contains("mac")) {
-            // On Mac we need to enforce the 3.2 core profile or we have 2.0 only
-            newSetting.setRenderer(AppSettings.LWJGL_OPENGL32);
-        }
-        newSetting.setCustomRenderer(AwtPanelsContext.class);
+        newSetting.setRenderer(com.jme3.gde.core.scene.PreviewPanelsContext.previewRenderer());
+        newSetting.setCustomRenderer(com.jme3.gde.core.scene.PreviewPanelsContext.class);
         setSettings(newSetting);
         setPauseOnLostFocus(false);
         setShowSettings(false);

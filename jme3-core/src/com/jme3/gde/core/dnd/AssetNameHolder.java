@@ -38,4 +38,9 @@ package com.jme3.gde.core.dnd;
 public interface AssetNameHolder {
 
     String getAssetName();
+
+    /** Optional source identity for validating a drop against the active project. */
+    default org.openide.filesystems.FileObject getAssetFile() {
+        return null;
+    }
 }

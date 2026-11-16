@@ -93,6 +93,8 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
         // Something happens in LightProbeFactory
         if(node instanceof Node) {
             result.add(new JMenuItem(new AddProbeAction()));
+            result.add(new JMenuItem(new com.jme3.gde.core.sceneexplorer.nodes.actions.impl.NewGiProbeVolumeAction()
+                    .getAction((com.jme3.gde.core.sceneexplorer.nodes.JmeNode) jmeNode, dataObject)));
         }
 
         return result;
@@ -135,6 +137,7 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
                 @Override
                 public Void call() throws Exception {
                     DirectionalLight light = new DirectionalLight();
+                    light.setCastShadow(true);
                     light.setName("DirectionalLight");
                     light.setDirection(new Vector3f(-1, -1, -1).normalizeLocal());
                     light.setColor(ColorRGBA.White);
@@ -159,6 +162,7 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
                 @Override
                 public Void call() throws Exception {
                     PointLight light = new PointLight();
+                    light.setCastShadow(true);
                     light.setColor(ColorRGBA.White);
                     light.setName("PointLight");
                     node.addLight(light);
@@ -182,6 +186,7 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
                 @Override
                 public Void call() throws Exception {
                     SpotLight light = new SpotLight();
+                    light.setCastShadow(true);
                     light.setColor(ColorRGBA.White);
                     light.setName("SpotLight");
                     node.addLight(light);
@@ -196,7 +201,7 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
     private class AddProbeAction extends AbstractAction {
 
         public AddProbeAction() {
-            putValue(NAME, "Light Probe");
+            putValue(NAME, org.openide.util.NbBundle.getMessage(NewLightPopup.class, "AddReflectionProbe"));
         }
 
         @Override
@@ -212,9 +217,10 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
                         envCam.setPosition(new Vector3f(0, 0, 0));
                     }
                     LightProbe lightProbe = LightProbeFactory.makeProbe(envCam, node, new JmeLightProbeProgressHandler());
-                    lightProbe.setName("LightProbe");
+                    lightProbe.setName("ReflectionProbe");
+                    lightProbe.setDiffuseEnabled(false);
                     node.addLight(lightProbe);
-                    ((BoundingSphere) lightProbe.getBounds()).setRadius(10);
+                    lightProbe.getArea().setRadius(10);
                     node.updateModelBound();
                     addLightUndo(node, lightProbe);
                     setModified();
@@ -226,6 +232,21 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
     }
 
     private void addLightUndo(final Spatial undoParent, final Light undoLight) {
+        com.jme3.scene.Spatial shadowRoot = node;
+        var scene = SceneApplication.getApplication().getCurrentSceneRequest();
+        if (scene != null && (node == scene.getRootNode()
+                || (scene.getRootNode() instanceof Node root && node.hasAncestor(root)))) {
+            shadowRoot = scene.getRootNode();
+        }
+        final com.jme3.scene.Spatial shadowOwner = shadowRoot;
+        final com.jme3.renderer.queue.RenderQueue.ShadowMode previousShadowMode = shadowOwner.getLocalShadowMode();
+        final boolean enableInheritedShadows = (undoLight instanceof DirectionalLight
+                || undoLight instanceof PointLight || undoLight instanceof SpotLight)
+                && previousShadowMode == com.jme3.renderer.queue.RenderQueue.ShadowMode.Inherit;
+        if (enableInheritedShadows) {
+            shadowOwner.setShadowMode(com.jme3.renderer.queue.RenderQueue.ShadowMode.CastAndReceive);
+        }
+
         //add undo
         if (undoParent != null && undoLight != null) {
             Lookup.getDefault().lookup(SceneUndoRedoManager.class).addEdit(this, new AbstractUndoableSceneEdit() {
@@ -233,11 +254,17 @@ public class NewLightPopup extends AbstractAction implements Presenter.Popup {
                 @Override
                 public void sceneUndo() throws CannotUndoException {
                     undoParent.removeLight(undoLight);
+                    if (enableInheritedShadows) {
+                        shadowOwner.setShadowMode(previousShadowMode);
+                    }
                 }
 
                 @Override
                 public void sceneRedo() throws CannotRedoException {
                     undoParent.addLight(undoLight);
+                    if (enableInheritedShadows) {
+                        shadowOwner.setShadowMode(com.jme3.renderer.queue.RenderQueue.ShadowMode.CastAndReceive);
+                    }
                 }
 
                 @Override

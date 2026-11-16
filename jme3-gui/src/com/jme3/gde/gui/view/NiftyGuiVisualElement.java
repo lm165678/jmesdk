@@ -7,7 +7,6 @@ package com.jme3.gde.gui.view;
 import com.jme3.asset.AssetInfo;
 import com.jme3.asset.AssetKey;
 import com.jme3.asset.AssetManager;
-import com.jme3.asset.AssetNotFoundException;
 import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.gui.NiftyGuiDataObject;
 import com.jme3.gde.gui.nodes.GElementNode;
@@ -29,14 +28,10 @@ import jada.ngeditor.persistence.GUIWriter;
 import java.awt.Dimension;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
-import java.beans.PropertyChangeEvent;
-import java.beans.PropertyChangeListener;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Observable;
 import java.util.Observer;
@@ -49,23 +44,16 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JToolBar;
-import javax.xml.bind.JAXBException;
-import javax.xml.parsers.ParserConfigurationException;
-import org.netbeans.api.progress.ProgressHandle;
 import org.netbeans.core.spi.multiview.CloseOperationState;
 import org.netbeans.core.spi.multiview.MultiViewElement;
 import org.netbeans.core.spi.multiview.MultiViewElementCallback;
-import org.netbeans.spi.actions.AbstractSavable;
 import org.openide.awt.UndoRedo;
 import org.openide.explorer.ExplorerManager;
-import org.openide.loaders.DataObject;
-import org.openide.util.Exceptions;
 import org.openide.util.Lookup;
 import org.openide.util.NbBundle.Messages;
 import org.openide.util.lookup.AbstractLookup;
 import org.openide.util.lookup.InstanceContent;
 import org.openide.windows.TopComponent;
-import org.xml.sax.SAXException;
 
 @MultiViewElement.Registration(
         displayName = "#LBL_NiftyGui_VISUAL",
@@ -76,7 +64,7 @@ import org.xml.sax.SAXException;
         position = 2000)
 @Messages("LBL_NiftyGui_VISUAL=Visual")
 @SuppressWarnings({"unchecked", "rawtypes"})
-public final class NiftyGuiVisualElement extends JPanel implements MultiViewElement , ExplorerManager.Provider,Observer, PropertyChangeListener {
+public final class NiftyGuiVisualElement extends JPanel implements MultiViewElement , ExplorerManager.Provider,Observer {
     private static final Logger logger = Logger.getLogger(NiftyGuiVisualElement.class.getName());
     private final NiftyGuiDataObject obj;
     private final JToolBar toolbar = new JToolBar();
@@ -88,6 +76,13 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     private final ExplorerManager nodesManager;
     private final UndoRedo.Manager undoSupport;
     private int guiID;
+    private GUI gui;
+    private String synchronizedXml;
+    private String serializedXml;
+    private boolean loading;
+    private boolean pending;
+    private boolean closed;
+    private final JLabel status = new JLabel();
      private final InstanceContent content = new InstanceContent();
      private final Lookup lookup;
      private final AssetManager assetManager;
@@ -96,18 +91,21 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
 
         @Override
         public InputStream getResourceAsStream(String path) {
+            if (assetManager == null) {
+                return null;
+            }
             AssetKey<Object> key = new AssetKey<>(path);
             AssetInfo info = assetManager.locateAsset(key);
             if (info != null){
                 return info.openStream();
             }else{
-                throw new AssetNotFoundException(path);
+                return null;
             }
         }
 
         @Override
         public URL getResource(String path) {
-            throw new UnsupportedOperationException();
+            return null;
         }
     }
     
@@ -118,8 +116,8 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         obj = lkp.lookup(NiftyGuiDataObject.class);
         assert obj != null;
         assetManager = obj.getLookup().lookup(AssetManager.class);
-        assert assetManager != null;
-        System.out.println("AssetManagerNifty " + assetManager);
+
+
         initComponents();
         view = new J2DNiftyView(800, 600);
         view.init(resourceLocation);
@@ -134,12 +132,27 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         view.setDropTarget(tmp);
        // editor.addObserver(view);
        // editor.addObserver(tranf);
-        this.obj.addPropertyChangeListener(this);
+
         this.createToolbar();
-        this.undoSupport = new UndoRedo.Manager();
+        this.undoSupport = new UndoRedo.Manager() {
+            @Override
+            public synchronized void undo() {
+                activateGui();
+                super.undo();
+                synchronizeDocument();
+            }
+
+            @Override
+            public synchronized void redo() {
+                activateGui();
+                super.redo();
+                synchronizeDocument();
+            }
+        };
         CommandProcessor.getInstance().setUndoManager(undoSupport);
         this.content.set(Collections.singleton(obj.getNodeDelegate()), null);
-        lookup = new AbstractLookup(content);
+        lookup = new org.openide.util.lookup.ProxyLookup(new AbstractLookup(content), obj.getLookup());
+        toolbar.add(status);
     }
  /**
  * Old code
@@ -155,6 +168,9 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
 
             @Override
             public void itemStateChanged(ItemEvent e) {
+                if (e.getStateChange() != ItemEvent.SELECTED) {
+                    return;
+                }
                 String string = (String) e.getItem();
                 if (null == string) {
                     view.setResoltion(800, 600);
@@ -176,8 +192,14 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
 
             @Override
             public void itemStateChanged(ItemEvent e) {
+                if (e.getStateChange() != ItemEvent.SELECTED) {
+                    return;
+                }
                 GLayer item = (GLayer) e.getItem();
-                editor.selectElement(item);
+                if (!loading && item != null && gui != null) {
+                    activateGui();
+                    editor.selectElement(item);
+                }
             }
         });
         toolbar.add(layers);
@@ -224,55 +246,52 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         return this.lookup ;
     }
     /**
-     * Raw implementation , just to prototype the editor
+     * The XML document owns saving and close confirmation. Switching tabs never
+     * writes the file. Visual history survives saving and tab switches; editing
+     * XML rebuilds the model and clears commands referencing its old elements.
+     * All lifecycle callbacks and model mutations run on the Swing EDT.
+     * Usage: 第一步：编辑 XML; 第二步：切换 Visual;
+     * 第三步：使用撤销/重做; 第四步：Ctrl+S 保存.
+     * Invalid XML stays available for correction in the XML tab.
      */
     @Override
     public void componentOpened() {
-       loadGui();
+        closed = false;
     }
 
     @Override
     public void componentClosed() {
-        
+        closed = true;
+        detachGui();
+        undoSupport.discardAllEdits();
     }
-    /**
-     * Raw implementation , just to prototype the editor
-     */
+
     @Override
     public void componentShowing() {
-        if(!this.obj.isModified()){
-            return;
-        }
         loadGui();
-        
     }
-    /**
-     * Raw implementation , just to prototype the editor
-     */
+
     @Override
     public void componentHidden() {
-        String path = this.obj.getPrimaryFile().getPath();
-        try {
-            this.editor.saveGui(path);
-        } catch (FileNotFoundException | JAXBException | NullPointerException ex) {
-            Exceptions.printStackTrace(ex);
+        synchronizeDocument();
+    }
+
+    private void activateGui() {
+        if (gui != null) {
+            GuiEditorModel model = (GuiEditorModel) CommandProcessor.getInstance().getObservable();
+            model.setCurrentGUI(guiID);
+            CommandProcessor.getInstance().setUndoManager(undoSupport);
         }
     }
 
     @Override
     public void componentActivated() {
-        try{
-        GuiEditorModel model = (GuiEditorModel) CommandProcessor.getInstance().getObservable();
-        model.setCurrentGUI(guiID);
-        model.getCurrent().addObserver(this);
-        CommandProcessor.getInstance().setUndoManager(undoSupport);
-        }catch(java.lang.IllegalArgumentException ex){
-            logger.log(Level.SEVERE,"Can't load your gui", ex);
-        }
+        activateGui();
     }
 
     @Override
     public void componentDeactivated() {
+        synchronizeDocument();
     }
 
     @Override
@@ -296,117 +315,116 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     }
 
     @Override
-    public void update(Observable o, Object arg) {
-       if(arg instanceof SelectionChanged ){
-           SelectionChanged event = (SelectionChanged) arg;
-           if(event.getNewSelection().isEmpty()){
-               return;
-           }
-           GElement parent = event.getElement();
-           GElementNode node = new GElementNode(parent);
-           this.content.set(Collections.singleton(node), null);
-           
-       }else if(o instanceof GUI){
-           //Add a save. We don't add multible savable because they cointains the same
-           //information about editing.
-           GuiSavable savable = this.lookup.lookup(GuiSavable.class);
-           if(savable == null){
-           String path = this.obj.getPrimaryFile().getPath();
-           final GuiSavable guiSavable = new NiftyGuiVisualElement.GuiSavable(((GUI)o),path);
-           this.content.add(guiSavable);
-           }
-       }
+    public void update(Observable source, Object event) {
+        if (loading || closed || gui == null) {
+            return;
+        }
+        if (event instanceof SelectionChanged) {
+            SelectionChanged selection = (SelectionChanged) event;
+            for (GElementNode previous : lookup.lookupAll(GElementNode.class)) {
+                content.remove(previous);
+            }
+            if (!selection.getNewSelection().isEmpty()) {
+                content.add(new GElementNode(selection.getElement()));
+            }
+        } else if (source == gui && !pending) {
+            // Notifications may arrive in the middle of a command.
+            pending = true;
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                pending = false;
+                synchronizeDocument();
+            });
+        }
     }
 
-    @Override
-    public void propertyChange(PropertyChangeEvent evt) {
-        if(evt.getPropertyName().equals(DataObject.PROP_MODIFIED)){
-            boolean old = (Boolean)evt.getOldValue();
-            boolean nev = (Boolean)evt.getNewValue();
-            if(old && !nev){
-                this.loadGui();
-            }
+    private javax.swing.text.StyledDocument document() throws IOException {
+        return obj.getLookup().lookup(org.openide.cookies.EditorCookie.class).openDocument();
+    }
+
+    private void detachGui() {
+        if (gui != null) {
+            com.jme3.gde.gui.nodes.ReferenceEdit.unbind(gui);
+            gui.deleteObserver(this);
+            gui.getSelection().deleteObserver(this);
         }
-      
+    }
+
+    private String serialize() throws Exception {
+        try (InputStream input = new GUIWriter(gui).getDocumentStream()) {
+            return new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
     }
 
     private void loadGui() {
-        ProgressHandle handle = ProgressHandle.createHandle("Loading the gui file");
+        loading = true;
         try {
-            
-            InputStream is = this.obj.getPrimaryFile().getInputStream();
-            handle.start();
-            ProjectAssetManager mgr = this.obj.getLookup().lookup(ProjectAssetManager.class);
-            String assetPath = mgr.getAssetFolder().getPath();
-            this.editor.createNewGui(nifty,is,new File(assetPath));
-            this.view.newGui(this.editor.getGui());
-            nodesManager.setRootContext(new GUINode(this.editor.getGui()));
-            this.editor.getGui().getSelection().addObserver(this);
-            Collection<GLayer> layers1 = this.editor.getGui().getLayers();
-            guiID = this.editor.getGui().getGUIid();
-            this.editor.getGui().addObserver(this);
-            DefaultComboBoxModel<GLayer> model = new DefaultComboBoxModel<>(layers1.toArray(GLayer[]::new));
-            layers.setModel(model);
-            layers.setSelectedItem(this.editor.getCurrentLayer());
-            
-            handle.finish();
-        } catch (ParserConfigurationException ex) {
-            Exceptions.printStackTrace(ex);
-        } catch (JAXBException | ClassNotFoundException | IOException | NoProductException | SAXException ex) {
-            Exceptions.printStackTrace(ex);
+            javax.swing.text.StyledDocument doc = document();
+            String xml = doc.getText(0, doc.getLength());
+            if (gui != null && xml.equals(synchronizedXml)) {
+                activateGui();
+                return;
+            }
+            ProjectAssetManager manager = obj.getLookup().lookup(ProjectAssetManager.class);
+            if (manager == null) {
+                throw new IOException("Open this GUI in a project with an assets folder.");
+            }
+            try (InputStream input = new java.io.ByteArrayInputStream(
+                    xml.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                editor.createNewGui(nifty, input, new File(manager.getAssetFolder().getPath()));
+            }
+            detachGui();
+            gui = editor.getGui();
+            guiID = gui.getGUIid();
+            com.jme3.gde.gui.nodes.ReferenceEdit.bind(gui, undoSupport);
+            undoSupport.discardAllEdits();
+            activateGui();
+            view.newGui(gui);
+            nodesManager.setRootContext(new GUINode(gui));
+            gui.getSelection().addObserver(this);
+            gui.addObserver(this);
+            layers.setModel(new DefaultComboBoxModel<>(gui.getLayers().toArray(GLayer[]::new)));
+            layers.setSelectedItem(gui.getCurrentLayer());
+            serializedXml = serialize();
+            synchronizedXml = xml;
+            scrollArea.setViewportView(view);
+            status.setText("");
         } catch (Exception ex) {
-            Exceptions.printStackTrace(ex);
-        }finally{
-           handle.finish();
+            scrollArea.setViewportView(new JLabel("Cannot preview XML: " + ex.getMessage()));
+            status.setText("Preview initialization failed; see the SDK log for details");
+            logger.log(Level.WARNING, "Cannot load Nifty XML", ex);
+        } finally {
+            loading = false;
         }
-        
-        
-        
-    }
-    
-    private class GuiSavable extends AbstractSavable {
-    private final GUI gui;
-   
-    private final String filename;
-    
-    public GuiSavable(GUI gui,String filename){
-        
-        this.gui = gui;
-        this.filename = filename;
-        this.register();
-        
-        
-    }
-    @Override
-    protected String findDisplayName() {
-        return "Save "+ this.gui + " changes";
     }
 
-    @Override
-    protected void handleSave() throws IOException {
+    private void synchronizeDocument() {
+        if (gui == null || loading || closed || scrollArea.getViewport().getView() != view) {
+            return;
+        }
         try {
-            GUIWriter writer = new GUIWriter(this.gui);
-            writer.writeGUI(filename);
-            NiftyGuiVisualElement.this.content.remove(this);
-          
-            
-        } catch (FileNotFoundException | JAXBException | ClassNotFoundException ex) {
-            Exceptions.printStackTrace(ex);
+            javax.swing.text.StyledDocument doc = document();
+            String current = doc.getText(0, doc.getLength());
+            if (!current.equals(synchronizedXml)) {
+                return; // Never overwrite newer XML edits.
+            }
+            String xml = serialize();
+            if (xml.equals(serializedXml)) {
+                return; // Previewing or selecting alone must not dirty the file.
+            }
+            org.openide.text.NbDocument.runAtomic(doc, () -> {
+                try {
+                    doc.remove(0, doc.getLength());
+                    doc.insertString(0, xml, null);
+                } catch (javax.swing.text.BadLocationException ex) {
+                    throw new IllegalStateException(ex);
+                }
+            });
+            serializedXml = xml;
+            synchronizedXml = xml;
+            status.setText("");
+        } catch (Exception ex) {
+            status.setText("Cannot synchronize GUI: " + ex.getMessage());
+            logger.log(Level.WARNING, "Cannot synchronize Nifty document", ex);
         }
     }
-
-    @Override
-    public boolean equals(Object obj) {
-        if(obj instanceof com.jme3.gde.gui.view.NiftyGuiVisualElement.GuiSavable){
-            return this.gui.equals(((com.jme3.gde.gui.view.NiftyGuiVisualElement.GuiSavable)obj).gui);
-        }
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return this.gui.hashCode();
-    }
-    
-}
 }

@@ -42,7 +42,7 @@ public class LightGizmoFactory {
     
     public static Spatial createGizmo(AssetManager assetManager, JmeLight lightNode) {
         Light light = lightNode.getLookup().lookup(Light.class);
-        if (light == null) {
+        if (light == null || light instanceof com.jme3.light.SkyLight) {
             return null;
         }
         switch (light.getType()) {

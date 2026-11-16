@@ -1,0 +1,72 @@
+// Applied to the ENGINE with -I; never publishes to a remote repository.
+// Binary/source JARs and their POMs form one consistent local SDK engine version.
+gradle.projectsEvaluated {
+    def engine = gradle.rootProject
+    if (engine.name != 'jmonkeyengine') {
+        return
+    }
+    if (!engine.hasProperty('sdkEngineRepository')) {
+        throw new GradleException('Pass -PsdkEngineRepository=<absolute local repository path>')
+    }
+    def destination = engine.file(engine.property('sdkEngineRepository'))
+    def beginExport = engine.tasks.register('beginSdkEngineExport') {
+        doLast {
+            engine.delete(new File(destination, 'sdk-engine.properties'))
+        }
+    }
+    def modules = ['jme3-core', 'jme3-desktop', 'jme3-awt-dialogs', 'jme3-effects',
+            'jme3-networking', 'jme3-plugins', 'jme3-plugins-json',
+            'jme3-plugins-json-gson', 'jme3-terrain', 'jme3-lwjgl3',
+            'jme3-saferallocator', 'jme3-jbullet', 'jme3-niftygui', 'jme3-jogg',
+            'jme3-android', 'jme3-ios', 'jme3-examples']
+    // Test data is maintained upstream separately; overlay this fork's baked assets.
+    def testData = engine.configurations.create('sdkExportTestData')
+    engine.dependencies.add(testData.name, engine.libs.jme3.testdata)
+    def dataJar = engine.tasks.register('sdkTestDataJar', Jar) {
+        archiveBaseName = 'jme3-testdata'
+        archiveVersion = engine.version.toString()
+        destinationDirectory = engine.layout.buildDirectory.dir('sdk-export')
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        from(engine.file('jme3-testdata/src/main/resources'))
+        from({ engine.zipTree(testData.singleFile) }) {
+            exclude 'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+        }
+    }
+    def exportTask = engine.tasks.register('exportSdkEngine') {
+        dependsOn dataJar, beginExport
+        group = 'distribution'
+        description = 'Publishes the engine modules used by the local SDK, with sources.'
+        doLast {
+            def dataDirectory = new File(destination, 'org/jmonkeyengine/jme3-testdata/' + engine.version)
+            dataDirectory.mkdirs()
+            engine.copy {
+                from dataJar.get().archiveFile
+                into dataDirectory
+            }
+            new File(dataDirectory, 'jme3-testdata-' + engine.version + '.pom').text =
+                    '<project><modelVersion>4.0.0</modelVersion><groupId>org.jmonkeyengine</groupId>' +
+                    '<artifactId>jme3-testdata</artifactId><version>' + engine.version + '</version></project>'
+            def manifest = new Properties()
+            manifest.setProperty('version', engine.version.toString())
+            manifest.setProperty('modules', (modules + ['jme3-testdata']).join(','))
+            manifest.setProperty('source', engine.projectDir.absolutePath)
+            manifest.setProperty('revision', engine.jmeGitHash.toString())
+            new File(destination, 'sdk-engine.properties').withOutputStream {
+                manifest.store(it, 'Written only after all SDK engine modules were exported successfully')
+            }
+        }
+    }
+    modules.each { name ->
+        def module = engine.project(':' + name)
+        // Local iteration includes sources but does not spend time generating API HTML.
+        def publication = module.publishing.publications.getByName('maven')
+        publication.artifacts.removeAll { it.classifier == 'javadoc' }
+        module.publishing.repositories.getByName('Dist').url = destination.toURI()
+        module.tasks.named('publishMavenPublicationToDistRepository').configure {
+            dependsOn beginExport
+        }
+        exportTask.configure {
+            dependsOn module.tasks.named('publishMavenPublicationToDistRepository')
+        }
+    }
+}

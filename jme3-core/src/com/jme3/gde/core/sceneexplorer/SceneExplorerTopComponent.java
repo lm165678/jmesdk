@@ -96,6 +96,65 @@ public final class SceneExplorerTopComponent extends TopComponent implements Exp
         associateLookup(ExplorerUtils.createLookup(explorerManager, getActionMap()));
     }
 
+    /** Double-click frames the clicked scene object's bounds without changing it. */
+    private void focusSceneNode(org.openide.nodes.Node node) {
+        com.jme3.scene.Spatial target = node.getLookup().lookup(com.jme3.scene.Spatial.class);
+        while (target == null && node.getParentNode() != null) {
+            node = node.getParentNode();
+            target = node.getLookup().lookup(com.jme3.scene.Spatial.class);
+        }
+        if (target == null) {
+            return;
+        }
+        final com.jme3.scene.Spatial selected = target;
+        var app = com.jme3.gde.core.scene.SceneApplication.getApplication();
+        app.enqueue(() -> {
+            var request = app.getCurrentSceneRequest();
+            if (request == null) {
+                return null;
+            }
+            com.jme3.scene.Spatial scene = request.getRootNode();
+            if (selected != scene && (!(scene instanceof com.jme3.scene.Node)
+                    || !selected.hasAncestor((com.jme3.scene.Node) scene))) {
+                return null;
+            }
+            com.jme3.scene.Spatial top = scene;
+            while (top.getParent() != null) {
+                top = top.getParent();
+            }
+            top.updateGeometricState();
+            var bound = selected.getWorldBound();
+            com.jme3.math.Vector3f center = bound == null ? selected.getWorldTranslation().clone() : bound.getCenter().clone();
+            float radius = 1;
+            if (bound instanceof com.jme3.bounding.BoundingBox box) {
+                radius = box.getExtent(null).length();
+            } else if (bound instanceof com.jme3.bounding.BoundingSphere sphere) {
+                radius = sphere.getRadius();
+            }
+            if (!Float.isFinite(radius)) {
+                return null;
+            }
+            radius = Math.max(radius, .1f);
+            var camera = app.getCamera();
+            float tangent = Math.min(Math.abs(camera.getFrustumTop()), Math.abs(camera.getFrustumRight()))
+                    / Math.max(.0001f, camera.getFrustumNear());
+            float distance = radius * 1.15f / (float) Math.sin(Math.atan(Math.max(.01f, tangent)));
+            distance = Math.max(distance, radius + camera.getFrustumNear() * 2);
+            camera.setLocation(center.subtract(camera.getDirection().mult(distance)));
+            if (camera.isParallelProjection()) {
+                float halfHeight = radius * 1.15f;
+                float aspect = (float) camera.getWidth() / Math.max(1, camera.getHeight());
+                halfHeight /= Math.min(1f, aspect);
+                camera.setFrustum(camera.getFrustumNear(), camera.getFrustumFar(),
+                        -halfHeight * aspect, halfHeight * aspect, halfHeight, -halfHeight);
+            }
+            if (app.getActiveCameraController() != null) {
+                app.getActiveCameraController().doSetCamFocus(center, false);
+            }
+            return null;
+        });
+    }
+
     private void initActions() {
         CutAction cut = SystemAction.get(CutAction.class);
         getActionMap().put(cut.getActionMapKey(), ExplorerUtils.actionCut(explorerManager));
@@ -115,7 +174,21 @@ public final class SceneExplorerTopComponent extends TopComponent implements Exp
     // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
     private void initComponents() {
 
-        explorerScrollPane = new BeanTreeView();
+        explorerScrollPane = new BeanTreeView() {
+            {
+                tree.addMouseListener(new java.awt.event.MouseAdapter() {
+                    @Override
+                    public void mouseClicked(java.awt.event.MouseEvent event) {
+                        if (event.getClickCount() == 2 && javax.swing.SwingUtilities.isLeftMouseButton(event)) {
+                            javax.swing.tree.TreePath path = tree.getPathForLocation(event.getX(), event.getY());
+                            if (path != null) {
+                                focusSceneNode(org.openide.explorer.view.Visualizer.findNode(path.getLastPathComponent()));
+                            }
+                        }
+                    }
+                });
+            }
+        };
         jToolBar1 = new javax.swing.JToolBar();
         jButton1 = new javax.swing.JButton();
 

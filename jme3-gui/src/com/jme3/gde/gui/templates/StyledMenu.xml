@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nifty xmlns="http://nifty-gui.lessvoid.com/nifty-gui" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://nifty-gui.lessvoid.com/nifty-gui http://nifty-gui.lessvoid.com/nifty-gui/nifty.xsd">
+    <!-- Step 1: load the bundled controls and default font styles. -->
+    <useStyles filename="nifty-default-styles.xml"/>
+    <useControls filename="nifty-default-controls.xml"/>
+    <!-- Step 2: define a texture-free theme. Change #247f to customize it. -->
+    <style id="menu-button#panel">
+        <attributes backgroundColor="#247f" childLayout="center" padding="6px" visibleToMouse="true"/>
+        <effect>
+            <onHover name="border" color="#ffff" post="true"/>
+        </effect>
+    </style>
+    <style id="menu-button#text" base="button-font">
+        <attributes color="#ffff" align="center" valign="center" textHAlign="center" textVAlign="center" visibleToMouse="false"/>
+    </style>
+    <!-- Step 3: open Visual. In XML, use Ctrl+Space for schema completion.
+         Add a ScreenController and interact/onClick bindings for game actions. -->
+    <screen id="menu">
+        <layer id="background" childLayout="center" backgroundColor="#18202aff">
+            <panel id="buttons" childLayout="vertical" width="240px" height="100px">
+                <control name="button" id="play" style="menu-button" label="Play" width="100%" height="40px"/>
+                <control name="button" id="settings" style="menu-button" label="Settings" width="100%" height="40px"/>
+            </panel>
+        </layer>
+    </screen>
+</nifty>

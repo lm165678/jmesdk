@@ -57,7 +57,7 @@ public class JmeLightProbe extends JmeLight {
         super(spatial, lightProbe);
         this.lightProbe = lightProbe;
         lookupContents.add(lightProbe);
-        setName("LightProbe");
+        setName(lightProbe instanceof com.jme3.light.SkyLight ? "SkyLight" : "ReflectionProbe");
     }
 
     public boolean isHQBake() {
@@ -73,13 +73,25 @@ public class JmeLightProbe extends JmeLight {
         //TODO: multithreading..
         Sheet sheet = super.createSheet();
         Sheet.Set set = Sheet.createPropertiesSet();
-        set.setDisplayName("LightProbe");
+        set.setDisplayName(org.openide.util.NbBundle.getMessage(JmeLightProbe.class,
+                lightProbe instanceof com.jme3.light.SkyLight ? "SkyLight.Title" : "ReflectionProbe.Title"));
         set.setName(LightProbe.class.getName());
         LightProbe obj = lightProbe;
         if (obj == null) {
             return sheet;
         }
 
+        if (obj instanceof com.jme3.light.SkyLight) {
+            set.put(makeProperty(obj, boolean.class, "isDiffuseEnabled", "setDiffuseEnabled", "Diffuse enabled"));
+            com.jme3.environment.SkyLightControl control = findSkyControl();
+            if (control != null) {
+                set.put(makeProperty(control, int.class, "getResolution", "setResolution", "Capture resolution"));
+                set.put(createButtonProperty());
+            }
+            sheet.put(set);
+            return sheet;
+        }
+        set.put(makeProperty(obj, boolean.class, "isDiffuseEnabled", "setDiffuseEnabled", "Legacy diffuse IBL"));
         set.put(makeProperty(obj, Vector3f.class, "getPosition", "setPosition", "Position"));
         set.put(makeEmbedProperty(obj.getArea(), obj.getArea().getClass(), float.class, "getRadius", "setRadius", "Radius"));
         set.put(makeEmbedProperty(JmeLightProbe.this, JmeLightProbe.class, boolean.class, "isHQBake","setHQBake", "High Quality Bake?"));
@@ -87,6 +99,17 @@ public class JmeLightProbe extends JmeLight {
         sheet.put(set);
         return sheet;
 
+    }
+
+    com.jme3.environment.SkyLightControl findSkyControl() {
+        final com.jme3.environment.SkyLightControl[] found = {null};
+        getSpatial().depthFirstTraversal(child -> {
+            var control = child.getControl(com.jme3.environment.SkyLightControl.class);
+            if (control != null && control.getLight() == lightProbe) {
+                found[0] = control;
+            }
+        });
+        return found[0];
     }
 
     public LightProbe getLightProbe() {

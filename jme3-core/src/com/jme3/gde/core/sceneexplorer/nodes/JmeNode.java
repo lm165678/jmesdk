@@ -106,43 +106,75 @@ public class JmeNode extends JmeSpatial {
     }
 
     @Override
-    public PasteType getDropType(final Transferable t, int action, int index) {
-        Object data = null;
-        try {
-            data = t.getTransferData(SPATIAL_FLAVOR);
-        } catch (Exception ex) {
-//            Exceptions.printStackTrace(ex);
-        }
-        if (data == null) {
+    public PasteType getDropType(final Transferable transfer, int action, int index) {
+        if (((JmeSpatialChildren) jmeChildren).readOnly || !transfer.isDataFlavorSupported(SPATIAL_FLAVOR)) {
             return null;
         }
-        if (data instanceof ClipboardSpatial) {
-            final Spatial spat = ((ClipboardSpatial) data).createSpatial();
-            return new PasteType() {
-
-                @Override
-                public Transferable paste() throws IOException {
-                    try {
-                        fireSave(true);
-                        SceneApplication.getApplication().enqueue(new Callable<Void>() {
-
-                            public Void call() throws Exception {
-                                node.attachChild(spat);
-                                return null;
-                            }
-                        }).get();
-                        refresh(false);
-                        return t;
-                    } catch (InterruptedException ex) {
-                        Exceptions.printStackTrace(ex);
-                    } catch (ExecutionException ex) {
-                        Exceptions.printStackTrace(ex);
-                    }
-                    return null;
-                }
-            };
+        final ClipboardSpatial data;
+        try {
+            data = (ClipboardSpatial) transfer.getTransferData(SPATIAL_FLAVOR);
+        } catch (Exception error) {
+            return null;
         }
-        return null;
+        return new PasteType() {
+            @Override
+            public Transferable paste() throws IOException {
+                try {
+                    SceneApplication.getApplication().enqueue(() -> {
+                        Spatial pasted = data.cutSource() == null ? data.createSpatial() : data.cutSource();
+                        if (pasted == null) {
+                            throw new IOException("Clipboard model could not be loaded.");
+                        }
+                        if (data.cutSource() != null && (!data.cutBelongsToCurrentScene() || pasted.getParent() == null)) {
+                            throw new IOException("Cut source is no longer in this scene. Copy again.");
+                        }
+                        for (Spatial ancestor = node; ancestor != null; ancestor = ancestor.getParent()) {
+                            if (ancestor == pasted) {
+                                throw new IOException("Cannot paste a node inside itself or its descendants.");
+                            }
+                        }
+                        Node previousParent = pasted.getParent();
+                        int previousIndex = previousParent == null ? 0 : previousParent.getChildIndex(pasted);
+                        node.attachChild(pasted);
+                        org.openide.util.Lookup.getDefault().lookup(com.jme3.gde.core.undoredo.SceneUndoRedoManager.class)
+                                .addEdit(this, new com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit() {
+                            public void sceneUndo() {
+                                pasted.removeFromParent();
+                                if (previousParent != null) {
+                                    previousParent.attachChildAt(pasted, Math.min(previousIndex, previousParent.getQuantity()));
+                                }
+                            }
+                            public void sceneRedo() {
+                                node.attachChild(pasted);
+                            }
+                            public void awtUndo() {
+                                refreshTree();
+                            }
+                            public void awtRedo() {
+                                refreshTree();
+                            }
+                        });
+                        return null;
+                    }).get();
+                    refreshTree();
+                    return data.cutSource() == null ? transfer : null;
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(error);
+                } catch (ExecutionException error) {
+                    throw new IOException(error.getCause());
+                }
+            }
+        };
+    }
+
+    private void refreshTree() {
+        org.openide.nodes.Node root = this;
+        while (root.getParentNode() instanceof JmeNode) {
+            root = root.getParentNode();
+        }
+        ((JmeNode) root).refresh(true);
+        fireSave(true);
     }
 
     @Override
@@ -162,6 +194,7 @@ public class JmeNode extends JmeSpatial {
                         SystemAction.get(CopyAction.class),};
         } else {
             return new Action[]{
+                        com.jme3.gde.core.assets.AnimationEditorSupport.nodeAction(spatial),
                         new NewSpatialPopup(this),
                         new NewControlPopup(this),
                         new NewLightPopup(this),
@@ -179,16 +212,8 @@ public class JmeNode extends JmeSpatial {
 
     @Override
     public void destroy() throws IOException {
-        super.destroy(); /* super has to be the first call, since it calls spatial.removeFromParent(); */
-        
-        for (org.openide.nodes.Node n : getChildren().getNodes()) {
-            n.destroy(); // Call destroy on children
-        }
-        
-        if (getParentNode() == null) {
-            setName("Scene"); /* You can't delete the rootNode but fake clearing it */
-        }
-        refresh(false);
+        // Detach the subtree as one undoable operation; never destroy its children.
+        super.destroy();
     }
 
     @Override

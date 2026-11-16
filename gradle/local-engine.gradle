@@ -1,0 +1,42 @@
+// The SDK is a NetBeans/Ant suite; Gradle prepares both its runtime and project libraries.
+// Defaults to the sibling engine's repository. Export it with build-local-engine-sdk.bat first.
+ext.localEngineModules = [] as Set
+ext.localEngineVersion = null
+ext.localEngineEnabled = (findProperty('useLocalEngine') ?: 'true').toString().toBoolean()
+if (localEngineEnabled) {
+    def repositoryDir = file(findProperty('localEngineRepository') ?: '../JMESources/build/sdk-engine-repo')
+    def manifestFile = new File(repositoryDir, 'sdk-engine.properties')
+    if (!manifestFile.isFile()) {
+        throw new GradleException('Local engine not exported. Run build-local-engine-sdk.bat first. Repository: ' + repositoryDir)
+    }
+    def manifest = new Properties()
+    manifestFile.withInputStream { manifest.load(it) }
+    localEngineVersion = manifest.getProperty('version')
+    localEngineModules = (manifest.getProperty('modules').split(',') as Set)
+    repositories {
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'LocalSdkEngine'
+                    url = repositoryDir.toURI()
+                }
+            }
+            filter {
+                localEngineModules.each { includeModule('org.jmonkeyengine', it) }
+            }
+        }
+    }
+    configurations.configureEach {
+        resolutionStrategy {
+            cacheChangingModulesFor 0, 'seconds'
+            eachDependency { details ->
+                if (details.requested.group == 'org.jmonkeyengine'
+                        && localEngineModules.contains(details.requested.name)) {
+                    details.useVersion(localEngineVersion)
+                    details.because('SDK runtime and project libraries must use the same local engine')
+                }
+            }
+        }
+    }
+    logger.lifecycle('SDK local engine: ' + localEngineVersion + ' (' + manifest.getProperty('revision') + ')')
+}

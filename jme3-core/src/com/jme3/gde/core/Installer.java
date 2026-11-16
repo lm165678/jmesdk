@@ -64,6 +64,7 @@ public class Installer extends ModuleInstall {
 
     @Override
     public void restored() {
+        com.jme3.gde.core.util.EditorUiStyle.install();
         //start scene app
         SceneApplication.getApplication();
         Logger.getLogger("org.openide.loaders").setLevel(Level.SEVERE);

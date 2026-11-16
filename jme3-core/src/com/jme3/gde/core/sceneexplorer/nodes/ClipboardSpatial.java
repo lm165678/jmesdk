@@ -49,13 +49,32 @@ import org.openide.util.Exceptions;
  */
 public class ClipboardSpatial implements Transferable, ClipboardOwner {
     private final byte[] data;
+    private Spatial cutSource;
+    private com.jme3.gde.core.scene.SceneRequest sourceScene;
+
+    /** Captures a deferred cut on the render thread; querying clipboard never detaches it. */
+    public static ClipboardSpatial cut(Spatial source) {
+        ClipboardSpatial result = new ClipboardSpatial(source);
+        result.cutSource = source;
+        result.sourceScene = SceneApplication.getApplication().getCurrentSceneRequest();
+        return result;
+    }
+
+    Spatial cutSource() {
+        return cutSource;
+    }
+
+    boolean cutBelongsToCurrentScene() {
+        return sourceScene == SceneApplication.getApplication().getCurrentSceneRequest();
+    }
+
 
     public ClipboardSpatial(Spatial spat) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
             BinaryExporter.getInstance().save(spat, out);
         } catch (IOException ex) {
-            Exceptions.printStackTrace(ex);
+            throw new IllegalStateException("Could not copy model", ex);
         }
         data = out.toByteArray();
     }

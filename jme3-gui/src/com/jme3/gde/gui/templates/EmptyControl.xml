@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<nifty-controls xmlns="http://nifty-gui.lessvoid.com/nifty-gui">
-    <controlDefinition style="your-style" name="empty-control">
-        <panel style="#panel" >
+<nifty-controls xmlns="http://nifty-gui.lessvoid.com/nifty-gui" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://nifty-gui.lessvoid.com/nifty-gui http://nifty-gui.lessvoid.com/nifty-gui/nifty.xsd">
+    <!-- Load with useControls, then instantiate: <control name="color-card"/> -->
+    <controlDefinition name="color-card">
+        <panel childLayout="center" width="160px" height="60px" backgroundColor="#246f">
             
         </panel>
     </controlDefinition>

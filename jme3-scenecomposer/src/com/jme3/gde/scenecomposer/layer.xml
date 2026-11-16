@@ -179,7 +179,7 @@
             <file name="SceneComposerTopComponent.settings" url="SceneComposerTopComponentSettings.xml"/>
         </folder>
         <folder name="Modes">
-            <folder name="output">
+            <folder name="explorer">
                 <file name="SceneComposerTopComponent.wstcref" url="SceneComposerTopComponentWstcref.xml"/>
             </folder>
         </folder>

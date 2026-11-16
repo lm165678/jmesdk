@@ -712,7 +712,17 @@ public class SceneEditorController implements NodeListener {
         }
     }
 
-    private void refreshSelected() {
+    void refreshCollisionOwner(Spatial owner) {
+        java.awt.EventQueue.invokeLater(() -> {
+            JmeSpatial node = jmeRootNode.getChild(owner);
+            if (node != null) {
+                node.refresh(true);
+                node.refreshProperties();
+            }
+        });
+    }
+
+    void refreshSelected() {
         java.awt.EventQueue.invokeLater(new Runnable() {
 
             public void run() {

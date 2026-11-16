@@ -46,6 +46,9 @@ import java.lang.reflect.Method;
  * A utility control to update the direction of an arrow as the direction of
  * a tracked light changes. This is used to adjust gizmos as the
  * user is changing the light direction using the Properties Editor.
+ * Runs on the scene update thread. Directions written by gizmo rotation retain
+ * their existing frame; external direction edits apply the shortest rotation
+ * from that frame without resetting roll or feeding back into the light.
  * 
  * @author dokthar
  */
@@ -56,7 +59,6 @@ public class LightDirectionUpdate extends AbstractControl {
     private Method getDirection = null;
 
     private final Vector3f lastDir = new Vector3f();
-    private final Vector3f initialDir = new Vector3f();
     private Vector3f lightDir;
 
     public LightDirectionUpdate(Light light, NodeCallback gizmo) {
@@ -73,7 +75,6 @@ public class LightDirectionUpdate extends AbstractControl {
         }
         
         refreshLightDirection();
-        initialDir.set(lightDir);
     }
     
     protected void refreshLightDirection() {
@@ -89,19 +90,32 @@ public class LightDirectionUpdate extends AbstractControl {
     @Override
     protected void controlUpdate(float f) {
         refreshLightDirection();
-        if (!lightDir.equals(lastDir)) {
-            lastDir.set(lightDir);
-
-            Vector3f axis = Vector3f.UNIT_Y.cross(lastDir);
-            float angle = Vector3f.UNIT_Y.angleBetween(lastDir);
-            //Quaternion rotation = gizmo.getWorldRotation().inverse().mult(new Quaternion().fromAngleAxis(angle, axis));
-            
-            if (angle > 1f * FastMath.DEG_TO_RAD) { // Anti Flickering
-                Quaternion rotation = new Quaternion().fromAngleAxis(angle, axis);
-                gizmo.silentLocalRotation(rotation); /* silent, because otherwise
-                the gizmo would call light.setDirection() and update the property */
-            }
+        if (lightDir == null || !Vector3f.isValidVector(lightDir)
+                || lightDir.lengthSquared() == 0f || lightDir.equals(lastDir)) {
+            return;
         }
+        lastDir.set(lightDir);
+        Vector3f target = lightDir.normalize();
+        Quaternion current = gizmo.getLocalRotation().clone();
+        Vector3f forward = current.mult(Vector3f.UNIT_Y).normalizeLocal();
+        float dot = FastMath.clamp(forward.dot(target), -1f, 1f);
+        // Gizmo drags already wrote this direction. Keep their full orientation,
+        // including roll, instead of reconstructing a new frame from UNIT_Y.
+        if (dot >= 1f - 1e-6f) {
+            return;
+        }
+        Vector3f axis = forward.cross(target);
+        float sin = axis.length();
+        float angle = FastMath.atan2(sin, dot);
+        if (sin < 1e-6f) {
+            // Opposite directions: use the existing local X axis for a stable
+            // half-turn. This also handles lights pointing exactly downwards.
+            axis = current.mult(Vector3f.UNIT_X).normalizeLocal();
+        } else {
+            axis.divideLocal(sin);
+        }
+        Quaternion delta = new Quaternion().fromAngleAxis(angle, axis);
+        gizmo.silentLocalRotation(delta.mult(current).normalizeLocal());
     }
 
     @Override

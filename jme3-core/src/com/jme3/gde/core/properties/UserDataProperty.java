@@ -85,13 +85,40 @@ public class UserDataProperty extends PropertySupport.ReadWrite<String> {
         }
     }
 
+    /**
+     * Opaque serialized data (including SDF and surface caches) is read-only.
+     * The scalar editor must not replace a Savable with a String.
+     * Open a baked j3o, select its model, and inspect the User Data property sheet;
+     * changing geometry/materials requires an explicit external rebake.
+     */
+    @Override
+    public boolean canWrite() {
+        return type >= 0;
+    }
+
     @Override
     public String getValue() throws IllegalAccessException, InvocationTargetException {
-        return spatial.getUserData(name) + "";
+        Object value = spatial.getUserData(name);
+        if (value instanceof com.jme3.scene.plugins.sdf.SdfVolume) {
+            com.jme3.scene.plugins.sdf.SdfVolume sdf = (com.jme3.scene.plugins.sdf.SdfVolume) value;
+            return "SDF " + sdf.getSizeX() + " x " + sdf.getSizeY() + " x " + sdf.getSizeZ()
+                    + " (" + sdf.getSignMode() + ")";
+        }
+        if (value instanceof com.jme3.scene.plugins.sdf.SurfaceBakeData) {
+            com.jme3.scene.plugins.sdf.SurfaceBakeData surface =
+                    (com.jme3.scene.plugins.sdf.SurfaceBakeData) value;
+            return "Surface cache: " + surface.getLayout().getCardCount() + " cards, "
+                    + surface.getAttributes().getResolution() + " px"
+                    + (surface.isInvalidated() ? " (invalidated)" : " (saved data)");
+        }
+        return String.valueOf(value);
     }
 
     @Override
     public void setValue(final String val) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException {
+        if (!canWrite()) {
+            throw new IllegalAccessException("Serialized user data is read-only in the property editor");
+        }
         if (spatial == null) {
             return;
         }
@@ -131,6 +158,9 @@ public class UserDataProperty extends PropertySupport.ReadWrite<String> {
 
     @Override
     public PropertyEditor getPropertyEditor() {
+        if (!canWrite()) {
+            return null;
+        }
         return new PropertyEditorSupport(spatial.getUserData(name)) {
 
             @Override

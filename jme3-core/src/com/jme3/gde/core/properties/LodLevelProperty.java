@@ -71,7 +71,9 @@ public class LodLevelProperty extends SceneExplorerProperty {
 
     private void refresh() {
         List<String> list = makeList();
-        editor.setList(list);
+        if (editor != null) {
+            editor.setList(list);
+        }
     }
 
     @Override
@@ -89,7 +91,11 @@ public class LodLevelProperty extends SceneExplorerProperty {
 
     @Override
     public void setValue(Object val) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException {
-        final int level = Integer.parseInt(((String) val).split(" - ")[0]);
+        final int level = val instanceof Number number ? number.intValue()
+                : Integer.parseInt(val.toString().split(" - ")[0]);
+        // Keep the property selection active while drawing, even with LodControl.
+        // Selecting another object or Original / Auto in Model Detail restores it.
+        SceneApplication.getApplication().setPreviewLod(geometry, level);
         SceneApplication.getApplication().enqueue(new Callable<Void>() {
             public Void call() throws Exception {
                 if (geometry.getMesh().getNumLodLevels() > level) {

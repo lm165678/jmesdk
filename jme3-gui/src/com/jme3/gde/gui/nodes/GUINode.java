@@ -62,13 +62,23 @@ public class GUINode extends AbstractNode{
         @Override
         public void actionPerformed(ActionEvent e) {
         JFileChooser chooser = new JFileChooser(gui.getAssetFolder());
-        int result = chooser.showSaveDialog(null);
+        int result = chooser.showOpenDialog(null);
         if(result == JFileChooser.APPROVE_OPTION){
             GUseStyle style = new GUseStyle();
            
        
-                style.setFilename(createReletive(chooser.getSelectedFile()));
-                gui.addLoadUseStyle(style);
+                String path = createReletive(chooser.getSelectedFile());
+                if (path == null) {
+                    return;
+                }
+                for (GUseStyle existing : gui.getUseStyles()) {
+                    if (path.equals(existing.getFilename())) {
+                        return;
+                    }
+                }
+                style.setFilename(path);
+                ReferenceEdit.perform(gui, () -> gui.addLoadUseStyle(style),
+                        () -> gui.removeStyle(style));
            
             
         }
@@ -84,13 +94,23 @@ public class GUINode extends AbstractNode{
         @Override
         public void actionPerformed(ActionEvent e) {
         JFileChooser chooser = new JFileChooser(gui.getAssetFolder());
-        int result = chooser.showSaveDialog(null);
+        int result = chooser.showOpenDialog(null);
         if(result == JFileChooser.APPROVE_OPTION){
              GUseControls controls = new GUseControls();
            
        
-                controls.setFilename(createReletive(chooser.getSelectedFile()));
-                gui.addLoadUseControls(controls);
+                String path = createReletive(chooser.getSelectedFile());
+                if (path == null) {
+                    return;
+                }
+                for (GUseControls existing : gui.getUseControls()) {
+                    if (path.equals(existing.getFilename())) {
+                        return;
+                    }
+                }
+                controls.setFilename(path);
+                ReferenceEdit.perform(gui, () -> gui.addLoadUseControls(controls),
+                        () -> gui.removeControl(controls));
            
             
         }
@@ -101,25 +121,16 @@ public class GUINode extends AbstractNode{
     }
      
      private String createReletive(File selected) {
-        File assets = gui.getAssetFolder();
-        String res = "";
-       String parentPath = selected.getParent();
-       String absAssets = assets.getAbsolutePath();
-       if (!parentPath.contains(absAssets)) {
-           try {
-               absAssets = assets.getCanonicalPath();
-               if (!parentPath.contains(absAssets)) {
-                   JOptionPane.showMessageDialog(null, "Sorry you can't relativize this file. Tip : the file must be inside the assets folder");
-               } else {
-                   res = assets.toURI().relativize(selected.toURI()).getPath();
-               }
-           } catch (IOException ex) {
-               JOptionPane.showMessageDialog(null, "Sorry you can't relativize this file");
-           }
-       } else {
-           res = assets.toURI().relativize(selected.toURI()).getPath();
-       }
-       return res;      
+        try {
+            java.nio.file.Path root = gui.getAssetFolder().toPath().toRealPath();
+            java.nio.file.Path file = selected.toPath().toRealPath();
+            if (!file.startsWith(root) || !java.nio.file.Files.isRegularFile(file)) {
+                throw new IOException("Select a file inside the assets folder");
+            }
+            return root.relativize(file).toString().replace((char) 92, (char) 47);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(null, ex.getMessage());
+            return null;
+        }
     }
-    
 }

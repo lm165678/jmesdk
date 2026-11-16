@@ -49,7 +49,7 @@ import org.openide.windows.TopComponent;
         //iconBase="SET/PATH/TO/ICON/HERE",
         persistenceType = TopComponent.PERSISTENCE_ALWAYS
 )
-@TopComponent.Registration(mode = "navigator", openAtStartup = true)
+@TopComponent.Registration(mode = "output", openAtStartup = true)
 @ActionID(category = "Window", id = "com.jme3.gde.assetbrowser.AssetBrowserTopComponent")
 @ActionReference(path = "Menu/Window" /*, position = 333 */)
 @TopComponent.OpenActionRegistration(
@@ -65,6 +65,8 @@ public final class AssetBrowserTopComponent extends TopComponent {
 
     public AssetBrowserTopComponent() {
         initComponents();
+        associateLookup(org.openide.explorer.ExplorerUtils.createLookup(
+                assetBrowser1.getExplorerManager(), assetBrowser1.getActionMap()));
         setName(NbBundle.getMessage(AssetBrowserTopComponent.class, "CTL_AssetBrowserTopComponent"));
 //        setName(Bundle.CTL_AssetBrowserTopComponent());
         setToolTipText(NbBundle.getMessage(AssetBrowserTopComponent.class, "HINT_AssetBrowserTopComponent"));
@@ -78,23 +80,34 @@ public final class AssetBrowserTopComponent extends TopComponent {
     // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
     private void initComponents() {
 
-        assetBrowser1 = new com.jme3.gde.assetbrowser.AssetBrowser();
+        assetBrowser1 = new com.jme3.gde.assetbrowser.AssetContentPanel();
 
         setLayout(new java.awt.BorderLayout());
-        add(assetBrowser1, java.awt.BorderLayout.SOUTH);
+        add(assetBrowser1, java.awt.BorderLayout.CENTER);
     }// </editor-fold>//GEN-END:initComponents
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
-    private com.jme3.gde.assetbrowser.AssetBrowser assetBrowser1;
+    private com.jme3.gde.assetbrowser.AssetContentPanel assetBrowser1;
     // End of variables declaration//GEN-END:variables
     @Override
     public void componentOpened() {
-        // TODO add custom code on component opening
+        // Migrate the old navigator placement once; later user docking is preserved.
+        var preferences = org.openide.util.NbPreferences.forModule(AssetBrowserTopComponent.class);
+        if (!preferences.getBoolean("contentBrowserBottomV1", false)) {
+            var mode = org.openide.windows.WindowManager.getDefault().findMode("output");
+            if (mode != null) {
+                mode.dockInto(this);
+                preferences.putBoolean("contentBrowserBottomV1", true);
+            }
+        }
+        org.openide.explorer.ExplorerUtils.activateActions(assetBrowser1.getExplorerManager(), true);
+        assetBrowser1.start();
     }
 
     @Override
     public void componentClosed() {
-        // TODO add custom code on component closing
+        org.openide.explorer.ExplorerUtils.activateActions(assetBrowser1.getExplorerManager(), false);
+        assetBrowser1.stop();
     }
 
     void writeProperties(java.util.Properties p) {

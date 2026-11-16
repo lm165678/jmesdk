@@ -81,6 +81,8 @@ public abstract class SceneEditTool {
     protected Node toolNode;
     protected Node onTopToolNode;
     protected Node axisMarker;
+    private static final float AXIS_MARKER_RADIUS = 2f;
+    private static final float AXIS_MARKER_SCREEN_RADIUS = 80f;
     protected Material redMat, blueMat, greenMat, yellowMat, cyanMat, magentaMat, orangeMat;
     protected Geometry quadXY, quadXZ, quadYZ;
     protected Geometry arrowX, arrowY, arrowZ;
@@ -174,7 +176,7 @@ public abstract class SceneEditTool {
                     }
                 }
             }
-            setAxisMarkerScale(toolController.getSelectedSpatial());
+            updateAxisMarkerScale();
         } else {
             axisMarker.setLocalTranslation(Vector3f.ZERO);
             axisMarker.setLocalRotation(Quaternion.IDENTITY);
@@ -182,21 +184,45 @@ public abstract class SceneEditTool {
     }
 
     /**
-     * Adjust the scale of the marker so it is relative to the size of the
-     * selected spatial. It will have a minimum scale of 1.
+     * Keep handles approximately 80 logical pixels from pivot to axis tip/ring,
+     * independent of object bounds. Perspective uses pivot depth along the view
+     * direction; orthographic projection uses its fixed frustum height. The
+     * visible geometry and picking geometry share this scale. Called only on
+     * the render thread, including while rotation locks the marker orientation.
+     * Missing/zero-size camera or panel data falls back to the current scale
+     * or physical pixels until the next valid update.
+     * <pre>
+     * // 第一步：选择物体，按 W/E/R 切换平移、旋转或缩放。
+     * // 第二步：拉远或拉近相机；控件自动保持屏幕尺寸，无需配置。
+     * // 第三步：调整视口、FOV 或正交缩放后，下一帧自动重新计算。
+     * </pre>
      */
-    private void setAxisMarkerScale(Spatial selected) {
-        if (selected != null) {
-            if (selected.getWorldBound() instanceof BoundingBox bbox) {
-                float smallest = Math.min(Math.min(bbox.getXExtent(), bbox.getYExtent()), bbox.getZExtent());
-                float scale = Math.max(1, smallest / 2f);
-                if (scale > 100) {
-                    scale = 1;
-                }
-                axisMarker.setLocalScale(scale);
+    protected final void updateAxisMarkerScale() {
+        if (camera == null || axisMarker == null || camera.getHeight() <= 0) {
+            return;
+        }
+        float viewportHeight = camera.getHeight()
+                * (camera.getViewPortTop() - camera.getViewPortBottom());
+        if (viewportHeight <= 0f) {
+            return;
+        }
+        float worldHeight = Math.abs(camera.getFrustumTop() - camera.getFrustumBottom());
+        if (!camera.isParallelProjection()) {
+            float near = camera.getFrustumNear();
+            if (near <= 0f) {
+                return;
             }
-        } else {
-            axisMarker.setLocalScale(1);
+            float depth = axisMarker.getLocalTranslation().subtract(camera.getLocation())
+                    .dot(camera.getDirection());
+            worldHeight *= Math.max(near, depth) / near;
+        }
+        java.awt.Component panel = SceneApplication.getApplication().getMainPanel();
+        int logicalHeight = panel == null ? 0 : panel.getHeight();
+        float pixelScale = logicalHeight > 0 ? (float) camera.getHeight() / logicalHeight : 1f;
+        float scale = worldHeight / viewportHeight * pixelScale
+                * AXIS_MARKER_SCREEN_RADIUS / AXIS_MARKER_RADIUS;
+        if (Float.isFinite(scale) && scale > 0f) {
+            axisMarker.setLocalScale(scale);
         }
     }
 
@@ -494,7 +520,7 @@ public abstract class SceneEditTool {
      * @return the axis node
      */
     protected Node createAxisMarker() {
-        float size = 2;
+        float size = AXIS_MARKER_RADIUS;
         float arrowSize = size;
         float planeSize = size * 0.5f;
 

@@ -572,6 +572,7 @@
         </Component>
         <Component class="javax.swing.JToggleButton" name="jToggleSelectGeom">
           <Properties>
+            <Property name="selected" type="boolean" value="true"/>
             <Property name="icon" type="javax.swing.Icon" editor="org.netbeans.modules.form.RADConnectionPropertyEditor">
               <Connection code="Icons.selectGeometry" type="code"/>
             </Property>

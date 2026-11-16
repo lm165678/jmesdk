@@ -39,14 +39,21 @@ import org.openide.awt.UndoRedo;
  *
  * @author normenhansen
  */
+@org.openide.util.lookup.ServiceProvider(service = SceneUndoRedoManager.class)
 public class SceneUndoRedoManager extends UndoRedo.Manager {
+    // Reject queued edits from the scene whose history has just been cleared.
+    private final java.util.concurrent.atomic.AtomicLong sceneGeneration = new java.util.concurrent.atomic.AtomicLong();
 
     public void addEdit(final Object source, final UndoableEdit edit) {
+        final long generation = sceneGeneration.get();
         if (!java.awt.EventQueue.isDispatchThread()) {
             java.awt.EventQueue.invokeLater(new Runnable() {
 
                 public void run() {
-                    undoableEditHappened(new UndoableEditEvent(source, edit));
+                    if (generation == sceneGeneration.get()) {
+                        undoableEditHappened(new UndoableEditEvent(source, edit));
+                    }
+
                 }
             });
         } else {
@@ -56,6 +63,7 @@ public class SceneUndoRedoManager extends UndoRedo.Manager {
 
     @Override
     public void discardAllEdits() {
+        sceneGeneration.incrementAndGet();
         if (!java.awt.EventQueue.isDispatchThread()) {
             java.awt.EventQueue.invokeLater(new Runnable() {
 

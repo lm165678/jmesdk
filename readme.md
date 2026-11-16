@@ -63,3 +63,183 @@ Just take a look at the `Motion Event Pull Request`, which should've been added 
 
 Other than that, we are more than happy to help, even if your addition is incomplete. Make sure you use the Netbeans formatting, obvious variable naming and commented and especially documented code, though.
 If you think you've encountered a bug in the SDK, please open an issue to let the developers know or post [on the hub](https://hub.jmonkeyengine.org) using the `Troubleshooting | jmonkeyplatform` category.
+
+
+## 本地引擎与 SDK 联合开发（本 fork）
+
+此 SDK 使用旁边 `../JMESources` 的自定义引擎，而不是官方 beta2 引擎。
+SDK 的 Gradle Wrapper 是 9.2.1；引擎自己的 Wrapper 是 9.8.0；两者都使用本机 JDK 25。
+不要将两个工程的 Wrapper 版本互相覆盖。
+
+### 第一次接入，或修改了引擎源码
+
+先关闭正在运行的 **jMonkeyEngine SDK 产品窗口**，保留开发用 NetBeans/IDEA 即可。
+在 SDK 根目录运行：
+
+```bat
+build-local-engine-sdk.bat
+```
+
+需要构建完成后立即启动 SDK：
+
+```bat
+build-local-engine-sdk.bat run
+```
+
+流程是：使用引擎的 Wrapper 增量编译 → 导出本地 Maven 仓库 → SDK 解析新依赖、
+同步库、生成 NetBeans 模块描述 → 编译 SDK。普通的引擎 `build`/IDEA Build 不会自动同步 SDK。
+脚本中的 `JAVA_HOME` 和 `SDK_PROXY_HOST`/`SDK_PROXY_PORT` 可按机器修改；当前代理为 127.0.0.1:7897。
+这些环境设置只在该批处理进程中生效。
+
+引擎库版本固定为 `3.10.0-local-SNAPSHOT`，本地仓库位于：
+`../JMESources/build/sdk-engine-repo`。该仓库不上传到 Maven Central，也不修改全局 Maven 本地库。
+`gradle/local-engine-export.gradle` 仅用于 SDK 联合开发；通过 `-I` 应用到引擎，
+不要求修改引擎自身的构建脚本。二进制和源码 JAR 都导出；本地迭代不生成 Javadoc HTML。
+导出成功后才生成 `sdk-engine.properties`。SDK 对该仓库的引擎模块使用独占解析，
+不会在缺失本地库时静默回退到官方同名模块。
+
+首次接入统一构建 SDK 所需的 17 个引擎代码模块，而非只替换 core。
+后续未改变的编译/打包任务由 Gradle 判定为 UP-TO-DATE；发布和库同步仍会检查当前产物。
+额外的测试数据 JAR 合并官方测试资源和本 fork 的烘焙资源。
+LWJGL 2 不用于这个 SDK，因此不需要复制 `jme3-lwjgl`；Android native 等独立预编译依赖
+继续由引擎/SDK 的依赖声明解析，不会假装是本仓库重新编译的本地代码。
+
+### 只修改 SDK Java 代码
+
+在 NetBeans 31 中打开本目录的 **NetBeans Module Suite**（根目录的 `nbproject` 工程）。
+配置 JDK 25 后，使用 Run / Debug；这两个 Ant 目标都会先构建再启动，支持断点调试。
+不要把它当成只有一个 Java 主类的普通项目。
+
+也可以双击 `build-and-run-sdk.bat`：它运行 Gradle 的 `run`，先准备当前已导出的依赖，
+再通过相同的 NetBeans/Ant suite 构建和启动。它不会重新编译引擎源码。
+如果修改了引擎，请先使用上面的联合构建脚本，然后再在 NetBeans 中 Run / Debug。
+
+### 库更新的位置（均由构建管理，不要手工复制）
+
+| 用途 | SDK 内相对路径 |
+| --- | --- |
+| SDK 自身使用的引擎 JAR | `jme3-core-baselibs/release/modules/ext/` |
+| LWJGL 等第三方运行库 | `jme3-core-libraries/release/modules/ext/` |
+| SDK 提供给项目的引擎及源码库 | `jme3-project-baselibs/release/libs/` |
+| SDK 提供给项目的第三方库 | `jme3-project-libraries/release/libs/` |
+| 示例模型/烘焙资源 | `jme3-project-testdata/release/modules/ext/jme3-testdata.jar` |
+| 最终运行时模块库 | `build/cluster/modules/ext/` |
+
+库目录由 Gradle 同步，模块 `project.xml` 和 library XML 由任务重建。
+不能只复制 `jme3-core.jar`，也不能将第三方 native JAR 留在与引擎不匹配的版本。
+已有游戏项目自己的 Gradle/Maven 依赖是独立的，不会因为 SDK 更新就自动切换；
+若它也要使用本地引擎，需将上述文件 Maven 仓库加入它自己的 repositories，并使用
+`org.jmonkeyengine:所需模块:3.10.0-local-SNAPSHOT`。
+SDK 向导新建的 Gradle 项目仍由向导选择版本；本次没有改写其模板或已有游戏项目。
+
+### 预览兼容和验证
+
+- SceneViewer 顶部 `Render` 下拉框仅切换当前主预览视口，默认为 Forward；
+  可选择 Deferred / TiledDeferredCPU / TiledDeferredGPU / Auto，选 Forward 恢复。
+- FrameGraph 是自定义引擎的默认整帧管线；路径选择不修改模型文件，也不改变缩略图/GUI 默认路径。
+- SDK AWT/Canvas 预览在 Windows/Linux 默认请求 OpenGL 4.3，让 GPU tiled 实际使用 compute/SSBO；
+  macOS 默认 3.3。旧显卡可在 SDK 启动参数加入 `-J-Djme.sdk.previewOpenGL=3.3` 并重启，
+  此时 GPU tiled 自动回退 CPU；缺少 4.3 的机器必须显式选择这个兼容模式。
+- Minie 物理原生库在构建时打包到 `jme3-core-baselibs/release/native-libs/`，运行时通过
+  NetBeans 模块定位、使用引擎预提取加载接口，避免本机临时目录权限检查阻止预览启动。
+  显式设置 `com.jme3.NativeLibraryExtractionFolder` 时尊重用户配置。
+- 属性面板以只读摘要显示 SDF 网格尺寸和表面卡片缓存，防止字符串编辑器损坏 Savable 数据。
+- 已烘焙的 SDF/SurfaceBakeData 随 j3o 正常加载；它们不是自动启用 GI 的开关。
+  本次没有添加 SDK 烘焙按钮、SDF 调试可视化或 FrameGraph 图形编辑器。
+- 材质可视化编辑器保留未识别扩展块的嵌套内容；自定义 shader 声明仍应放在 `.j3md`。
+
+构建后在 PowerShell 执行：
+
+```powershell
+.\gradlew.bat verifyLocalEngine
+.\tools\verify-local-engine.ps1
+.\tools\verify-local-engine.ps1 -OpenGL33
+```
+
+第一条检查解析版本与自定义类，并生成 `build/local-engine-libraries.txt`。
+第二条使用 SDK 已构建的库和 AWT 上下文，检查多路径预览、Forward 恢复、
+独立缩略图视口、四个已有烘焙模型和材质嵌套扩展块。
+验证成功输出 `SDK_PREVIEW_SMOKE_PASS`。渲染验证需要本机 OpenGL 3.3，不适用于无图形驱动的 CI。
+
+
+### NetBeans 模块隔离下的自定义上下文
+
+`PreviewPanelsContext` 位于 SDK 的 `com.jme3.gde.core` 模块，依赖引擎模块；
+引擎模块不能反向按类名加载 SDK 类。当前引擎的 `AppSettings.setCustomRenderer(Class)`
+保留运行时类对象，`copyFrom`/`mergeFrom` 一并保留注册，桌面上下文工厂直接使用该类。
+保存到配置文件的仍然只是类名；从文件载入后，SDK 在启动前重新注册上下文。
+不需要给 NetBeans 模块添加循环依赖，也不需要把 SDK 的类复制进引擎 JAR。
+
+对应的引擎回归测试为 `:jme3-desktop:test --tests '*CustomContextClassLoaderTest'`，
+使用引擎类加载器无法看到的独立插件类，覆盖注册、设置复制、持久化和内置类回退。
+SDK 的 `verify-local-engine.ps1` 也通过实际 `JmeSystem.newContext` 工厂启动 AWT 上下文。
+
+### Modern scene/model editor
+
+The SDK uses the bundled **FlatLaf** (Apache-2.0, no paid UI library). Dark is the default;
+use the preview toolbar **Theme** to switch Dark/Light. Toolbar controls use consistent
+logical-pixel padding instead of forcing mixed fixed pixel sizes.
+
+- 左键选择模型；左键拖动操作柄。E 平移 / R 旋转 / T 缩放。
+- 按住右键 + 鼠标原地转向，配合 WASD 漫游；Shift 四倍速度。
+- 松开右键、失去焦点或关闭场景会清理运动状态。中键环绕，Shift+中键平移，滚轮缩放。
+- 移除 G/R/S 等旧式模态键盘变换。Ctrl+C/X/V、Ctrl+S、Ctrl+Z/Y 交给平台编辑命令，
+  不再触发场景变换。Esc 取消正在拖动的变换。Help / 操作帮助按钮可查看速查表。
+- 剪切仅在粘贴成功时移动原节点；查询剪贴板不会删除节点。
+  复制每次粘贴创建独立对象；剪切不能跨场景或粘贴进自身子树。
+- 整棵子树删除、复制粘贴、剪切移动、材质/模型拖放和烘焙支持撤销/重做。
+  根节点不能删除/剪切。空操作柄点击不再创建错误的重做变换。
+
+**Render / View** are preview-only controls. Render offers Forward, Deferred,
+TiledDeferredCPU, TiledDeferredGPU and Auto. GPU tiled falls back to CPU without GL4.3.
+Lit uses original materials and the selected path. Unlit displays base color/texture;
+Normals displays vertex normals (not normal-map detail); Wireframe displays edges.
+SDF shows bounded near-surface samples of saved `SdfVolume` data, not an exact ray-marched surface.
+Collision displays existing physics collision shapes without enabling simulation.
+Diagnostic modes temporarily use Forward; returning to Lit restores the selected path.
+No mode writes into the scene. Use Refresh after changing bake data or physics shapes.
+Missing SDF/physics data produces a status message instead of silently generating data.
+
+**Model Detail / 模型详情** opens when a selected model/node contains triangle geometry:
+
+1. Select the model root (or one geometry). Operations include descendant triangle meshes.
+2. LOD: enter decreasing retained triangle fractions, default `0.5,0.25,0.125`.
+3. Normals: regenerate area-weighted vertex normals and/or MikkTSpace tangents.
+   Shared vertices are smoothed; split vertices retain hard edges. Tangents require UV0.
+   This generates vertex data, not a high-poly-to-low-poly normal-map texture.
+4. SDF: default 64×64×64, padding 0.05, UNSIGNED for open surfaces.
+   EVEN_ODD requires closed, non-intersecting shells. Baking uses static CPU mesh positions;
+   GPU skinning/displacement is not evaluated. No mesh repair is performed.
+5. Surface: default 128 pixels per card and 256 MiB serialized payload limit.
+   Captures material attributes/depth, not lightmaps/GI. Six-direction cards can miss hidden
+   concave surfaces. Update the revision string when external materials/textures change.
+6. Click Bake. CPU tasks run on isolated meshes in a worker; surface capture needs the GL
+   render thread and can briefly pause preview. Cancel or selecting another model discards
+   pending results. CPU results are rejected if geometry changed during baking.
+7. Success marks the j3o modified; Ctrl+S saves, Ctrl+Z undoes. Earlier data remains intact
+   on failure/cancellation. Re-bake surface attributes after changing normals/materials.
+
+**Windows HiDPI:** `AwtPanel` now creates its framebuffer in device pixels and draws it
+without an intermediate logical-pixel resize. Mouse events and drag/drop picking use the same
+physical coordinates. 100%, 125%, 150% and monitor changes are supported; keep Windows scaling
+at your preferred setting. This repairs scaling-induced blur; ordinary polygon aliasing is
+separate from anti-aliasing settings. No global DPI override is added.
+
+Build and verify from PowerShell:
+
+```powershell
+cd M:\Sources\JMonkeyEngine3\jmesdk
+.\build-local-engine-sdk.bat
+$env:JAVA_HOME = 'C:\Users\JohnKkk\.gradle\jdks\eclipse_adoptium-25-amd64-windows.2'
+.\tools\verify-editor.ps1
+.\tools\verify-local-engine.ps1
+.\tools\verify-local-engine.ps1 -OpenGL33
+# Start the built SDK (or Run the suite in NetBeans):
+.\build-and-run-sdk.bat
+```
+
+Engine DPI/context regressions:
+`gradlew.bat :jme3-desktop:test --tests '*AwtPanelHiDpiTest' --tests '*CustomContextClassLoaderTest'`.
+The preview smoke also checks all diagnostic modes, surface GPU baking, material/path restoration
+and independence of a second viewport. CPU smoke checks shortcut isolation, fly navigation,
+mesh-copy safety, LOD, normals/tangents and signed SDF baking.

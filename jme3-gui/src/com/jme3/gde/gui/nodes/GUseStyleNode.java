@@ -46,7 +46,8 @@ public class GUseStyleNode extends AbstractNode {
 
         @Override
         public void actionPerformed(ActionEvent e) {
-           gui.removeStyle(style);
+            ReferenceEdit.perform(gui, () -> gui.removeStyle(style),
+                    () -> gui.addLoadUseStyle(style));
         }
     }
     

@@ -51,6 +51,25 @@ import org.openide.util.Lookup;
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class AssetDataNode extends DataNode implements AssetNameHolder {
 
+    @Override
+    public javax.swing.Action getPreferredAction() {
+        if (getDataObject() instanceof BinaryModelDataObject binary) {
+            return AnimationEditorSupport.fileAction(binary, true);
+        }
+        return super.getPreferredAction();
+    }
+
+    @Override
+    public javax.swing.Action[] getActions(boolean context) {
+        javax.swing.Action[] actions = super.getActions(context);
+        if (getDataObject() instanceof BinaryModelDataObject binary) {
+            javax.swing.Action[] result = java.util.Arrays.copyOf(actions, actions.length + 1);
+            result[actions.length] = AnimationEditorSupport.fileAction(binary, false);
+            return result;
+        }
+        return actions;
+    }
+
     public AssetDataNode(DataObject obj, Children ch) {
         super(obj, ch);
     }
@@ -92,6 +111,10 @@ public class AssetDataNode extends DataNode implements AssetNameHolder {
     }
 
     @Override
+    public org.openide.filesystems.FileObject getAssetFile() {
+        return getDataObject().getPrimaryFile();
+    }
+
     public String getAssetName() {
         AssetData data = getLookup().lookup(AssetData.class);
         if (data != null && data.getAssetKey() != null) {

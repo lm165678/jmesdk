@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nifty-styles xmlns="http://nifty-gui.lessvoid.com/nifty-gui" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://nifty-gui.lessvoid.com/nifty-gui http://nifty-gui.lessvoid.com/nifty-gui/nifty.xsd">
+    <!-- Load nifty-default-styles.xml, nifty-default-controls.xml, then this file.
+         Use: <control name="button" style="green-button" label="OK" width="140px" height="36px"/>
+         No external image assets are required. -->
+    <style id="green-button#panel">
+        <attributes backgroundColor="#274f" childLayout="center" visibleToMouse="true" padding="6px"/>
+        <effect>
+            <onHover name="border" color="#ffff" post="true"/>
+        </effect>
+    </style>
+    <style id="green-button#text" base="button-font">
+        <attributes color="#ffff" align="center" valign="center" textHAlign="center" textVAlign="center" visibleToMouse="false"/>
+    </style>
+</nifty-styles>

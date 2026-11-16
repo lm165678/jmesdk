@@ -152,11 +152,26 @@ public abstract class AbstractCameraController extends AbstractAppState implemen
         SceneApplication.getApplication().enqueue(new Callable<Object>() {
 
             public Object call() throws Exception {
+                resetInputState();
                 inputManager.removeRawInputListener(me);
                 inputManager.removeListener(me);
                 return null;
             }
         });
+    }
+
+    /**
+     * Clears held input after focus loss or controller detach. Call on the render
+     * thread; hosts enqueue this call from their AWT focus listener.
+     */
+    public void resetInputState() {
+        buttonDownL = false;
+        buttonDownR = false;
+        buttonDownM = false;
+        shiftModifier = false;
+        moved = false;
+        checkClickL = checkClickR = checkClickM = false;
+        checkReleaseL = checkReleaseR = checkReleaseM = false;
     }
 
     public void setCamFocus(final Vector3f focus, final boolean moveCamera) {
@@ -425,6 +440,8 @@ public abstract class AbstractCameraController extends AbstractAppState implemen
     }
 
     public void onMouseButtonEvent(MouseButtonEvent mbe) {
+        mouseX = mbe.getX();
+        mouseY = mbe.getY();
         //on a click release we request the focus for the top component
         //this allow netbeans to catch keyEvents and trigger actions according to keymapping
         if ("true".equals(NbPreferences.forModule(Installer.class).get("use_lwjgl_canvas", "false"))) {

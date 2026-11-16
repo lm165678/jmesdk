@@ -114,10 +114,178 @@ public final class SceneComposerTopComponent extends TopComponent implements
 
     public SceneComposerTopComponent() {
         initComponents();
-        setName(NbBundle.getMessage(SceneComposerTopComponent.class, "CTL_SceneComposerTopComponent"));
+        com.jme3.gde.core.util.EditorUiStyle.toolbar(jToolBar1);
+        com.jme3.gde.core.util.EditorUiStyle.toolbar(jToolBar2);
+        com.jme3.gde.core.util.EditorUiStyle.toolbar(jToolBar3);
+        installVerticalInspector();
+        moveButton.setToolTipText("Move (W)");
+        rotateButton.setToolTipText("Rotate (E)");
+        scaleButton.setToolTipText("Scale (R)");
+        setName(ui("SceneDetail"));
         setToolTipText(NbBundle.getMessage(SceneComposerTopComponent.class, "HINT_SceneComposerTopComponent"));
         setIcon(ImageUtilities.loadImage(ICON_PATH, true));
         result = Utilities.actionsGlobalContext().lookupResult(AbstractSceneExplorerNode.class);
+    }
+
+    /**
+     * Width-tracking inspector. Existing controls retain their listeners and undo
+     * behavior; only presentation changes. Sections scroll vertically at any dock width.
+     */
+    private static String ui(String key) {
+        return com.jme3.gde.core.util.EditorMessages.text(key);
+    }
+
+    private void installVerticalInspector() {
+        javax.swing.JPanel stack = new InspectorStack();
+        javax.swing.JPanel tools = new javax.swing.JPanel(new java.awt.GridLayout(0, 2, 4, 4));
+        tools.setBorder(javax.swing.BorderFactory.createTitledBorder(ui("TransformSelection")));
+        transformationTypeComboBox.setMinimumSize(new java.awt.Dimension(0, 24));
+        tools.add(new javax.swing.JLabel(ui("Coordinates")));
+        tools.add(transformationTypeComboBox);
+        javax.swing.AbstractButton[] buttons = {selectButton, moveButton, rotateButton, scaleButton,
+            jToggleScene, jToggleGrid, jToggleSelectGeom, jToggleSelectTerrain,
+            moveToCursorButton, resetCursorButton, cursorToSelectionButton,
+            camToCursorSelectionButton, showSelectionToggleButton, showGridToggleButton};
+        String[] names = {ui("SelectQ"), ui("MoveW"), ui("RotateE"), ui("ScaleR"), ui("SnapScene"), ui("SnapGrid"),
+            ui("Geometry"), ui("Terrain"), ui("ToCursor"), ui("ResetCursor"), ui("CursorSelection"),
+            ui("FocusSelection"), ui("Selection"), ui("Grid")};
+        javax.swing.JPanel advanced = new javax.swing.JPanel(new java.awt.GridLayout(0, 2, 4, 4));
+        javax.swing.JToolBar transform = new javax.swing.JToolBar();
+        tools.add(new javax.swing.JLabel(ui("Tool")));
+        tools.add(transform);
+        for (int i = 0; i < buttons.length; i++) {
+            buttons[i].setText(i < 4 ? "" : names[i]);
+            buttons[i].setToolTipText(names[i]);
+            if (i >= 4) {
+                buttons[i].setIcon(null);
+                buttons[i].setSelectedIcon(null);
+                buttons[i].setRolloverIcon(null);
+            }
+            buttons[i].setMinimumSize(new java.awt.Dimension(0, 24));
+            buttons[i].setPreferredSize(null);
+            buttons[i].setMargin(new java.awt.Insets(3, 5, 3, 5));
+            if (i < 4) {
+                transform.add(buttons[i]);
+            } else {
+                advanced.add(buttons[i]);
+            }
+        }
+        com.jme3.gde.core.util.EditorUiStyle.toolbar(transform);
+        jPanel4.removeAll();
+        jPanel4.setLayout(new java.awt.GridLayout(0, 2, 4, 6));
+        java.awt.Component[] utility = {createPhysicsMeshButton, jCheckBox1,
+            new javax.swing.JLabel(ui("Mass")), jTextField1, jButton1, fixedCheckBox,
+            new javax.swing.JLabel(ui("Radius")), radiusSpinner,
+            new javax.swing.JLabel(ui("Height")), heightSpinner, jLabel5, emitButton, jButton2, jButton3};
+        for (java.awt.Component control : utility) {
+            control.setMinimumSize(new java.awt.Dimension(0, 24));
+            control.setPreferredSize(null);
+            jPanel4.add(control);
+        }
+        cameraPanel.removeAll();
+        cameraPanel.setLayout(new java.awt.GridLayout(0, 2, 4, 5));
+        java.awt.Component[] camera = {jLabel13, fovSpinner, jLabel7, jSpinner1, jLabel8, jSpinner2,
+            jLabel9, cameraPositionLabel, jLabel10, cameraDirectionLabel,
+            cursorPositionHeader, cursorPositionLabel};
+        for (java.awt.Component control : camera) {
+            control.setMinimumSize(new java.awt.Dimension(0, 24));
+            control.setPreferredSize(null);
+            cameraPanel.add(control);
+        }
+        com.jme3.gde.core.util.InspectorColumns.install(tools, "scene.tools");
+        com.jme3.gde.core.util.InspectorColumns.install(cameraPanel, "scene.camera");
+        com.jme3.gde.core.util.InspectorColumns.install(jPanel4, "scene.physics");
+        com.jme3.gde.core.util.InspectorColumns.install(advanced, "scene.advanced");
+        sceneInfoPanel.removeAll();
+        sceneInfoPanel.setLayout(new java.awt.GridLayout(0, 1, 0, 4));
+        sceneInfoPanel.add(sceneInfoLabel);
+        sceneInfoPanel.add(sceneInfoLabel1);
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.gridx = 0;
+        c.weightx = 1;
+        c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        c.insets = new java.awt.Insets(4, 6, 4, 6);
+        for (javax.swing.JPanel section : new javax.swing.JPanel[]{tools, cameraPanel,
+                foldSection(ui("PostProcessing"), new EditorPostProcessingPanel()),
+                foldSection(ui("Advanced"), advanced),
+                foldSection(ui("PhysicsEffects"), jPanel4), foldSection(ui("SceneInformation"), sceneInfoPanel)}) {
+            section.setMinimumSize(new java.awt.Dimension(0, section.getPreferredSize().height));
+            stack.add(section, c);
+        }
+        c.weighty = 1;
+        c.fill = java.awt.GridBagConstraints.BOTH;
+        stack.add(new javax.swing.JPanel(), c);
+        javax.swing.JScrollPane scroll = new javax.swing.JScrollPane(stack,
+                javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.setMinimumSize(new java.awt.Dimension(0, 0));
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        removeAll();
+        setLayout(new java.awt.BorderLayout());
+        add(scroll, java.awt.BorderLayout.CENTER);
+        setMinimumSize(new java.awt.Dimension(100, 80));
+        setPreferredSize(new java.awt.Dimension(310, 640));
+    }
+
+    /** Less common actions start collapsed; this is a view preference, not scene data. */
+    private javax.swing.JPanel foldSection(String title, javax.swing.JPanel contents) {
+        javax.swing.JPanel section = new javax.swing.JPanel(new java.awt.BorderLayout(0, 4));
+        javax.swing.JToggleButton header = new javax.swing.JToggleButton("▸  " + title);
+        header.setHorizontalAlignment(javax.swing.SwingConstants.LEFT);
+        header.setFocusable(false);
+        header.setMargin(new java.awt.Insets(4, 7, 4, 7));
+        contents.setVisible(false);
+        header.addActionListener(event -> {
+            contents.setVisible(header.isSelected());
+            header.setText((header.isSelected() ? "▾  " : "▸  ") + title);
+            // GridBagLayout uses minimum heights when the viewport is short.
+            // Recompute after expanding instead of retaining the collapsed height.
+            section.setMinimumSize(new java.awt.Dimension(0, section.getPreferredSize().height));
+            section.revalidate();
+            if (section.getParent() != null) {
+                section.getParent().revalidate();
+                section.getParent().repaint();
+            }
+        });
+        header.setToolTipText(title);
+        if (contents instanceof EditorPostProcessingPanel) {
+            header.setSelected(true);
+            header.setText("▾  " + title);
+            contents.setVisible(true);
+        }
+        section.add(header, java.awt.BorderLayout.NORTH);
+        section.add(contents, java.awt.BorderLayout.CENTER);
+        return section;
+    }
+
+    private static final class InspectorStack extends javax.swing.JPanel implements javax.swing.Scrollable {
+        InspectorStack() {
+            super(new java.awt.GridBagLayout());
+        }
+        public java.awt.Dimension getPreferredScrollableViewportSize() {
+            return new java.awt.Dimension(300, 600);
+        }
+        public int getScrollableUnitIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return 24;
+        }
+        public int getScrollableBlockIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return Math.max(24, visible.height - 24);
+        }
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
+    /** Updates the toolbar selection on the Swing event thread after a hotkey. */
+    void showSelectedTool(SceneEditTool tool) {
+        moveButton.setSelected(tool instanceof MoveTool);
+        rotateButton.setSelected(tool instanceof RotateTool);
+        scaleButton.setSelected(tool instanceof ScaleTool);
+        selectButton.setSelected(tool instanceof SelectTool);
     }
 
     /**
@@ -470,6 +638,7 @@ public final class SceneComposerTopComponent extends TopComponent implements
         jToolBar1.add(jToggleGrid);
         jToolBar1.add(jSeparator8);
 
+        jToggleSelectGeom.setSelected(true);
         jToggleSelectGeom.setIcon(Icons.selectGeometry);
         org.openide.awt.Mnemonics.setLocalizedText(jToggleSelectGeom, org.openide.util.NbBundle.getMessage(SceneComposerTopComponent.class, "SceneComposerTopComponent.jToggleSelectGeom.text")); // NOI18N
         jToggleSelectGeom.setToolTipText(org.openide.util.NbBundle.getMessage(SceneComposerTopComponent.class, "SceneComposerTopComponent.jToggleSelectGeom.toolTipText")); // NOI18N
@@ -1143,6 +1312,20 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
         return Lookup.getDefault().lookup(UndoRedo.class);
     }
 
+    /** Move before opening, after window-system restoration has completed. */
+    private void migrateInspectorDock() {
+        // Migrate the old bottom dock once; subsequent user docking is preserved.
+        java.util.prefs.Preferences prefs = org.openide.util.NbPreferences.forModule(SceneComposerTopComponent.class);
+        if (!prefs.getBoolean("verticalInspectorDockV2", false)) {
+            org.openide.windows.Mode mode = WindowManager.getDefault().findMode("explorer");
+            if (mode != null) {
+                mode.dockInto(this);
+                prefs.putBoolean("verticalInspectorDockV2", true);
+            }
+        }
+
+    }
+
     @Override
     public void componentOpened() {
         super.componentOpened();
@@ -1245,6 +1428,7 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
                 sceneInfoLabel.setToolTipText("Name: " + file.getNameExt());
                 sceneInfoLabel.setToolTipText("Size: " + file.getSize() / 1024 + " kB");
             }
+            migrateInspectorDock();
             open();
             requestActive();
         }
@@ -1314,6 +1498,17 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
         }
         Collection<AbstractSceneExplorerNode> items = (Collection<AbstractSceneExplorerNode>) result.allInstances();
 
+        TopComponent properties = org.openide.windows.WindowManager.getDefault().findTopComponent("properties");
+        if (items.isEmpty()) {
+            // Losing global lookup on focus transfer is not a scene deselection.
+            if (properties != null && TopComponent.getRegistry().getActivated() != properties) {
+                properties.setActivatedNodes(null);
+            }
+            return;
+        }
+        if (properties != null) {
+            properties.setActivatedNodes(items.toArray(org.openide.nodes.Node[]::new));
+        }
         AbstractSceneExplorerNode[] abstractNodes = new AbstractSceneExplorerNode[items.size()];
         SceneViewerTopComponent.findInstance().setActivatedNodes(items.toArray(org.openide.nodes.Node[]::new));
         items.toArray(abstractNodes);
@@ -1327,6 +1522,18 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
         AbstractSceneExplorerNode first = nodes[0];
         if (editorController != null) {
             editorController.setSelectedExplorerNode(first);
+        }
+        if (toolController != null) {
+            java.util.List<Spatial> selection = new java.util.ArrayList<>();
+            for (AbstractSceneExplorerNode node : nodes) {
+                if (node instanceof JmeSpatial) {
+                    Spatial spatial = node.getLookup().lookup(Spatial.class);
+                    if (spatial != null) {
+                        selection.add(spatial);
+                    }
+                }
+            }
+            toolController.setSelectedSpatials(selection);
         }
         if (first instanceof JmeSpatial jmeSpatial) {
             selectSpatial(jmeSpatial.getLookup().lookup(Spatial.class));
@@ -1344,6 +1551,7 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
     }
 
     private void selectSpatial(Spatial selection) {
+        ModelDetailTopComponent.showSelection(selection, editorController);
         if (editorController != null) {
             editorController.setSelectedSpat(selection);
         }
@@ -1352,6 +1560,7 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
             return;
         } else if (toolController != null) {
             toolController.updateSelection(selection);
+            toolController.focusSelectionPivot(selection);
         }
         if (selection instanceof Node node) {
             setSelectedObjectText(node.getName());
@@ -1364,6 +1573,7 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
     }
 
     private void cleanupControllers() {
+        ModelDetailTopComponent.showSelection(null, null);
         if (camController != null) {
             camController.disable();
             camController = null;
@@ -1398,12 +1608,17 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
                 toolController.cleanup();
             }
             toolController = new SceneComposerToolController(request.getToolNode(), request.getManager(), request.getJmeNode());
+            toolController.setSelectGeometries(jToggleSelectGeom.isSelected());
+            toolController.setSelectTerrain(jToggleSelectTerrain.isSelected());
+            toolController.setSnapToGrid(jToggleGrid.isSelected());
+            toolController.setSnapToScene(jToggleScene.isSelected());
             toolController.setToolListener(this);
             camController = new ComposerCameraController(SceneApplication.getApplication().getCamera(), request.getJmeNode());
             toolController.setEditorController(editorController);
             camController.setToolController(toolController);
             camController.setMaster(this);
             camController.enable();
+            SceneViewerTopComponent.findInstance().offerEditorGuide();
             
             cameraPositionTrackerAppState = new CameraPositionTrackerAppState(cameraPositionLabel, cameraDirectionLabel);
             SceneApplication.getApplication().getStateManager().attach(cameraPositionTrackerAppState);

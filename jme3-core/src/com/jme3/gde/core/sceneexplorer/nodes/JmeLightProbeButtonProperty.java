@@ -50,13 +50,16 @@ public class JmeLightProbeButtonProperty extends PropertyEditorSupport implement
                     SceneApplication.getApplication().enqueue(new Callable<Object>() {
                         @Override
                         public Object call() throws Exception {
-                            EnvironmentCamera envCam = SceneApplication.getApplication().getStateManager().getState(EnvironmentCamera.class);
-                            SceneToolController toolController = SceneApplication.getApplication().getStateManager().getState(SceneToolController.class);
-                            if (toolController != null) {
-                                envCam.setPosition(toolController.getCursorLocation());
-                            } else {
-                                envCam.setPosition(new Vector3f(0, 0, 0));
+                            if (probe.getLightProbe() instanceof com.jme3.light.SkyLight) {
+                                var control = probe.findSkyControl();
+                                if (control != null) {
+                                    control.requestRebake();
+                                    probe.setModified();
+                                }
+                                return null;
                             }
+                            EnvironmentCamera envCam = SceneApplication.getApplication().getStateManager().getState(EnvironmentCamera.class);
+                            envCam.setPosition(probe.getLightProbe().getPosition());
                             LightProbeFactory.updateProbe(probe.getLightProbe(),
                                     envCam, spatial,
                                     probe.isHQBake() ? 

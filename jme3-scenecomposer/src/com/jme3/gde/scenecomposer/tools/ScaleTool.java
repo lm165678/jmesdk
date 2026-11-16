@@ -50,7 +50,9 @@ public class ScaleTool extends SceneEditTool {
             pickedMarker = null; // mouse released, reset selection
             constraintAxis = Vector3f.UNIT_XYZ; // no axis constraint
             if (wasDragging) {
-                actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
+                if (!startScale.equals(lastScale)) {
+                    actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
+                }
                 wasDragging = false;
             }
             pickManager.reset();
@@ -78,6 +80,7 @@ public class ScaleTool extends SceneEditTool {
                     constraintAxis = Vector3f.UNIT_Z; // scale only Z
                 }
                 startScale = toolController.getSelectedSpatial().getLocalScale().clone();
+                lastScale = startScale.clone();
                 wasDragging = true;
             }
         }
@@ -107,7 +110,9 @@ public class ScaleTool extends SceneEditTool {
             pickedMarker = null; // mouse released, reset selection
             constraintAxis = Vector3f.UNIT_XYZ; // no axis constraint
             if (wasDragging) {
-                actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
+                if (!startScale.equals(lastScale)) {
+                    actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
+                }
                 wasDragging = false;
             }
             pickManager.reset();
@@ -159,20 +164,22 @@ public class ScaleTool extends SceneEditTool {
 
         ScaleUndo(Spatial spatial, Vector3f before, Vector3f after) {
             this.spatial = spatial;
-            this.before = before;
-            this.after = after;
+            this.before = before.clone();
+            this.after = after.clone();
         }
 
         @Override
         public void sceneUndo() {
             spatial.setLocalScale(before);
             toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
 
         @Override
         public void sceneRedo() {
             spatial.setLocalScale(after);
             toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
 
     }

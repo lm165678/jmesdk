@@ -1,0 +1,20 @@
+MaterialDef GBuffer Preview {
+    MaterialParameters {
+        Texture2D Source
+        Texture2D Header
+        Texture2D Depth
+        Boolean DepthView
+    }
+    Technique {
+        VertexShader GLSL150: com/jme3/gde/core/scene/processors/GBufferPreview.vert
+        FragmentShader GLSL150: com/jme3/gde/core/scene/processors/GBufferPreview.frag
+        WorldParameters {
+            WorldViewProjectionMatrix
+        }
+        RenderState {
+            FaceCull Off
+            DepthTest On
+            DepthWrite On
+        }
+    }
+}

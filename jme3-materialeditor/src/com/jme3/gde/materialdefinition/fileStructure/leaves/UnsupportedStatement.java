@@ -18,5 +18,8 @@ public class UnsupportedStatement extends Statement {
 
     public UnsupportedStatement(Statement sta) {
         super(sta.getLineNumber(), sta.getLine());
+        // Preserve opaque extension blocks (including material-owned shading declarations)
+        // when the visual editor does not understand their schema.
+        getContents().addAll(sta.getContents());
     }
 }

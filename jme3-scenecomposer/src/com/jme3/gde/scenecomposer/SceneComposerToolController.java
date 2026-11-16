@@ -66,16 +66,18 @@ public class SceneComposerToolController extends SceneToolController {
 
     private JmeNode rootNode;
     private SceneEditTool editTool;
+    private final EditorShortcutPolicy shortcuts = new EditorShortcutPolicy();
+    private boolean selectingWithPrimary;
     private SceneEditorController editorController;
     private ViewPort overlayView;
     private Node onTopToolsNode;
     private Node nonSpatialMarkersNode;
     private HashMap<AbstractSceneExplorerNode, Spatial> nonSpatialMarkers;
 
-    private boolean snapToGrid = false;
-    private boolean snapToScene = false;
-    private boolean selectTerrain = false;
-    private boolean selectGeometries = false;
+    private volatile boolean snapToGrid = false;
+    private volatile boolean snapToScene = false;
+    private volatile boolean selectTerrain = false;
+    private volatile boolean selectGeometries = true;
     private TransformationType transformationType = TransformationType.local;
     
     private final float fifteenDegs = FastMath.HALF_PI / 6f;
@@ -109,11 +111,12 @@ public class SceneComposerToolController extends SceneToolController {
 
     public void createOnTopToolNode() {
         // a node in a viewport that will always render on top
-        onTopToolsNode = new Node("OverlayNode");
         overlayView = SceneApplication.getApplication().getOverlayView();
         SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
             public Void call() throws Exception {
+                onTopToolsNode = new Node("OverlayNode");
+                onTopToolsNode.updateGeometricState();
                 overlayView.attachScene(onTopToolsNode);
                 return null;
             }
@@ -142,13 +145,14 @@ public class SceneComposerToolController extends SceneToolController {
         }
         if (onTopToolsNode != null) {
             onTopToolsNode.updateLogicalState(tpf);
-            onTopToolsNode.updateGeometricState();
         }
     }
 
     @Override
     public void render(RenderManager rm) {
         super.render(rm);
+        // SceneApplication finalizes all overlay roots immediately before drawing.
+        // A controller callback cannot guarantee that it runs last in the frame.
     }
 
     public boolean isEditToolEnabled() {
@@ -184,11 +188,16 @@ public class SceneComposerToolController extends SceneToolController {
     }
 
     private void doEnableEditTool(SceneEditTool sceneEditTool) {
+        if (selected instanceof com.jme3.environment.gi.GiProbeVolume
+                && sceneEditTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool) {
+            return;
+        }
         if (editTool != null) {
             editTool.hideMarker();
         }
         editTool = sceneEditTool;
         editTool.activate(manager, toolsNode, onTopToolsNode, selected, this);
+        java.awt.EventQueue.invokeLater(() -> SceneComposerTopComponent.findInstance().showSelectedTool(sceneEditTool));
     }
 
     public void selectedSpatialTransformed() {
@@ -197,8 +206,21 @@ public class SceneComposerToolController extends SceneToolController {
         }
     }
 
+    @Override
+    public void doUpdateSelection(Spatial spatial) {
+        super.doUpdateSelection(spatial);
+        if (spatial instanceof com.jme3.environment.gi.GiProbeVolume
+                && editTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool) {
+            doEnableEditTool(new com.jme3.gde.scenecomposer.tools.MoveTool());
+        }
+    }
+
     public void setSelected(Spatial selected) {
         this.selected = selected;
+        if (selected instanceof com.jme3.environment.gi.GiProbeVolume
+                && editTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool) {
+            doEnableEditTool(new com.jme3.gde.scenecomposer.tools.MoveTool());
+        }
     }
 
     public void setNeedsSave(boolean needsSave) {
@@ -221,7 +243,22 @@ public class SceneComposerToolController extends SceneToolController {
             scm.getActiveShortcut().actionPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
         } else if (editTool != null) {
             editTool.setCamera(camera);
-            editTool.actionPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
+            if (pressed) {
+                selectingWithPrimary = !SceneApplication.getApplication().isEditorHelpersVisible()
+                        || editTool instanceof com.jme3.gde.scenecomposer.tools.SelectTool
+                        || editTool.pickAxisMarker(camera, mouseLoc, editTool.axisPickType) == null;
+            }
+            if (selectingWithPrimary) {
+                com.jme3.gde.scenecomposer.tools.SelectTool selection = new com.jme3.gde.scenecomposer.tools.SelectTool();
+                if (pressed) {
+                    selection.selectAt(mouseLoc, camera, rootNode, editorController.getCurrentDataObject(), this);
+                }
+            } else {
+                editTool.actionPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
+            }
+            if (!pressed) {
+                selectingWithPrimary = false;
+            }
         }
     }
 
@@ -257,7 +294,16 @@ public class SceneComposerToolController extends SceneToolController {
         }
     }
 
+    /** Whether the current primary gesture is selection rather than a handle drag. */
+    boolean allowsPrimaryOrbit() {
+        ShortcutManager shortcuts = Lookup.getDefault().lookup(ShortcutManager.class);
+        return !shortcuts.isActive() && (selectingWithPrimary || editTool == null);
+    }
+
     public void doEditToolDraggedPrimary(Vector2f mouseLoc, boolean pressed, Camera camera) {
+        if (selectingWithPrimary) {
+            return;
+        }
         ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
 
         if (scm.isActive()) {
@@ -281,16 +327,105 @@ public class SceneComposerToolController extends SceneToolController {
         }
     }
 
+    /**
+     * Only unmodified Q/W/E/R switch handles. Clipboard/save/undo shortcuts stay
+     * owned by NetBeans; legacy modal transform shortcuts are intentionally disabled.
+     */
     public void doKeyPressed(KeyInputEvent kie) {
-        ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
+        doKeyPressed(kie, true);
+    }
 
-        if (scm.isActive()) {
-            scm.doKeyPressed(kie);
-        } else if (scm.activateShortcut(kie)) {
-            scm.getActiveShortcut().activate(manager, toolsNode, onTopToolsNode, selected, this);
-        } else if (editTool != null) {
-            editTool.keyPressed(kie);
+    private volatile java.util.List<Spatial> selectedSpatials = java.util.List.of();
+    private boolean leftControl;
+    private boolean rightControl;
+
+    /** EDT selection snapshot; transform gestures consume it on the render thread. */
+    public void setSelectedSpatials(java.util.List<Spatial> values) {
+        selectedSpatials = java.util.List.copyOf(values);
+    }
+
+    public java.util.List<Spatial> getSelectedSpatials() {
+        return selectedSpatials;
+    }
+
+    public boolean isAdditiveSelection() {
+        return leftControl || rightControl;
+    }
+
+    private boolean leftShift;
+    private boolean rightShift;
+
+    /** Render-thread modifier state; Shift snaps rotation to one-degree increments. */
+    public boolean isRotationSnapEnabled() {
+        return leftShift || rightShift;
+    }
+
+    void doKeyPressed(KeyInputEvent kie, boolean allowSwitch) {
+        if (kie.getKeyCode() == com.jme3.input.KeyInput.KEY_LSHIFT) {
+            leftShift = kie.isPressed();
+        } else if (kie.getKeyCode() == com.jme3.input.KeyInput.KEY_RSHIFT) {
+            rightShift = kie.isPressed();
         }
+        if (kie.getKeyCode() == com.jme3.input.KeyInput.KEY_LCONTROL) {
+            leftControl = kie.isPressed();
+        } else if (kie.getKeyCode() == com.jme3.input.KeyInput.KEY_RCONTROL) {
+            rightControl = kie.isPressed();
+        }
+        int code = shortcuts.accept(kie);
+        if (!allowSwitch) {
+            return;
+        }
+        if (code == com.jme3.input.KeyInput.KEY_G) {
+            SceneApplication.getApplication().toggleEditorHelpers();
+            return;
+        }
+        selectTransform(code);
+    }
+
+    /** Render-thread entry point shared by keyboard and viewport buttons. */
+    void selectTransform(int code) {
+        SceneEditTool replacement = switch (code) {
+            case com.jme3.input.KeyInput.KEY_Q -> new com.jme3.gde.scenecomposer.tools.SelectTool();
+            case com.jme3.input.KeyInput.KEY_W -> new com.jme3.gde.scenecomposer.tools.MoveTool();
+            case com.jme3.input.KeyInput.KEY_E -> new com.jme3.gde.scenecomposer.tools.RotateTool();
+            case com.jme3.input.KeyInput.KEY_R -> new com.jme3.gde.scenecomposer.tools.ScaleTool();
+            default -> null;
+        };
+        if (replacement != null) {
+            doEnableEditTool(replacement);
+
+        }
+    }
+
+    float rotationDragDegrees() {
+        if (editTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool rotate) {
+            return rotate.getDragDegrees();
+        }
+        return Float.NaN;
+    }
+
+    int activeTransform() {
+        if (editTool instanceof com.jme3.gde.scenecomposer.tools.SelectTool) {
+            return com.jme3.input.KeyInput.KEY_Q;
+        }
+        if (editTool instanceof com.jme3.gde.scenecomposer.tools.MoveTool) {
+            return com.jme3.input.KeyInput.KEY_W;
+        }
+        if (editTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool) {
+            return com.jme3.input.KeyInput.KEY_E;
+        }
+        if (editTool instanceof com.jme3.gde.scenecomposer.tools.ScaleTool) {
+            return com.jme3.input.KeyInput.KEY_R;
+        }
+        return -1;
+    }
+
+    void resetShortcutState() {
+        leftControl = false;
+        rightControl = false;
+        leftShift = false;
+        rightShift = false;
+        shortcuts.reset();
     }
 
     protected void refreshNonSpatialMarkers() {
@@ -376,10 +511,68 @@ public class SceneComposerToolController extends SceneToolController {
         this.selectTerrain = selectTerrain;
     }
 
+    private Spatial orbitPickedSpatial;
+    private Vector3f orbitPickedPoint;
+
+    /**
+     * Records a viewport selection pivot on the render thread. Null uses the
+     * selected object's world bounds center. This is editor state, never serialized.
+     * <pre>
+     * 第一步：点击模型，记录命中点；第二步：左键拖动围绕该点旋转。
+     * 第三步：从树选择其他物体则使用包围盒中心；右键仍自由漫游。
+     * </pre>
+     */
+    public void recordOrbitPick(Spatial spatial, Vector3f point) {
+        orbitPickedSpatial = spatial;
+        orbitPickedPoint = point == null ? null : point.clone();
+        if (point != null && camController != null) {
+            camController.doSetCamFocus(point, false);
+        }
+    }
+
+    // Render-thread pick result, independent of asynchronous Explorer selection.
+    Spatial getOrbitPickedSpatial() {
+        return orbitPickedSpatial;
+    }
+
+    /** Enqueues pivot synchronization from Swing selection without moving the camera. */
+    public void focusSelectionPivot(Spatial spatial) {
+        SceneApplication.getApplication().enqueue(() -> {
+            if (spatial != null && camController != null) {
+                Spatial root = spatial;
+                while (root.getParent() != null) {
+                    root = root.getParent();
+                }
+                root.updateGeometricState();
+                Vector3f point;
+                if (spatial == orbitPickedSpatial && orbitPickedPoint != null) {
+                    point = orbitPickedPoint;
+                } else {
+                    orbitPickedSpatial = null;
+                    orbitPickedPoint = null;
+                    point = spatial.getWorldBound() == null ? spatial.getWorldTranslation()
+                            : spatial.getWorldBound().getCenter();
+                }
+                camController.doSetCamFocus(point, false);
+            }
+            return null;
+        });
+    }
+
     public boolean isSelectGeometries() {
         return selectGeometries;
     }
 
+    /**
+     * Chooses leaf geometry (default true) or its model parent. This flag is
+     * shared by Swing and render-thread picking; the inspector synchronizes it
+     * when creating a controller for a reopened scene.
+     * <pre>
+     * 第一步：默认开启 Geometry，点击模型选择命中的 Geometry。
+     * 第二步：关闭 Geometry 后选择模型父节点；独立 Geometry 资产仍可选择自身。
+     * 第三步：重新打开场景时按钮状态同步给新控制器，无需关闭再开启。
+     * </pre>
+     */
     public void setSelectGeometries(boolean selectGeometries) {
         this.selectGeometries = selectGeometries;
     }
@@ -492,6 +685,9 @@ public class SceneComposerToolController extends SceneToolController {
             if (constraints.z != 0f) {
                 scale.setZ((int) Math.max(scale.z, 1));
             }
+        }
+        if (selected instanceof com.jme3.environment.gi.GiProbeVolume) {
+            scale.set(Math.max(0.001f, scale.x), Math.max(0.001f, scale.y), Math.max(0.001f, scale.z));
         }
         selected.setLocalScale(scale);
     }

@@ -86,42 +86,60 @@ public class SceneViewerDropTargetListener implements DropTargetListener {
     @Override
     public void drop(final DropTargetDropEvent dtde) {
         this.rootPanel.setCursor(Cursor.getDefaultCursor());
-        String assetKey = null;
-        Transferable transferable = null;
-        DataFlavor flavor = null;
-
+        boolean accepted = false;
         try {
-            transferable = dtde.getTransferable();
-            final DataFlavor[] flavors = transferable.getTransferDataFlavors();
-
-            flavor = flavors[0];
-            // What does the Transferable support
-            if (transferable.isDataFlavorSupported(flavor)) {
-                Object o = dtde.getTransferable().getTransferData(flavor);
-                if (o instanceof AssetNameHolder assetNameHolder) {
-                    assetKey = assetNameHolder.getAssetName();
-                } else if (o instanceof AssetDataNode assetDataNode) {
-                    assetKey = assetDataNode.getAssetName();
+            dtde.acceptDrop(java.awt.dnd.DnDConstants.ACTION_COPY);
+            accepted = true;
+            Transferable transfer = dtde.getTransferable();
+            String asset = null;
+            org.openide.filesystems.FileObject source = null;
+            for (DataFlavor candidate : transfer.getTransferDataFlavors()) {
+                Object value = transfer.getTransferData(candidate);
+                if (value instanceof AssetNameHolder holder) {
+                    asset = holder.getAssetName();
+                    source = holder.getAssetFile();
+                    break;
+                }
+                if (value instanceof AssetDataNode node) {
+                    asset = node.getAssetName();
+                    source = node.getLookup().lookup(org.openide.filesystems.FileObject.class);
+                    break;
                 }
             }
-
-        } catch (UnsupportedFlavorException | IOException ex) {
-            Logger.getLogger(SceneViewerDropTargetListener.class.getName()).log(Level.WARNING, "Non-supported flavor {0}", transferable);
+            var request = com.jme3.gde.core.scene.SceneApplication.getApplication().getCurrentSceneRequest();
+            if (asset == null || request == null || request.getManager() == null) {
+                dtde.dropComplete(false);
+                return;
+            }
+            if (source != null) {
+                String relative = org.openide.filesystems.FileUtil.getRelativePath(request.getManager().getAssetFolder(), source);
+                if (relative == null) {
+                    throw new IOException("The dropped asset must belong to the active scene project. Copy it into that project's Assets first.");
+                }
+                asset = relative;
+            }
+            var file = request.getManager().getAssetFolder().getFileObject(asset);
+            boolean model = file != null && org.openide.loaders.DataObject.find(file)
+                    instanceof com.jme3.gde.core.assets.SpatialAssetDataObject;
+            Vector2f position = new Vector2f(dtde.getLocation().x, dtde.getLocation().y);
+            if (model) {
+                rootPanel.addModel(asset, position);
+            } else if (isMaterialExtension(asset)) {
+                rootPanel.applyMaterial(asset, position);
+            } else {
+                dtde.dropComplete(false);
+                return;
+            }
+            dtde.dropComplete(true);
+        } catch (Exception error) {
+            if (accepted) {
+                dtde.dropComplete(false);
+            } else {
+                dtde.rejectDrop();
+            }
+            org.openide.DialogDisplayer.getDefault().notifyLater(new org.openide.NotifyDescriptor.Message(
+                    error.getMessage(), org.openide.NotifyDescriptor.ERROR_MESSAGE));
         }
-
-        if (transferable == null || assetKey == null) {
-            return;
-        }
-
-        final int dropYLoc = dtde.getLocation().y;
-        final int dropXLoc = dtde.getLocation().x;
-
-        if (flavor instanceof SpatialDataFlavor || isModelExtension(assetKey)) {
-            rootPanel.addModel(assetKey, new Vector2f(dropXLoc, dropYLoc));
-        } else if (flavor instanceof MaterialDataFlavor || isMaterialExtension(assetKey)) {
-            rootPanel.applyMaterial(assetKey, new Vector2f(dropXLoc, dropYLoc));
-        }
-
     }
 
     /**
@@ -141,7 +159,7 @@ public class SceneViewerDropTargetListener implements DropTargetListener {
      * @return true if the asset key is for material files
      */
     private boolean isMaterialExtension(String assetKey) {
-        return assetKey.endsWith("j3m");
+        return assetKey.toLowerCase(java.util.Locale.ROOT).endsWith(".j3m");
     }
 
 }

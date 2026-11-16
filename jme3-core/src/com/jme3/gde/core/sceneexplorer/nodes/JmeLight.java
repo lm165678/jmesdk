@@ -106,8 +106,29 @@ public class JmeLight extends AbstractSceneExplorerNode {
         // We don't want the user to mess with them
         set.remove("Frustum Check Needed");
         set.remove("Intersects Frustum");
+        if (obj.getType() == Light.Type.Ambient || obj.getType() == Light.Type.Probe) {
+            set.remove("Cast Shadow");
+        }
         //set.put(makeProperty(obj, ColorRGBA.class, "getColor", "setColor", "Color"));
         sheet.put(set);
+        if (obj instanceof com.jme3.light.DirectionalLight || obj instanceof com.jme3.light.PointLight
+                || obj instanceof com.jme3.light.SpotLight) {
+            Sheet.Set shadows = Sheet.createPropertiesSet();
+            shadows.setName("ManagedShadows");
+            shadows.setDisplayName("Shadows");
+            var settings = obj.getShadowSettings();
+            Class<?> type = com.jme3.shadow.LightShadowSettings.class;
+            shadows.put(makeEmbedProperty(settings, type, int.class, "getMapSize", "setMapSize", "Resolution (64-4096)"));
+            shadows.put(makeEmbedProperty(settings, type, int.class, "getFilterRadius", "setFilterRadius", "PCF radius (0 / 1 / 2)"));
+            shadows.put(makeEmbedProperty(settings, type, float.class, "getDepthBias", "setDepthBias", "Depth bias"));
+            shadows.put(makeEmbedProperty(settings, type, float.class, "getNormalBias", "setNormalBias", "Normal bias"));
+            if (obj instanceof com.jme3.light.DirectionalLight) {
+                shadows.put(makeEmbedProperty(settings, type, int.class, "getCascadeCount", "setCascadeCount", "Cascades (1-4)"));
+                shadows.put(makeEmbedProperty(settings, type, float.class, "getSplitLambda", "setSplitLambda", "Split lambda (0-1)"));
+                shadows.put(makeEmbedProperty(settings, type, float.class, "getShadowDistance", "setShadowDistance", "Shadow distance"));
+            }
+            sheet.put(shadows);
+        }
         return sheet;
 
     }

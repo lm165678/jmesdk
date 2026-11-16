@@ -64,6 +64,8 @@ public class SceneToolController extends AbstractAppState {
     protected Geometry grid;
     protected Spatial selected;
     protected Spatial selectionShape;
+    private Geometry boundsSelection;
+    private final Vector3f boundsExtent = new Vector3f(-1, -1, -1);
     protected AssetManager manager;
     protected Material blueMat;
     protected AbstractCameraController camController;
@@ -280,34 +282,51 @@ public class SceneToolController extends AbstractAppState {
         });
     }
 
+    /**
+     * Creates a world-axis-aligned selection box. Its dimensions are refreshed in
+     * render(), after scene geometric updates; never apply the model transform twice.
+     * <pre>
+     * 第一步：旋转子模型；第二步：选中父节点查看所有子模型合并后的世界包围盒。
+     * 第三步：继续编辑或撤销，辅助框在渲染线程随最新边界刷新，无需重新选择。
+     * </pre>
+     */
     protected void attachBoxSelection(Spatial geom) {
         BoundingVolume bound = geom.getWorldBound();
-        if (bound instanceof BoundingBox) {
-            BoundingBox bbox = (BoundingBox) bound;
-            Vector3f extent = new Vector3f();
-            bbox.getExtent(extent);
-            final Geometry selectionGeometry = WireBox.makeGeometry(bbox);
-            selectionGeometry.setName("selection_geometry_sceneviewer");
-            selectionGeometry.setMaterial(blueMat);
-            selectionGeometry.setLocalTranslation(bbox.getCenter().subtract(geom.getWorldTranslation()));
-            //Vector3f scale = new Vector3f(1,1,1);
-            //scale.x = 1/geom.getWorldScale().x;
-            //scale.y = 1/geom.getWorldScale().y;
-            //scale.z = 1/geom.getWorldScale().z;
-            selectionShape = new Node("SelectionParent");
-            ((Node) selectionShape).attachChild(selectionGeometry);
-            //selectionShape.setLocalTransform(geom.getWorldTransform());
-            //selectionShape.setLocalTranslation(geom.getWorldTranslation());
-            //selectionGeometry.setLocalScale(scale);
-
-            SceneApplication.getApplication().enqueue(new Callable<Object>() {
-                @Override
-                public Object call() throws Exception {
-                    toolsNode.attachChild(selectionShape);
-                    return null;
+        if (bound instanceof BoundingBox bbox) {
+            final Geometry box = WireBox.makeGeometry(bbox);
+            box.setName("selection_geometry_sceneviewer");
+            box.setMaterial(blueMat);
+            boundsSelection = box;
+            bbox.getExtent(boundsExtent);
+            selectionShape = box;
+            SceneApplication.getApplication().enqueue(() -> {
+                if (selectionShape == box) {
+                    toolsNode.attachChild(box);
                 }
+                return null;
             });
+        }
+    }
 
+    @Override
+    public void render(com.jme3.renderer.RenderManager manager) {
+        super.render(manager);
+        if (selected == null || selectionShape == null || selectionShape != boundsSelection) {
+            return;
+        }
+        if (selected.getWorldBound() instanceof BoundingBox box) {
+            if (boundsExtent.x != box.getXExtent() || boundsExtent.y != box.getYExtent()
+                    || boundsExtent.z != box.getZExtent()) {
+                box.getExtent(boundsExtent);
+                ((WireBox) boundsSelection.getMesh()).updatePositions(
+                        boundsExtent.x, boundsExtent.y, boundsExtent.z);
+                boundsSelection.updateModelBound();
+            }
+            boundsSelection.setLocalTranslation(box.getCenter());
+            boundsSelection.setLocalRotation(com.jme3.math.Quaternion.IDENTITY);
+            boundsSelection.setLocalScale(1);
+            // SceneApplication finalizes the entire Tools Node after all callbacks.
+            // Finalizing only this controller subtree leaves its parent dirty.
         }
     }
 
@@ -430,14 +449,41 @@ public class SceneToolController extends AbstractAppState {
 
     @Override
     public void update(float f) {
+        updateAdaptiveGrid();
         if (selected == null || selectionShape == null) {
             return;
         }
 
+        if (selectionShape == boundsSelection) {
+            return;
+        }
         selectionShape.setLocalTranslation(selected.getWorldTranslation());
         selectionShape.setLocalRotation(selected.getWorldRotation());
         selectionShape.setLocalScale(selected.getWorldScale());
 
+    }
+
+    /**
+     * Keeps the editor grid readable while zooming. Only the helper mesh changes;
+     * model transforms and world-unit snapping remain unchanged. Render thread only.
+     */
+    private void updateAdaptiveGrid() {
+        if (grid == null || !showGrid) {
+            return;
+        }
+        com.jme3.renderer.Camera camera = SceneApplication.getApplication().getCamera();
+        float halfHeight;
+        if (camera.isParallelProjection()) {
+            halfHeight = Math.abs(camera.getFrustumTop() - camera.getFrustumBottom()) * .5f;
+        } else {
+            float distance = Math.max(camera.getLocation().length(), camera.getFrustumNear() * 2);
+            halfHeight = distance * Math.abs(camera.getFrustumTop() / camera.getFrustumNear());
+        }
+        float spacing = Math.max(.001f, halfHeight / 8f);
+        if (Float.isFinite(spacing)) {
+            grid.setLocalScale(spacing);
+            grid.setLocalTranslation(-10 * spacing, 0, -10 * spacing);
+        }
     }
 
     public Spatial getSelectedSpatial() {

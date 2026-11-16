@@ -94,6 +94,86 @@ public class ProjectAssetManager extends DesktopAssetManager {
     private final List<String> folderNames = new LinkedList<>();
     private final List<FileObject> jarItems = new LinkedList<>();
     private URLClassLoader loader;
+    private volatile boolean useGeneratedTextures = true;
+    private final java.util.Map<com.jme3.asset.TextureKey, String> textureRevisions = new java.util.HashMap<>();
+
+    /**
+     * Selects generated PC DDS previews (default true). Disabling restores source
+     * images without changing J3M/J3O keys or deleting generated assets. Call before
+     * loading a scene; existing attached textures are not replaced in place.
+     * Subsequent loads revalidate the registry and caches. Compression itself only
+     * runs on the model conversion worker, never inside this loading method.
+     * <pre>
+     * 第一步：正常转换源模型，SDK 自动生成 DDS 并记录逻辑 key 映射。
+     * 第二步：loadModel 或 loadMaterial 自动使用有效 DDS，包括 J3O 内嵌材质。
+     * 第三步：setUseGeneratedTextures(false) 后重新加载场景可预览原图。
+     * 第四步：setUseGeneratedTextures(true) 后重新加载可恢复 DDS 预览。
+     * 第五步：缺失、过期或不可解码的 DDS 回退到原图；重新转换可修复。
+     * </pre>
+     */
+    public void setUseGeneratedTextures(boolean enabled) {
+        useGeneratedTextures = enabled;
+        synchronized (textureRevisions) {
+            textureRevisions.clear();
+        }
+        clearCache();
+    }
+
+    /**
+     * Resolves texture variants before extension-based loader selection and cache
+     * lookup. The returned clone retains the requested logical TextureKey, so
+     * saving embedded materials does not persist platform-specific DDS paths.
+     * Nonstandard TextureKey subclasses and non-2D texture keys are left alone.
+     */
+    @Override
+    public <T> T loadAsset(AssetKey<T> key) {
+        if (project != null && key != null && key.getClass() == com.jme3.asset.TextureKey.class
+                && ((com.jme3.asset.TextureKey) key).getTextureTypeHint() == com.jme3.texture.Texture.Type.TwoDimensional) {
+            com.jme3.asset.TextureKey logical = (com.jme3.asset.TextureKey) key;
+            try {
+                FileObject assetFolder = getAssetFolder();
+                File directory = assetFolder == null ? null : FileUtil.toFile(assetFolder);
+                if (directory != null && java.nio.file.Files.isRegularFile(directory.toPath()
+                        .resolve(com.jme3.gde.texturetools.GeneratedTextures.MANIFEST))) {
+                    var store = new com.jme3.gde.texturetools.GeneratedTextures(directory.toPath());
+                    java.nio.file.Path source = store.source(logical.getName());
+                    if (source != null) {
+                        java.nio.file.Path generated = useGeneratedTextures ? store.resolve(logical.getName()) : null;
+                        if (generated != null) {
+                            try {
+                                return (T) loadMappedTexture(logical, directory.toPath(), generated);
+                            } catch (RuntimeException failure) {
+                                logger.log(Level.WARNING, "Generated texture failed; loading source: " + logical.getName(), failure);
+                            }
+                        }
+                        return (T) loadMappedTexture(logical, directory.toPath(), source);
+                    }
+                }
+            } catch (IOException exception) {
+                logger.log(Level.WARNING, "Unable to resolve generated texture; using original key: " + key, exception);
+            }
+        }
+        return super.loadAsset(key);
+    }
+
+    private com.jme3.texture.Texture loadMappedTexture(com.jme3.asset.TextureKey logical,
+            java.nio.file.Path root, java.nio.file.Path file) throws IOException {
+        String name = root.toAbsolutePath().normalize().relativize(file).toString().replace('\\', '/');
+        var physical = new com.jme3.asset.TextureKey(name, logical.isFlipY());
+        physical.setGenerateMips(logical.isGenerateMips());
+        physical.setAnisotropy(logical.getAnisotropy());
+        physical.setTextureTypeHint(logical.getTextureTypeHint());
+        String revision = com.jme3.gde.texturetools.GeneratedTextures.contentRevision(file);
+        synchronized (textureRevisions) {
+            if (!revision.equals(textureRevisions.put(physical, revision))) {
+                deleteFromCache(physical);
+            }
+            com.jme3.texture.Texture result = super.loadAsset(physical);
+            result.setKey(logical);
+            result.setName(logical.getName());
+            return result;
+        }
+    }
 
     public ProjectAssetManager(Project prj, String folderName) {
         super(true);

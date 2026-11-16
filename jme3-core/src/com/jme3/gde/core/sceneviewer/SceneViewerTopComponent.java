@@ -76,11 +76,23 @@ public final class SceneViewerTopComponent extends TopComponent {
     private SceneApplication app;
     private HelpCtx helpContext = new HelpCtx("com.jme3.gde.core.sceneviewer");
     private Component oglCanvas;
+    private SceneEditorGuide editorGuide;
+    private javax.swing.Timer guideTimer;
+
+    private com.jme3.gde.core.scene.processors.PreviewDebugProcessor debugPreview;
 
     public SceneViewerTopComponent() {
         initComponents();
         oGLPanel.setMinimumSize(new java.awt.Dimension(10, 10));
         setFocusable(true);
+        installSceneEditActions();
+        javax.swing.ActionMap explorerActions = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance().getActionMap();
+        for (String key : new String[]{"copy-to-clipboard", "cut-to-clipboard", "paste-from-clipboard", "delete"}) {
+            javax.swing.Action action = explorerActions.get(key);
+            if (action != null) {
+                getActionMap().put(key, action);
+            }
+        }
         setName(NbBundle.getMessage(SceneViewerTopComponent.class, "CTL_SceneViewerTopComponent"));
         setToolTipText(NbBundle.getMessage(SceneViewerTopComponent.class, "HINT_SceneViewerTopComponent"));
         setIcon(ImageUtilities.loadImage(ICON_PATH, true));
@@ -89,6 +101,7 @@ public final class SceneViewerTopComponent extends TopComponent {
             oglCanvas = app.getMainPanel();
             oglCanvas.setFocusable(false);
             oGLPanel.add(oglCanvas);
+            installRenderPathSelector();
 
         } catch (Exception | Error e) {
             SceneApplication.showStartupErrorMessage(e);
@@ -113,6 +126,40 @@ public final class SceneViewerTopComponent extends TopComponent {
                 }
             });
         });
+        addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent event) {
+                // NetBeans may temporarily transfer focus while activating this tab.
+                // Evaluate the settled owner, not the intermediate focusLost event.
+                java.awt.EventQueue.invokeLater(() -> {
+                    java.awt.Component owner = java.awt.KeyboardFocusManager
+                            .getCurrentKeyboardFocusManager().getFocusOwner();
+                    if (owner == SceneViewerTopComponent.this
+                            || (owner != null && javax.swing.SwingUtilities.isDescendingFrom(
+                                    owner, SceneViewerTopComponent.this))) {
+                        return;
+                    }
+                    app.enqueue(() -> {
+                        if (app.getActiveCameraController() != null) {
+                            app.getActiveCameraController().resetInputState();
+                        }
+                        return null;
+                    });
+                });
+            }
+        });
+        oglCanvas.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent event) {
+                if (org.openide.windows.TopComponent.getRegistry().getActivated()
+                        != SceneViewerTopComponent.this) {
+                    requestActive();
+                }
+                if (!isFocusOwner()) {
+                    requestFocusInWindow();
+                }
+            }
+        });
         addKeyListener(new KeyListener() {
             @Override
             public void keyTyped(KeyEvent evt) {
@@ -120,6 +167,14 @@ public final class SceneViewerTopComponent extends TopComponent {
 
             @Override
             public void keyPressed(final KeyEvent evt) {
+                if (handleSceneEditShortcut(evt)) {
+                    return;
+                }
+                // A modifier may have been pressed before this view gained focus.
+                // Trust the AWT modifier mask as well as the render-thread key state.
+                if (evt.isControlDown() || evt.isAltDown() || evt.isMetaDown()) {
+                    return;
+                }
                 SceneApplication.getApplication().enqueue(() -> {
                     int code = AwtKeyInput.convertAwtKey(evt.getKeyCode());
                     KeyInputEvent keyEvent = new KeyInputEvent(code, evt.getKeyChar(), true, false);
@@ -146,6 +201,467 @@ public final class SceneViewerTopComponent extends TopComponent {
         });
 
         oGLPanel.setDropTarget(new DropTarget(this, new SceneViewerDropTargetListener(this)));
+    }
+
+    /**
+     * Adds a preview-only path selector; it never changes the saved scene or the
+     * renderer default used by thumbnails, overlays and GUI viewports. Forward
+     * is the initial/restoration choice. The custom engine's FrameGraph remains
+     * the viewport pipeline in every mode; GPU tiled mode falls back to CPU.
+     * <pre>{@code
+     * // 第一步：在 SceneViewer 顶部选择 Forward / Deferred / TiledDeferredGPU。
+     * // 第二步：所有修改排入渲染线程，保持 Swing 与 GL 的线程边界。
+     * app.enqueue(() -> app.getViewPort().setRenderPath(RenderPath.TiledDeferredGPU));
+     * // 第三步：选择 Forward 恢复；此选项不会写进模型或影响缩略图。
+     * }</pre>
+     */
+    /**
+     * Offers the four-step guide once per SDK user profile, after scene layout.
+     * Guide replays it on demand; Skip/Done dismiss it without modifying assets.
+     * Calls from scene callbacks are marshalled to Swing; held camera input is reset
+     * on the render thread. Unsupported translucent windows use a plain guide card.
+     * <pre>
+     * 第一步：首次打开场景，依次阅读左键旋转、右键漫游、Q/Z 升降和 Q/W/E/R 工具说明。
+     * 第二步：点击 Next 前进，Skip 或 Esc 跳过；关闭引导后再进行场景操作。
+     * 第三步：工具栏 Guide 随时重新打开；不改变场景或用户的渲染设置。
+     * </pre>
+     */
+    public void offerEditorGuide() {
+        java.awt.EventQueue.invokeLater(() -> {
+            if (org.openide.util.NbPreferences.forModule(SceneViewerTopComponent.class)
+                    .getBoolean("basicSceneGuideSeen", false) || editorGuide != null) {
+                return;
+            }
+            if (guideTimer != null) {
+                guideTimer.stop();
+            }
+            guideTimer = new javax.swing.Timer(500, event -> showEditorGuide());
+            guideTimer.setRepeats(false);
+            guideTimer.start();
+        });
+    }
+
+    private void showEditorGuide() {
+        if (!isShowing() || oglCanvas == null || !oglCanvas.isShowing() || editorGuide != null) {
+            return;
+        }
+        java.awt.Window owner = javax.swing.SwingUtilities.getWindowAncestor(this);
+        if (owner == null) {
+            return;
+        }
+        resetGuideInput();
+        editorGuide = new SceneEditorGuide(owner, oglCanvas, () -> {
+            editorGuide = null;
+            resetGuideInput();
+        });
+        editorGuide.show();
+        org.openide.util.NbPreferences.forModule(SceneViewerTopComponent.class)
+                .putBoolean("basicSceneGuideSeen", true);
+    }
+
+    private void resetGuideInput() {
+        app.enqueue(() -> {
+            if (app.getActiveCameraController() != null) {
+                app.getActiveCameraController().resetInputState();
+            }
+            return null;
+        });
+    }
+
+    private void closeEditorGuide() {
+        if (guideTimer != null) {
+            guideTimer.stop();
+        }
+        if (editorGuide != null) {
+            editorGuide.close();
+        }
+    }
+
+    /**
+     * Viewport shortcuts operate on the currently open scene, independent of the
+     * explorer selection. Swing owns command dispatch; SaveCookie and scene undo
+     * marshal mutations to the render thread. Never use window-wide bindings,
+     * which would steal undo/save from a source editor or text field.
+     * <pre>
+     * 第一步：点击 3D 视口取得焦点，编辑场景。
+     * 第二步：Ctrl+S 保存当前场景，Ctrl+Z 撤销；无需切回场景树。
+     * 第三步：Ctrl+Y 或 Ctrl+Shift+Z 重做；切换场景后自动使用新场景。
+     * 第四步：Ctrl+C 复制选中物体，Ctrl+V 粘贴到同级；选中场景根时粘贴为子物体。
+     * </pre>
+     */
+    private void installSceneEditActions() {
+        getActionMap().put("sdk.saveScene", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent event) {
+                SceneRequest request = app.getCurrentSceneRequest();
+                if (request == null || request.getDataObject() == null) {
+                    return;
+                }
+                org.openide.cookies.SaveCookie save = request.getDataObject().getLookup()
+                        .lookup(org.openide.cookies.SaveCookie.class);
+                if (save != null) {
+                    try {
+                        save.save();
+                    } catch (java.io.IOException error) {
+                        org.openide.util.Exceptions.printStackTrace(error);
+                    }
+                }
+            }
+        });
+        for (String command : new String[]{"sdk.undoScene", "sdk.redoScene"}) {
+            getActionMap().put(command, new javax.swing.AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent event) {
+                    if (app.getCurrentSceneRequest() == null) {
+                        return;
+                    }
+                    UndoRedo history = getUndoRedo();
+                    if ("sdk.undoScene".equals(command)) {
+                        if (history.canUndo()) {
+                            history.undo();
+                        }
+                    } else if (history.canRedo()) {
+                        history.redo();
+                    }
+                }
+            });
+        }
+        for (String key : new String[]{"copy-to-clipboard", "paste-from-clipboard"}) {
+            getActionMap().put("sdk." + key, new javax.swing.AbstractAction() {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent event) {
+                    if (key.equals("paste-from-clipboard")) {
+                        pasteSceneSibling();
+                        return;
+                    }
+                    javax.swing.Action action = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent
+                            .findInstance().getActionMap().get(key);
+                    if (action != null && action.isEnabled()) {
+                        action.actionPerformed(event);
+                    }
+                }
+            });
+        }
+        int ctrl = java.awt.event.InputEvent.CTRL_DOWN_MASK;
+        bindSceneShortcut(KeyEvent.VK_C, ctrl, "sdk.copy-to-clipboard");
+        bindSceneShortcut(KeyEvent.VK_V, ctrl, "sdk.paste-from-clipboard");
+        bindSceneShortcut(KeyEvent.VK_S, ctrl, "sdk.saveScene");
+        bindSceneShortcut(KeyEvent.VK_Z, ctrl, "sdk.undoScene");
+        bindSceneShortcut(KeyEvent.VK_Y, ctrl, "sdk.redoScene");
+        bindSceneShortcut(KeyEvent.VK_Z, ctrl | java.awt.event.InputEvent.SHIFT_DOWN_MASK, "sdk.redoScene");
+    }
+
+    /** Paste beside the selected scene object; the scene root receives children. */
+    private void pasteSceneSibling() {
+        var explorer = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance();
+        var selected = explorer.getExplorerManager().getSelectedNodes();
+        if (selected.length != 1) {
+            return;
+        }
+        org.openide.nodes.Node destination = selected[0];
+        if (destination.getParentNode() instanceof com.jme3.gde.core.sceneexplorer.nodes.JmeNode) {
+            destination = destination.getParentNode();
+        }
+        if (!(destination instanceof com.jme3.gde.core.sceneexplorer.nodes.JmeNode model) || model.isReadOnly()) {
+            return;
+        }
+        java.awt.datatransfer.Clipboard clipboard = org.openide.util.Lookup.getDefault()
+                .lookup(org.openide.util.datatransfer.ExClipboard.class);
+        if (clipboard == null) {
+            clipboard = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard();
+        }
+        try {
+            var contents = clipboard.getContents(null);
+            if (contents == null) {
+                return;
+            }
+            var types = destination.getPasteTypes(contents);
+            if (types.length > 0) {
+                var replacement = types[0].paste();
+                if (replacement != null) {
+                    clipboard.setContents(replacement, null);
+                }
+            }
+        } catch (java.io.IOException | IllegalStateException error) {
+            org.openide.util.Exceptions.printStackTrace(error);
+        }
+    }
+
+    private void bindSceneShortcut(int key, int modifiers, String command) {
+        javax.swing.KeyStroke stroke = javax.swing.KeyStroke.getKeyStroke(key, modifiers);
+        getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(stroke, command);
+        getInputMap(javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(stroke, command);
+    }
+
+    private boolean handleSceneEditShortcut(KeyEvent event) {
+        if (event.isConsumed()) {
+            return true;
+        }
+        if (!event.isControlDown() || event.isAltDown() || event.isMetaDown()) {
+            return false;
+        }
+        String command = switch (event.getKeyCode()) {
+            case KeyEvent.VK_C -> event.isShiftDown() ? null : "sdk.copy-to-clipboard";
+            case KeyEvent.VK_V -> event.isShiftDown() ? null : "sdk.paste-from-clipboard";
+            case KeyEvent.VK_S -> event.isShiftDown() ? null : "sdk.saveScene";
+            case KeyEvent.VK_Z -> event.isShiftDown() ? "sdk.redoScene" : "sdk.undoScene";
+            case KeyEvent.VK_Y -> event.isShiftDown() ? null : "sdk.redoScene";
+            default -> null;
+        };
+        if (command == null) {
+            return false;
+        }
+        event.consume();
+        getActionMap().get(command).actionPerformed(new java.awt.event.ActionEvent(
+                this, java.awt.event.ActionEvent.ACTION_PERFORMED, command));
+        return true;
+    }
+
+    private static String ui(String key) {
+        return com.jme3.gde.core.util.EditorMessages.text(key);
+    }
+
+    private void installRenderPathSelector() {
+        javax.swing.JToolBar controls = new javax.swing.JToolBar();
+        controls.setFloatable(false);
+        controls.setBorder(javax.swing.BorderFactory.createEmptyBorder(4, 6, 4, 6));
+        javax.swing.JLabel status = new javax.swing.JLabel("ⓘ");
+        app.enqueue(() -> {
+            debugPreview = new com.jme3.gde.core.scene.processors.PreviewDebugProcessor(
+                    app.getAssetManager(), app.getRootNode(), message -> java.awt.EventQueue.invokeLater(() -> {
+                        boolean sdfMessage = message.contains("SDF") || message.contains("Ray-marched");
+                        status.setText(sdfMessage ? (message.length() > 64
+                                ? message.substring(0, 61) + "..." : message) : "ⓘ");
+                        status.setToolTipText(message);
+                    }));
+            app.getViewPort().addProcessor(debugPreview);
+            return null;
+        });
+        javax.swing.JComboBox<com.jme3.renderer.RenderPath> paths = new javax.swing.JComboBox<>(
+                new com.jme3.renderer.RenderPath[] {
+                    com.jme3.renderer.RenderPath.Forward, com.jme3.renderer.RenderPath.Deferred,
+                    com.jme3.renderer.RenderPath.TiledDeferredCPU, com.jme3.renderer.RenderPath.TiledDeferredGPU,
+                    com.jme3.renderer.RenderPath.Auto
+                });
+        paths.setToolTipText("Lit rendering path; GPU tiled falls back to CPU when unavailable.");
+        paths.addActionListener(event -> {
+            com.jme3.renderer.RenderPath path = (com.jme3.renderer.RenderPath) paths.getSelectedItem();
+            app.enqueue(() -> {
+                debugPreview.setRenderPath(path);
+                return null;
+            });
+        });
+        javax.swing.JComboBox<com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode> modes =
+                new javax.swing.JComboBox<>(com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.values());
+        modes.setToolTipText(ui("SdfViewTip"));
+        modes.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list,
+                    Object value, int index, boolean selected, boolean focus) {
+                super.getListCellRendererComponent(list, value, index, selected, focus);
+                if (value == com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.SDFSelected) {
+                    setText(ui("SdfSelected"));
+                } else if (value == com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.SDFGlobal) {
+                    setText(ui("SdfGlobal"));
+                }
+                return this;
+            }
+        });
+        javax.swing.JComboBox<String> cascades = new javax.swing.JComboBox<>(new String[]{
+                ui("SdfColored"), ui("SdfAuto"), ui("SdfCascade0"), ui("SdfCascade1"), ui("SdfCascade2")});
+        cascades.setMaximumSize(new java.awt.Dimension(115, 26));
+        cascades.setToolTipText(ui("SdfCascadeTip"));
+        cascades.setVisible(false);
+        javax.swing.JLabel cellLabel = new javax.swing.JLabel(ui("SdfCell") + " ");
+        cellLabel.setVisible(false);
+        javax.swing.JSpinner cellSize = new javax.swing.JSpinner(
+                new javax.swing.SpinnerNumberModel(0.5, 0.001, 10000.0, 0.1));
+        cellSize.setMaximumSize(new java.awt.Dimension(70, 26));
+        cellSize.setToolTipText(ui("SdfCellTip"));
+        cellSize.setVisible(false);
+        Runnable applySdfOptions = () -> {
+            int choice = cascades.getSelectedIndex();
+            int level = choice < 2 ? -1 : choice - 2;
+            boolean colors = choice != 1;
+            float cell = ((Number) cellSize.getValue()).floatValue();
+            app.enqueue(() -> {
+                debugPreview.setSdfOptions(level, colors, cell);
+                return null;
+            });
+        };
+        cascades.addActionListener(event -> applySdfOptions.run());
+        cellSize.addChangeListener(event -> applySdfOptions.run());
+        modes.addActionListener(event -> {
+            var mode = (com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode) modes.getSelectedItem();
+            boolean global = mode == com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.SDFGlobal;
+            cascades.setVisible(global);
+            cellLabel.setVisible(global);
+            cellSize.setVisible(global);
+            jToolBar1.revalidate();
+            app.enqueue(() -> {
+                debugPreview.setMode(mode);
+                app.configureEditorPostProcessing("Lit", mode == com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.Lit ? 1 : 0);
+                return null;
+            });
+        });
+        javax.swing.JButton refresh = new javax.swing.JButton("Refresh");
+        refresh.addActionListener(event -> app.enqueue(() -> {
+            debugPreview.refresh();
+            return null;
+        }));
+        javax.swing.JButton help = new javax.swing.JButton(ui("Help"));
+        help.setToolTipText(ui("HelpTip"));
+        help.addActionListener(event -> javax.swing.JOptionPane.showMessageDialog(this,
+                ui("HelpText"), ui("HelpTitle"), javax.swing.JOptionPane.INFORMATION_MESSAGE));
+        controls.add(new javax.swing.JLabel(ui("Render") + "  "));
+        controls.add(paths);
+        controls.addSeparator();
+        controls.add(new javax.swing.JLabel(ui("View") + "  "));
+        controls.add(modes);
+        controls.add(cascades);
+        controls.add(cellLabel);
+        controls.add(cellSize);
+        controls.addSeparator();
+
+        jToolBar1.add(help);
+        javax.swing.JComboBox<String> theme = new javax.swing.JComboBox<>(new String[]{"Dark", "Light"});
+        theme.setMaximumSize(new java.awt.Dimension(95, 32));
+        theme.setSelectedItem(com.jme3.gde.core.util.EditorUiStyle.theme());
+        theme.setToolTipText("Free FlatLaf editor theme");
+        theme.addActionListener(event -> com.jme3.gde.core.util.EditorUiStyle.setTheme((String) theme.getSelectedItem()));
+        theme.setFocusable(false);
+        jToolBar1.addSeparator();
+        jToolBar1.add(new javax.swing.JLabel("Theme  "));
+        jToolBar1.add(theme);
+        for (java.awt.Component component : controls.getComponents()) {
+            component.setFocusable(false);
+        }
+        paths.setMaximumSize(new java.awt.Dimension(190, 32));
+        modes.setMaximumSize(new java.awt.Dimension(135, 26));
+        // Old toggles conflict with exclusive view modes; keep their generated form intact.
+        enableWireframe.setVisible(false);
+        enableNormalView.setVisible(false);
+        // One toolbar row: diagnostics live in the info tooltip, not a second row.
+        jToolBar1.removeAll();
+        jToolBar1.add(enableCamLight);
+        jToolBar1.add(jToggleButton1);
+        jToolBar1.add(enablePBRSky);
+        jToolBar1.addSeparator();
+        for (java.awt.Component component : controls.getComponents()) {
+            jToolBar1.add(component);
+        }
+        jToolBar1.add(status);
+        status.setToolTipText("Lit: selected rendering path");
+        status.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 6, 0, 6));
+        javax.swing.JButton guide = new javax.swing.JButton(ui("Guide"));
+        guide.setToolTipText(ui("GuideTip"));
+        guide.addActionListener(event -> showEditorGuide());
+        jToolBar1.add(guide);
+        help.setText(ui("Help"));
+        jToolBar1.add(help);
+        enableStats.setText(ui("Stats"));
+        enableStats.setIcon(null);
+        enableStats.setToolTipText(ui("StatsTip"));
+        jToolBar1.add(enableStats);
+        javax.swing.JButton limit = new javax.swing.JButton(java.text.MessageFormat.format(ui("Cap"), app.getPreviewFrameLimit()));
+        limit.setToolTipText("Preview frame limit: 30 / 60 / 120 / Unlimited. Hidden previews still throttle.");
+        javax.swing.JPopupMenu limits = new javax.swing.JPopupMenu();
+        for (int rate : new int[]{30, 60, 120, -1}) {
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(rate < 0 ? ui("Unlimited") : rate + " FPS");
+            item.addActionListener(event -> {
+                app.setPreviewFrameLimit(rate);
+                limit.setText(rate < 0 ? ui("Uncapped") : java.text.MessageFormat.format(ui("Cap"), rate));
+            });
+            limits.add(item);
+        }
+        limit.addActionListener(event -> limits.show(limit, 0, limit.getHeight()));
+        jToolBar1.add(limit);
+        javax.swing.JLabel fps = new javax.swing.JLabel("— FPS");
+        fps.setPreferredSize(new java.awt.Dimension(82, 28));
+        fps.setMaximumSize(new java.awt.Dimension(82, 28));
+        fps.setToolTipText("Measured preview frames/second, including rendering and AWT transfer (0.5s average).");
+        jToolBar1.add(fps);
+        javax.swing.Timer fpsTimer = new javax.swing.Timer(500, event -> fps.setText(
+                String.format(java.util.Locale.ROOT, "%.1f FPS", app.getMeasuredPreviewFps())));
+        addHierarchyListener(event -> {
+            if (isShowing()) {
+                fpsTimer.start();
+            } else {
+                fpsTimer.stop();
+            }
+        });
+        javax.swing.JButton options = new javax.swing.JButton("⋯");
+        options.setToolTipText("Refresh diagnostic view / editor theme");
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        javax.swing.JMenuItem refreshItem = new javax.swing.JMenuItem(ui("RefreshView"));
+        refreshItem.addActionListener(event -> refresh.doClick());
+        menu.add(refreshItem);
+        menu.addSeparator();
+        for (String name : new String[]{"Dark", "Light"}) {
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(ui(name + "Theme"));
+            item.addActionListener(event -> com.jme3.gde.core.util.EditorUiStyle.setTheme(name));
+            menu.add(item);
+        }
+        options.addActionListener(event -> menu.show(options, 0, options.getHeight()));
+        jToolBar1.add(options);
+        com.jme3.gde.core.util.EditorUiStyle.toolbar(jToolBar1);
+        limit.setPreferredSize(new java.awt.Dimension(75, 26));
+        limit.setMinimumSize(new java.awt.Dimension(75, 26));
+        limit.setMaximumSize(new java.awt.Dimension(75, 26));
+        paths.setMaximumSize(new java.awt.Dimension(140, 26));
+        modes.setMaximumSize(new java.awt.Dimension(85, 26));
+        paths.setPreferredSize(new java.awt.Dimension(140, 26));
+        paths.setMinimumSize(new java.awt.Dimension(70, 26));
+        modes.setPreferredSize(new java.awt.Dimension(85, 26));
+        modes.setMinimumSize(new java.awt.Dimension(60, 26));
+        modes.setPreferredSize(new java.awt.Dimension(135, 26));
+        modes.setMaximumSize(new java.awt.Dimension(135, 26));
+        status.setPreferredSize(new java.awt.Dimension(180, 26));
+        status.setMaximumSize(new java.awt.Dimension(180, 26));
+        javax.swing.JSpinner flySpeed = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
+                (double) app.getEditorFlySpeed(), 0.01, 10000.0, 1.0));
+        flySpeed.setEditor(new javax.swing.JSpinner.NumberEditor(flySpeed, "0.##"));
+        flySpeed.setPreferredSize(new java.awt.Dimension(78, 26));
+        flySpeed.setMaximumSize(new java.awt.Dimension(78, 26));
+        flySpeed.setToolTipText(ui("FlySpeedTip"));
+        flySpeed.addChangeListener(event -> app.setEditorFlySpeed(((Number) flySpeed.getValue()).floatValue()));
+        javax.swing.JButton gi = new javax.swing.JButton(ui("Visualize"));
+        gi.setToolTipText(ui("VisualizeTip"));
+        javax.swing.JPopupMenu giMenu = new javax.swing.JPopupMenu();
+        javax.swing.JCheckBoxMenuItem showGi = new javax.swing.JCheckBoxMenuItem(ui("GiShow"), app.isGiVolumesVisible());
+        showGi.setToolTipText(ui("GiVolumeTip"));
+        showGi.addActionListener(event -> app.setGiVolumesVisible(showGi.isSelected()));
+        giMenu.add(showGi);
+        javax.swing.JCheckBoxMenuItem applyGi = new javax.swing.JCheckBoxMenuItem(ui("GiApply"), app.isGiPreviewEnabled());
+        applyGi.setToolTipText(ui("GiApplyTip"));
+        applyGi.addActionListener(event -> app.setGiPreviewEnabled(applyGi.isSelected()));
+        giMenu.add(applyGi);
+        javax.swing.JCheckBoxMenuItem gbuffer = new javax.swing.JCheckBoxMenuItem("GBuffer", app.isGBufferVisible());
+        gbuffer.setToolTipText(ui("GBufferTip"));
+        gbuffer.addActionListener(event -> app.setGBufferVisible(gbuffer.isSelected()));
+        giMenu.add(gbuffer);
+        gi.addActionListener(event -> {
+            showGi.setSelected(app.isGiVolumesVisible());
+            applyGi.setSelected(app.isGiPreviewEnabled());
+            gbuffer.setSelected(app.isGBufferVisible());
+            applyGi.setToolTipText(app.getGiPreviewStatus());
+            giMenu.show(gi, 0, gi.getHeight());
+        });
+        com.jme3.gde.core.util.OverflowToolbar.install(jToolBar1,
+                new java.awt.Component[]{enableCamLight, jToggleButton1, enablePBRSky},
+                new java.awt.Component[]{new javax.swing.JLabel(ui("Render") + " "), paths},
+                new java.awt.Component[]{new javax.swing.JLabel(ui("View") + " "), modes},
+                new java.awt.Component[]{gi},
+                new java.awt.Component[]{cascades},
+                new java.awt.Component[]{cellLabel, cellSize},
+                new java.awt.Component[]{new javax.swing.JLabel(ui("FlySpeed") + " "), flySpeed},
+                new java.awt.Component[]{guide},
+                new java.awt.Component[]{help},
+                new java.awt.Component[]{enableStats},
+                new java.awt.Component[]{limit, fps},
+                new java.awt.Component[]{options},
+                new java.awt.Component[]{status});
+
     }
 
     /**
@@ -381,11 +897,13 @@ public final class SceneViewerTopComponent extends TopComponent {
 
     @Override
     protected void componentHidden() {
+        closeEditorGuide();
         super.componentHidden();
     }
 
     @Override
     public void componentClosed() {
+        closeEditorGuide();
         super.componentClosed();
 //        oglCanvas.setActiveUpdates(false);
         SceneRequest req = SceneApplication.getApplication().getCurrentSceneRequest();
@@ -426,23 +944,199 @@ public final class SceneViewerTopComponent extends TopComponent {
         return Lookup.getDefault().lookup(UndoRedo.class);
     }
 
-    public void applyMaterial(String assetName, Vector2f cursorPosition) {
-        AssetManager assetManager = app.getAssetManager();
-        Spatial spatial = pickWorldSpatial(app.getCamera(), new Vector2f(cursorPosition.x, app.getCamera().getHeight() - cursorPosition.y), app.getRootNode());
-        System.out.println("position " + new Vector2f(cursorPosition.x, app.getCamera().getHeight() - cursorPosition.y));
-        if (spatial != null) {
-            Material material = assetManager.loadAsset(new MaterialKey(assetName));
-            spatial.setMaterial(material);
-        }
+    /** Converts top-left AWT drop coordinates into bottom-left framebuffer pixels. */
+    private Vector2f dropPixels(Vector2f logical) {
+        float scaleX = app.getCamera().getWidth() / (float) Math.max(1, oglCanvas.getWidth());
+        float scaleY = app.getCamera().getHeight() / (float) Math.max(1, oglCanvas.getHeight());
+        return new Vector2f(logical.x * scaleX, app.getCamera().getHeight() - logical.y * scaleY);
     }
 
+    /** Drops a material using logical AWT coordinates, including HiDPI conversion. */
+    public void applyMaterial(String assetName, Vector2f cursorPosition) {
+        Vector2f pixels = dropPixels(cursorPosition);
+        SceneRequest request = app.getCurrentSceneRequest();
+        app.enqueue(() -> {
+            if (request == null || request != app.getCurrentSceneRequest()) {
+                return null;
+            }
+            if (request.getJmeNode() == null || request.getJmeNode().isReadOnly()) {
+                return null;
+            }
+            Spatial scene = request.getRootNode();
+            Spatial updateRoot = scene;
+            while (updateRoot.getParent() != null) {
+                updateRoot = updateRoot.getParent();
+            }
+            updateRoot.updateGeometricState();
+            Vector3f origin = app.getCamera().getWorldCoordinates(pixels, 0);
+            Vector3f direction = app.getCamera().getWorldCoordinates(pixels, 1).subtractLocal(origin).normalizeLocal();
+            com.jme3.collision.CollisionResults hits = new com.jme3.collision.CollisionResults();
+            scene.collideWith(new Ray(origin, direction), hits);
+            Spatial spatial = hits.size() == 0 ? null : hits.getClosestCollision().getGeometry();
+            if (spatial != null) {
+                Material material = request.getManager().loadAsset(new MaterialKey(assetName));
+                java.util.Map<com.jme3.scene.Geometry, Material> previous = new java.util.IdentityHashMap<>();
+                spatial.depthFirstTraversal(child -> {
+                    if (child instanceof com.jme3.scene.Geometry geometry) {
+                        previous.put(geometry, geometry.getMaterial());
+                    }
+                });
+                spatial.setMaterial(material);
+                registerDropEdit(request, () -> previous.forEach(com.jme3.scene.Geometry::setMaterial),
+                        () -> spatial.setMaterial(material));
+            }
+            return null;
+        });
+    }
+
+    /**
+     * Imports a dropped model under the selected scene Node (a Geometry uses its
+     * parent; no selection uses the saved scene root). Source models are converted
+     * on a worker with default options before insertion. An existing sibling J3O
+     * is reused to preserve edits; explicit reconversion uses the options dialog.
+     * A scene/parent removed while conversion runs cancels insertion. Scene
+     * insertion is undoable, while the converted asset remains on disk.
+     * <pre>
+     * 第一步：选择目标后从 Asset Browser 拖入模型；灯光/几何体等条目向上查找 Node，没有有效父节点则使用场景根节点。
+     * 第二步：非 J3O 自动按默认选项转换；已有同名 J3O 则使用它。
+     * 第三步：完成后 Ctrl+Z 撤销场景插入，Ctrl+S 保存场景。
+     * </pre>
+     */
     public void addModel(String assetName, Vector2f cursorPosition) {
-        AssetManager assetManager = app.getAssetManager();
-        Spatial spatial = assetManager.loadModel(assetName);
-        CollisionResult cr = pick(app.getCamera(), cursorPosition, app.getRootNode());
-        spatial.setLocalTranslation(cr != null ? 
-                cr.getContactPoint() : app.getCamera().getWorldCoordinates(cursorPosition, 100f));
-        app.getRootNode().attachChild(spatial);
+        Vector2f pixels = dropPixels(cursorPosition);
+        SceneRequest request = app.getCurrentSceneRequest();
+        if (request == null || request.getManager() == null || request.getJmeNode() == null
+                || request.getJmeNode().isReadOnly()) {
+            return;
+        }
+        Spatial selected = null;
+        var nodes = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                .getExplorerManager().getSelectedNodes();
+        if (nodes.length == 1) {
+            if (nodes[0] instanceof com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode n && n.isReadOnly()) {
+                return;
+            }
+            // Light/control entries are not scene parents. Walk the explorer
+            // ancestry rather than attaching to their editor-only gizmos.
+            org.openide.nodes.Node cursor = nodes[0];
+            while (cursor != null) {
+                if (!(cursor instanceof com.jme3.gde.core.sceneexplorer.nodes.JmeLight)) {
+                    Spatial candidate = cursor.getLookup().lookup(Spatial.class);
+                    if (candidate instanceof Node) {
+                        selected = candidate;
+                        break;
+                    }
+                }
+                cursor = cursor.getParentNode();
+            }
+        }
+        final Spatial selection = selected;
+        // Snapshot the parent and drop position before any asynchronous conversion.
+        app.enqueue(() -> {
+            Spatial scene = request.getRootNode();
+            Node parent = selection instanceof Node node ? node : selection == null ? null : selection.getParent();
+            if (parent == null || (parent != scene && (!(scene instanceof Node) || !parent.hasAncestor((Node) scene)))) {
+                parent = scene instanceof Node node ? node : null;
+            }
+            if (parent == null) {
+                reportAssetDrop("Select a Node in an open scene before dropping a model.");
+                return null;
+            }
+            Spatial updateRoot = scene;
+            while (updateRoot.getParent() != null) {
+                updateRoot = updateRoot.getParent();
+            }
+            updateRoot.updateGeometricState();
+            Vector3f origin = app.getCamera().getWorldCoordinates(pixels, 0);
+            Vector3f direction = app.getCamera().getWorldCoordinates(pixels, 1).subtractLocal(origin).normalizeLocal();
+            com.jme3.collision.CollisionResults hits = new com.jme3.collision.CollisionResults();
+            scene.collideWith(new Ray(origin, direction), hits);
+            Vector3f world = hits.size() == 0 ? app.getCamera().getWorldCoordinates(pixels, .95f)
+                    : hits.getClosestCollision().getContactPoint().clone();
+            final Node destination = parent;
+            org.openide.util.RequestProcessor.getDefault().post(() -> {
+                try {
+                    var assets = request.getManager();
+                    var source = assets.getAssetFolder().getFileObject(assetName);
+                    if (source == null) {
+                        throw new java.io.IOException("Asset not found: " + assetName);
+                    }
+                    var output = source;
+                    if (!source.getExt().equalsIgnoreCase("j3o")) {
+                        output = source.getParent().getFileObject(source.getName(), "j3o");
+                        if (output == null) {
+                            if (!(org.openide.loaders.DataObject.find(source)
+                                    instanceof com.jme3.gde.core.assets.SpatialAssetDataObject model)
+                                    || model.loadAsset() == null) {
+                                throw new java.io.IOException("Cannot load model: " + assetName);
+                            }
+                            model.saveAsset(com.jme3.gde.core.assets.ModelConversionOptions.defaults());
+                            output = source.getParent().getFileObject(source.getName(), "j3o");
+                        }
+                    }
+                    if (output == null) {
+                        throw new java.io.IOException("Conversion did not produce a J3O");
+                    }
+                    String key = org.openide.filesystems.FileUtil.getRelativePath(assets.getAssetFolder(), output);
+                    app.enqueue(() -> {
+                        try {
+                            if (request != app.getCurrentSceneRequest() || (destination != scene
+                                    && (!(scene instanceof Node) || !destination.hasAncestor((Node) scene)))) {
+                                return null;
+                            }
+                            assets.deleteFromCache(new com.jme3.asset.ModelKey(key));
+                            Spatial spatial = assets.loadModel(key);
+                            spatial.setLocalTranslation(destination.worldToLocal(world, null));
+                            // Preload before insertion: shader failures leave the live
+                            // scene unchanged instead of failing again on every frame.
+                            spatial.updateGeometricState();
+                            app.getRenderManager().preloadScene(spatial);
+                            destination.attachChild(spatial);
+                            registerDropEdit(request, spatial::removeFromParent, () -> destination.attachChild(spatial));
+                            java.awt.EventQueue.invokeLater(() -> {
+                                var node = request.getJmeNode().getChild(destination);
+                                if (node != null) {
+                                    node.refresh(true);
+                                }
+                            });
+                        } catch (RuntimeException error) {
+                            reportAssetDrop(error.toString());
+                        }
+                        return null;
+                    });
+                } catch (Exception error) {
+                    reportAssetDrop(error.toString());
+                }
+            });
+            return null;
+        });
+    }
+
+    private void reportAssetDrop(String message) {
+        org.openide.DialogDisplayer.getDefault().notifyLater(new org.openide.NotifyDescriptor.Message(
+                message, org.openide.NotifyDescriptor.ERROR_MESSAGE));
+    }
+
+    private void registerDropEdit(SceneRequest request, Runnable undo, Runnable redo) {
+        java.awt.EventQueue.invokeLater(() -> request.getDataObject().setModified(true));
+        Lookup.getDefault().lookup(com.jme3.gde.core.undoredo.SceneUndoRedoManager.class).addEdit(this,
+                new com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit() {
+            public void sceneUndo() {
+                undo.run();
+            }
+            public void sceneRedo() {
+                redo.run();
+            }
+            public void awtUndo() {
+                request.getDataObject().setModified(true);
+                if (request.getJmeNode() != null) {
+                    request.getJmeNode().refresh(true);
+                }
+            }
+            public void awtRedo() {
+                awtUndo();
+            }
+        });
     }
 
     public static Spatial pickWorldSpatial(Camera cam, Vector2f mouseLoc, Node jmeRootNode) {

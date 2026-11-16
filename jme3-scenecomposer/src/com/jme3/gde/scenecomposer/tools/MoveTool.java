@@ -34,6 +34,130 @@ public class MoveTool extends SceneEditTool {
     private Vector3f startPosition;
     private Vector3f lastPosition;
     private PickManager pickManager;
+    private GroupMoveGesture groupMove;
+    private boolean duplicateGesture;
+    private Spatial duplicateSource;
+    private Spatial duplicate;
+    private Node duplicateParent;
+
+    /**
+     * Shift is sampled when a translation handle is pressed. The first actual
+     * motion clones the selected scene spatial once; release records one undo
+     * transaction for creation plus translation. Right-click cancels it. Roots,
+     * read-only linked nodes and editor-only markers cannot be duplicated.
+     * <pre>
+     * 第一步：选中场景物体，按 W 切换平移工具。
+     * 第二步：按住 Shift 后拖动坐标轴，生成并移动一个副本。
+     * 第三步：松开左键完成；右键取消，Ctrl+Z 撤销整个复制移动。
+     * </pre>
+     */
+    @Override
+    public void hideMarker() {
+        cancel();
+        super.hideMarker();
+    }
+
+    private boolean beginDuplicate() {
+        Spatial source = toolController.getSelectedSpatial();
+        JmeNode root = toolController.getRootNode();
+        Spatial scene = root.getLookup().lookup(Spatial.class);
+        if (source == null || source == scene || source.getParent() == null
+                || !(scene instanceof Node) || !source.hasAncestor((Node) scene) || root.isReadOnly()) {
+            return false;
+        }
+        // Linked scene children must be edited in their owning asset.
+        for (Spatial parent = source; parent != scene; parent = parent.getParent()) {
+            if (parent instanceof com.jme3.scene.AssetLinkNode) {
+                return false;
+            }
+        }
+        duplicateSource = source;
+        duplicateParent = source.getParent();
+        duplicate = source.clone(true);
+        String base = (source.getName() == null ? "Object" : source.getName()) + " Copy";
+        String name = base;
+        int suffix = 2;
+        while (duplicateParent.getChild(name) != null) {
+            name = base + " " + suffix++;
+        }
+        duplicate.setName(name);
+        duplicateParent.attachChild(duplicate);
+        // Ancestor overrides/lights may still be dirty during AppState.update.
+        // Geometric updates must start above all such ancestors, not at this subtree.
+        Spatial updateRoot = duplicateParent;
+        while (updateRoot.getParent() != null) {
+            updateRoot = updateRoot.getParent();
+        }
+        updateRoot.updateGeometricState();
+        toolController.setSelected(duplicate);
+        return true;
+    }
+
+    private void refreshDuplicateSelection(Node parent, Spatial selected) {
+        JmeNode root = toolController.getRootNode();
+        java.awt.EventQueue.invokeLater(() -> {
+            var parentNode = root.getChild(parent);
+            if (parentNode != null) {
+                parentNode.refresh(true);
+            }
+            var selectedNode = root.getChild(selected);
+            if (selectedNode != null) {
+                com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance()
+                        .setActivatedNodes(new org.openide.nodes.Node[]{selectedNode});
+                com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                        .setSelectedNode(new com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode[]{selectedNode});
+            }
+        });
+    }
+
+    private void finishMove() {
+        if (!wasDragging) {
+            return;
+        }
+        wasDragging = false;
+        if (groupMove != null) {
+            var completed = groupMove;
+            groupMove = null;
+            var edit = completed.finish();
+            if (edit != null) {
+                actionPerformed(edit);
+            }
+            duplicateGesture = false;
+            return;
+        }
+        if (duplicate != null) {
+            final Spatial copy = duplicate;
+            final Spatial source = duplicateSource;
+            final Node parent = duplicateParent;
+            final Vector3f position = copy.getLocalTranslation().clone();
+            actionPerformed(new AbstractUndoableSceneEdit() {
+                @Override
+                public void sceneUndo() {
+                    copy.removeFromParent();
+                    toolController.setSelected(source);
+                    toolController.selectedSpatialTransformed();
+                    toolController.setNeedsSave(true);
+                    refreshDuplicateSelection(parent, source);
+                }
+                @Override
+                public void sceneRedo() {
+                    copy.setLocalTranslation(position);
+                    parent.attachChild(copy);
+                    toolController.setSelected(copy);
+                    toolController.selectedSpatialTransformed();
+                    toolController.setNeedsSave(true);
+                    refreshDuplicateSelection(parent, copy);
+                }
+            });
+            refreshDuplicateSelection(parent, copy);
+        } else if (!startPosition.equals(lastPosition)) {
+            actionPerformed(new MoveUndo(toolController.getSelectedSpatial(), startPosition, lastPosition));
+        }
+        duplicate = null;
+        duplicateSource = null;
+        duplicateParent = null;
+        duplicateGesture = false;
+    }
 
     public MoveTool() {
         axisPickType = SceneEditTool.AxisMarkerPickType.axisAndPlane;
@@ -55,10 +179,7 @@ public class MoveTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             constraintAxis = Vector3f.UNIT_XYZ; // no constraint
-            if (wasDragging) {
-                actionPerformed(new MoveUndo(toolController.getSelectedSpatial(), startPosition, lastPosition));
-                wasDragging = false;
-            }
+            finishMove();
             pickManager.reset();
         } else {
             if (toolController.getSelectedSpatial() == null) {
@@ -87,7 +208,12 @@ public class MoveTool extends SceneEditTool {
                     pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XZ, getTransformType(), camera, screenCoord);
                     constraintAxis = Vector3f.UNIT_Z; // move only Z
                 }
+                duplicateGesture = toolController.isRotationSnapEnabled();
                 startPosition = toolController.getSelectedSpatial().getLocalTranslation().clone();
+                lastPosition = startPosition.clone();
+                if (toolController.getSelectedSpatials().size() > 1) {
+                    groupMove = new GroupMoveGesture(toolController, duplicateGesture);
+                }
                 wasDragging = true;
             }
         }
@@ -117,10 +243,7 @@ public class MoveTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             constraintAxis = Vector3f.UNIT_XYZ; // no constraint
-            if (wasDragging) {
-                actionPerformed(new MoveUndo(toolController.getSelectedSpatial(), startPosition, lastPosition));
-                wasDragging = false;
-            }
+            finishMove();
             pickManager.reset();
         } else if (wasDragging == true) {
             if (!pickManager.updatePick(camera, screenCoord)) {
@@ -133,10 +256,23 @@ public class MoveTool extends SceneEditTool {
             } else if (pickedMarker.equals(ARROW_X) || pickedMarker.equals(ARROW_Y) || pickedMarker.equals(ARROW_Z)) {
                 diff = pickManager.getTranslation(constraintAxis);
             }
+            if (groupMove != null) {
+                if (diff.lengthSquared() > 1e-10f) {
+                    groupMove.move(diff);
+                    updateToolsTransformation();
+                }
+                return;
+            }
+            if (duplicateGesture && duplicate == null && diff.lengthSquared() > 1e-10f) {
+                if (!beginDuplicate()) {
+                    cancel();
+                    return;
+                }
+            }
             Vector3f position;
             Spatial parent = toolController.getSelectedSpatial().getParent();
             if (parent != null) {
-                position = startPosition.add(parent.getWorldRotation().inverse().mult(diff));
+                position = startPosition.add(parent.getWorldRotation().inverse().mult(diff).divideLocal(parent.getWorldScale()));
             } else {
                 position = startPosition.add(diff);
             }
@@ -156,7 +292,21 @@ public class MoveTool extends SceneEditTool {
     private void cancel() {
         if (wasDragging) {
             wasDragging = false;
-            toolController.getSelectedSpatial().setLocalTranslation(startPosition);
+            if (groupMove != null) {
+                groupMove.cancel();
+                groupMove = null;
+            } else if (duplicate != null) {
+                duplicate.removeFromParent();
+                toolController.setSelected(duplicateSource);
+                refreshDuplicateSelection(duplicateParent, duplicateSource);
+                duplicate = null;
+                duplicateSource = null;
+                duplicateParent = null;
+            } else {
+                toolController.getSelectedSpatial().setLocalTranslation(startPosition);
+            }
+            duplicateGesture = false;
+            toolController.selectedSpatialTransformed();
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             constraintAxis = Vector3f.UNIT_XYZ; // no constraint
@@ -188,7 +338,8 @@ public class MoveTool extends SceneEditTool {
             if (character != null) {
                 character.setPhysicsLocation(spatial.getWorldTranslation());
             }
-            //     toolController.selectedSpatialTransformed();
+            toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
 
         @Override
@@ -202,7 +353,8 @@ public class MoveTool extends SceneEditTool {
             if (character != null) {
                 character.setPhysicsLocation(spatial.getWorldTranslation());
             }
-            //toolController.selectedSpatialTransformed();
+            toolController.selectedSpatialTransformed();
+            toolController.setNeedsSave(true);
         }
 
         public void setAfter(Vector3f after) {

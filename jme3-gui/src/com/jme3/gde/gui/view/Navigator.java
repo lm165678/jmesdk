@@ -37,6 +37,7 @@ import org.openide.util.lookup.ProxyLookup;
 @NavigatorPanel.Registration(mimeType = "text/x-niftygui+xml", displayName="Gui View")
 public class Navigator extends javax.swing.JPanel implements NavigatorPanel,ExplorerManager.Provider , Observer, PropertyChangeListener{
     private Lookup lookup;
+    private GUI observedGui;
     private  ExplorerManager mgr = new ExplorerManager();
     private final BeanTreeView beanTreeView;
     /**
@@ -123,6 +124,14 @@ public class Navigator extends javax.swing.JPanel implements NavigatorPanel,Expl
        if(o instanceof GuiEditorModel){
            try {
                GuiEditorModel model = (GuiEditorModel) o;
+               if (model.getCurrent() == null) {
+                   return;
+               }
+               if (observedGui != null && observedGui != model.getCurrent()) {
+                   observedGui.deleteObserver(this);
+                   observedGui.getSelection().deleteObserver(this);
+               }
+               observedGui = model.getCurrent();
                model.getCurrent().addObserver(this);
                model.getCurrent().getSelection().addObserver(this);
                this.intNavigator(model.getCurrent());
@@ -157,7 +166,7 @@ public class Navigator extends javax.swing.JPanel implements NavigatorPanel,Expl
                 Exceptions.printStackTrace(ex);
             }
        }
-        beanTreeView.updateUI();
+        beanTreeView.repaint();
     }
 
     @Override
@@ -195,6 +204,7 @@ public class Navigator extends javax.swing.JPanel implements NavigatorPanel,Expl
         guiRoot.setName("Gui");
         this.mgr.setRootContext(guiRoot);
         this.beanTreeView.updateUI();
+        mgr.removePropertyChangeListener(this);
         mgr.addPropertyChangeListener(this);
         this.mgr.setSelectedNodes(new Node[]{guiRoot});
         Lookup lookup1 = ExplorerUtils.createLookup(mgr, getActionMap());

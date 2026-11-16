@@ -138,9 +138,46 @@ public class PickManager {
     }
 
     /**
+     * Returns the signed start-to-current angle in radians around the pick plane
+     * normal, in [-pi, pi]. Call on the render thread after a successful updatePick.
+     * A missing or degenerate pick returns zero. Unwrap successive values for turns.
+     * <pre>
+     * // 第一步：initiatePick 开始拾取；第二步：updatePick 成功后读取角度。
+     * float radians = pickManager.getSignedAngle();
+     * // 第三步：跨越正负 pi 时展开差值；松开鼠标后清零累计角度。
+     * </pre>
+     * @return signed angle in radians
+     */
+    public float getSignedAngle() {
+        if (startPickLoc == null || finalPickLoc == null) {
+            return 0;
+        }
+        Vector3f from = startPickLoc.subtract(startSpatialLocation).normalizeLocal();
+        Vector3f to = finalPickLoc.subtract(startSpatialLocation).normalizeLocal();
+        Vector3f normal = plane.getLocalRotation().mult(Vector3f.UNIT_Z);
+        return (float) Math.atan2(normal.dot(from.cross(to)), from.dot(to));
+    }
+
+    /**
      *
      * @return the Quaternion rotation in the WorldSpace
      */
+    /**
+     * Builds a signed rotation around the active pick-plane normal, in custom space.
+     * Call on the render thread between initiatePick and reset.
+     * <pre>
+     * // 第一步：获得累计角度；第二步：Shift 按住时吸附整度；第三步：应用旋转。
+     * Quaternion delta = pickManager.getRotationForAngle(worldToLocal, radians);
+     * </pre>
+     * @param transform world-to-custom rotation
+     * @param radians signed angle about the pick normal
+     * @return rotation in custom space
+     */
+    public Quaternion getRotationForAngle(Quaternion transform, float radians) {
+        Vector3f axis = transform.mult(plane.getLocalRotation().mult(Vector3f.UNIT_Z));
+        return new Quaternion().fromAngleAxis(radians, axis.normalizeLocal());
+    }
+
     public Quaternion getRotation() {
         return getRotation(Quaternion.IDENTITY);
     }

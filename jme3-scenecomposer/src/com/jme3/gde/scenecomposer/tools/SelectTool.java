@@ -46,22 +46,21 @@ import com.jme3.terrain.Terrain;
 import org.openide.loaders.DataObject;
 
 /**
- * This duplicates the Blender manipulate tool. It supports quick access to
- * Grab, Rotate, and Scale operations by typing one of the following keys: 'g',
- * 'r', or 's' Those keys can be followed by an axis key to specify what axis to
- * perform the transformation: x, y, z Then, after the operation and axis are
- * selected, you can type in a number and then hit 'enter' to complete the
- * transformation.
- *
- * Ctrl+Shift+D will duplicate an object X will delete an object
- *
- * ITEMS TO FINISH: 1) fixed scale and rotation values by holding Ctrl and
- * dragging mouse BUGS: 1) window always needs focus from primary click when it
- * should focus from secondary and middle mouse
- *
- * @author Brent Owens
+ * Object picking used by the scene editor's left mouse button. The controller
+ * routes handle hits to the active transform tool and other clicks to selectAt.
+ * E/R/T switch handles; platform Ctrl shortcuts never activate modal transforms.
+ * The secondary methods remain internal compatibility helpers for selection.
  */
 public class SelectTool extends SceneEditTool {
+
+    /** Selects under a left click without creating or replacing gizmo markers. */
+    public void selectAt(Vector2f point, com.jme3.renderer.Camera camera, JmeNode root,
+            DataObject data, com.jme3.gde.scenecomposer.SceneComposerToolController controller) {
+        toolController = controller;
+        setCamera(camera);
+        actionSecondary(point, true, root, data);
+        actionSecondary(point, false, root, data);
+    }
 
     private boolean wasDraggingR, wasDraggingL = false;
     private boolean wasDownR = false;
@@ -91,6 +90,7 @@ public class SelectTool extends SceneEditTool {
             if (!wasDraggingR && !wasDownR) { // wasn't dragging and was not down already
                 // pick on the spot
                 Spatial s = pickWorldSpatial(camera, screenCoord, rootNode);
+                Vector3f orbitPoint = s == null ? null : pickWorldLocation(camera, screenCoord, rootNode);
                 if (!toolController.isSelectTerrain() && isTerrain(s)) {
                     // only select non-terrain
                     selected = null;
@@ -99,7 +99,7 @@ public class SelectTool extends SceneEditTool {
 
                     // climb up and find the Model Node (parent) and select that, don't select the geom
                     if (!toolController.isSelectGeometries()) {
-                        Spatial linkNodeParent = findModelNodeParent(s);
+                        Spatial linkNodeParent = findModelNodeParent(s, rootNode.getLookup().lookup(Spatial.class));
                         if (linkNodeParent != null) {
                             s = linkNodeParent;
                         } else {
@@ -110,6 +110,8 @@ public class SelectTool extends SceneEditTool {
                     // select the linked node
                     s = findAssetLinkNode(s);
 
+                    toolController.recordOrbitPick(s, orbitPoint);
+                    final boolean additive = toolController.isAdditiveSelection();
                     final Spatial selec = s;
                     selected = selec;
                     java.awt.EventQueue.invokeLater(new Runnable() {
@@ -125,8 +127,25 @@ public class SelectTool extends SceneEditTool {
                             // in case of linked assets the selected node in the viewer is not necessarily in the explorer.
                             JmeSpatial n = rootNode.getChild(selec);
                             if (n != null) {
-                                SceneViewerTopComponent.findInstance().setActivatedNodes(new org.openide.nodes.Node[]{n});
-                                SceneExplorerTopComponent.findInstance().setSelectedNode(new AbstractSceneExplorerNode[]{n});
+                                java.util.List<AbstractSceneExplorerNode> selection = new java.util.ArrayList<>();
+                                if (additive) {
+                                    for (Spatial spatial : toolController.getSelectedSpatials()) {
+                                        var existing = rootNode.getChild(spatial);
+                                        if (existing != null) {
+                                            selection.add(existing);
+                                        }
+                                    }
+                                }
+                                if (!selection.remove(n)) {
+                                    selection.add(0, n);
+                                }
+                                var nodes = selection.toArray(AbstractSceneExplorerNode[]::new);
+                                if (nodes.length == 0) {
+                                    toolController.setSelectedSpatials(java.util.List.of());
+                                    toolController.updateSelection(null);
+                                }
+                                SceneViewerTopComponent.findInstance().setActivatedNodes(nodes);
+                                SceneExplorerTopComponent.findInstance().setSelectedNode(nodes);
                             }
                         }
                     });
@@ -146,20 +165,21 @@ public class SelectTool extends SceneEditTool {
      * Climb up the spatial until we find the first node parent. TODO: use
      * userData to determine the actual model's parent.
      */
-    private Spatial findModelNodeParent(Spatial child) {
+    private Spatial findModelNodeParent(Spatial child, Spatial sceneRoot) {
         if (child == null) {
             return null;
         }
-
-        if (child instanceof Node) {
+        // A standalone Geometry asset has no selectable model parent. Never
+        // climb beyond the asset into the SDK's internal Root Node.
+        if (child == sceneRoot || child instanceof Node) {
             return child;
         }
-
-        if (child.getParent() != null) {
-            return findModelNodeParent(child.getParent());
+        Spatial parent = child.getParent();
+        if (parent != null && sceneRoot instanceof Node root
+                && (parent == root || parent.hasAncestor(root))) {
+            return parent;
         }
-
-        return null;
+        return child;
     }
 
     /**
