@@ -14,6 +14,7 @@ import org.openide.util.NbPreferences;
  * 第一步：启动 SDK，默认使用 FlatLaf 深色主题。
  * 第二步：预览工具栏 ⋯ 菜单选择 Dark / Light，立即生效并记住选择。
  * 第三步：系统缩放保持 125% 等原值；不要用禁用 DPI 缩放掩盖画布问题。
+ * 第四步：工具栏保留图标原色；仅真正禁用的按钮由主题显示禁用效果。
  * </pre>
  */
 public final class EditorUiStyle {
@@ -101,7 +102,7 @@ public final class EditorUiStyle {
         }
     }
 
-    /** Neutral, DPI-aware toolbar icons preserve each command's original silhouette. */
+    /** DPI-aware toolbar sizing preserves original colors and dynamic icon states. */
     private static Icon scaled(Icon original) {
         if (original == null || original instanceof CompactIcon) {
             return original;
@@ -111,9 +112,6 @@ public final class EditorUiStyle {
 
     private static final class CompactIcon implements Icon {
         private final Icon original;
-        private java.awt.image.BufferedImage image;
-        private int cachedSize;
-        private int cachedColor;
 
         CompactIcon(Icon original) {
             this.original = original;
@@ -125,39 +123,22 @@ public final class EditorUiStyle {
             return 16;
         }
         public void paintIcon(Component component, Graphics graphics, int x, int y) {
-            Graphics2D output = (Graphics2D) graphics;
-            int size = Math.max(16, (int) Math.ceil(16 * output.getTransform().getScaleX()));
-            Color color = UIManager.getColor(component.isEnabled() ? "Label.foreground" : "Label.disabledForeground");
-            if (color == null) {
-                color = Color.GRAY;
-            }
-            if (image == null || cachedSize != size || cachedColor != color.getRGB()) {
-                image = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-                Graphics2D painter = image.createGraphics();
-                painter.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                painter.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                double ratio = (double) size / Math.max(original.getIconWidth(), original.getIconHeight());
-                painter.translate((size - original.getIconWidth() * ratio) / 2,
-                        (size - original.getIconHeight() * ratio) / 2);
+            Graphics2D painter = (Graphics2D) graphics.create();
+            try {
+                painter.translate(x, y);
+                painter.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                        RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                double ratio = 16.0 / Math.max(1,
+                        Math.max(original.getIconWidth(), original.getIconHeight()));
+                painter.translate((16 - original.getIconWidth() * ratio) / 2,
+                        (16 - original.getIconHeight() * ratio) / 2);
                 painter.scale(ratio, ratio);
+                // Paint afresh: icons can depend on theme, enabled state or animation.
+                // Disabled styling belongs to Swing/FlatLaf, not enabled icon recoloring.
                 original.paintIcon(component, painter, 0, 0);
+            } finally {
                 painter.dispose();
-                for (int py = 0; py < size; py++) {
-                    for (int px = 0; px < size; px++) {
-                        int argb = image.getRGB(px, py);
-                        // Retain luminance detail instead of flattening solid image icons.
-                        int light = (((argb >> 16) & 255) * 3 + ((argb >> 8) & 255) * 6 + (argb & 255)) / 10;
-                        float amount = .55f + light / 566f;
-                        int rgb = ((int) (color.getRed() * amount) << 16)
-                                | ((int) (color.getGreen() * amount) << 8)
-                                | (int) (color.getBlue() * amount);
-                        image.setRGB(px, py, (argb & 0xff000000) | rgb);
-                    }
-                }
-                cachedSize = size;
-                cachedColor = color.getRGB();
             }
-            output.drawImage(image, x, y, 16, 16, null);
         }
     }
 

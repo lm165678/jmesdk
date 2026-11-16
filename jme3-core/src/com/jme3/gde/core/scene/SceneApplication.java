@@ -463,6 +463,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     }
 
     public SceneApplication() {
+        com.jme3.gde.core.renderdoc.RenderDocSupport.initializeBeforeGraphics();
         Logger.getLogger("com.jme3").addHandler(logHandler);
         useCanvas = "true".equals(NbPreferences.forModule(Installer.class).get("use_lwjgl_canvas", "false"));
         Logger.getLogger("com.jme3.renderer.opengl.TextureUtil").setLevel(Level.SEVERE);
@@ -683,7 +684,16 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                         overlayRoot.updateGeometricState();
                     }
                 }
-                renderPreviewFrame(tpf);
+                boolean capture = com.jme3.gde.core.renderdoc.RenderDocSupport.beginFrame();
+                boolean rendered = false;
+                try {
+                    renderPreviewFrame(tpf);
+                    rendered = true;
+                } finally {
+                    if (capture) {
+                        com.jme3.gde.core.renderdoc.RenderDocSupport.endFrame(rendered);
+                    }
+                }
                 getStateManager().postRender();
             } catch (NullPointerException e) {
                 handleError("NullPointerException: " + e.getMessage(), e);

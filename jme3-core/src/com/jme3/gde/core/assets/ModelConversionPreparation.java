@@ -186,9 +186,9 @@ final class ModelConversionPreparation {
                 LOG.warning("Skipped surface attribute bake: " + analysis.surfaceUnsupportedReason());
             }
             if (options.sdf()) {
-                progress.progress("Baking SDF (64 x 64 x 64)...");
+                progress.progress("Baking SDF (" + options.bake().sdfX() + " x " + options.bake().sdfY() + " x " + options.bake().sdfZ() + ")...");
                 var sdf = com.jme3.scene.plugins.sdf.SdfGenerator.generate(result,
-                        new com.jme3.scene.plugins.sdf.SdfSettings(64, 64, 64, .05f,
+                        new com.jme3.scene.plugins.sdf.SdfSettings(options.bake().sdfX(), options.bake().sdfY(), options.bake().sdfZ(), .05f,
                                 com.jme3.scene.plugins.sdf.SdfSettings.SignMode.UNSIGNED),
                         fraction -> !Thread.currentThread().isInterrupted());
                 result.setUserData(com.jme3.scene.plugins.sdf.SdfVolume.USER_DATA_KEY, sdf);
@@ -198,9 +198,29 @@ final class ModelConversionPreparation {
             java.util.concurrent.Callable<Void> capture = () -> {
                 result.updateGeometricState();
                 if (captureSurface) {
-                    progress.progress("Capturing surface attributes...");
+                    // 第一步：按实际卡片数估算预算；第二步：必要时降低分辨率。
+                    // Keep all cards. The payload cap is not a peak-memory limit.
+                    final long surfaceBudget = options.bake().surfaceMiB() * 1024L * 1024;
+                    int cards = com.jme3.scene.plugins.sdf.SurfaceCacheLayout
+                            .bake(result).getCardCount();
+                    int requestedResolution = options.bake().surfaceResolution();
+                    int resolution = requestedResolution;
+                    while (options.bake().reduceSurface() && resolution > 8
+                            && (long) cards * resolution * resolution * 13 * Float.BYTES > surfaceBudget) {
+                        resolution = Math.max(8, resolution / 2);
+                    }
+                    if ((long) cards * resolution * resolution * 13 * Float.BYTES > surfaceBudget) {
+                        throw new IllegalArgumentException("Surface capture requires " + ((long) cards * resolution * resolution * 13 * Float.BYTES)
+                                + " bytes for " + cards + " cards; budget is " + surfaceBudget
+                                + ". Reduce resolution, increase budget, enable automatic reduction, or disable surface baking.");
+                    }
+                    if (resolution < requestedResolution) {
+                        LOG.warning("Surface capture resolution reduced from " + requestedResolution + " to " + resolution
+                                + " for " + cards + " cards to fit the " + options.bake().surfaceMiB() + " MiB payload budget.");
+                    }
+                    progress.progress("Capturing surface attributes (" + resolution + " pixels/card)...");
                     var surfaces = com.jme3.scene.plugins.sdf.SurfaceAttributeBaker.bake(result, "sdk-conversion-v1",
-                            app.getRenderManager(), app.getViewPort(), 128, 256L * 1024 * 1024,
+                            app.getRenderManager(), app.getViewPort(), resolution, surfaceBudget,
                             fraction -> !Thread.currentThread().isInterrupted());
                     surfaces.attachTo(result);
                 }

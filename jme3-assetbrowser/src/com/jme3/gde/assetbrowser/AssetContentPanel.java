@@ -46,6 +46,7 @@ import org.openide.windows.TopComponent;
  * its source identity so the scene can reject assets from a different project.
  * <pre>
  * 第一步：选择 Assets 子目录，右键 New File 使用项目的 JME3 资产模板。
+ * 新建文件夹：右键目录或空白处选择 New Folder；目录树右键复制/删除作用于该目录。
  * 第二步：选择资产，Ctrl+C / Ctrl+V 复制粘贴，Delete 使用标准删除确认。
  * 第三步：双击资产打开编辑器，拖动模型或材质到当前项目的 3D Viewer。
  * 第四步：源模型右键 Convert to J3O 配置导出，取消不会写入文件。
@@ -69,6 +70,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     private final JComboBox<String> types = new JComboBox<>();
     private final JTree folders = new JTree(new DefaultMutableTreeNode(new Folder("")));
     private final org.openide.explorer.ExplorerManager explorer = new org.openide.explorer.ExplorerManager();
+    private FileObject folderMenuTarget;
     private Action copyAsset;
     private Action pasteAsset;
     private Action deleteAsset;
@@ -148,7 +150,13 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         grid.setFixedCellWidth(tileSize + 18);
         grid.setFixedCellHeight(tileSize + 39);
         grid.setCellRenderer(new Cell());
-        grid.addListSelectionListener(event -> { if (!event.getValueIsAdjusting()) { showSelected(); syncAssetSelection(); } });
+        grid.addListSelectionListener(event -> {
+            if (!event.getValueIsAdjusting()) {
+                folderMenuTarget = null;
+                showSelected();
+                syncAssetSelection();
+            }
+        });
         installAssetActions();
         grid.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent event) { popup(event); }
@@ -187,6 +195,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                     folders.setSelectionPath(path);
                     grid.clearSelection();
                     syncAssetSelection();
+                    folderMenuTarget = currentFolder();
                     showAssetPopup(folders, event.getX(), event.getY());
                 }
             }
@@ -312,10 +321,16 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             SortedSet<String> dirs = new TreeSet<>();
             collect(root, root, found, dirs, new HashSet<>());
             found.sort(Comparator.comparing((Entry entry) -> !entry.file().isFolder())
-                    .thenComparing(Entry::path, String.CASE_INSENSITIVE_ORDER));
+                    .thenComparing(Entry::path, String.CASE_INSENSITIVE_ORDER)
+                    .thenComparing(Entry::path));
             long stamp = 17;
             long objStamp = 17;
             for (Entry entry : found) {
+                // Directory timestamps change when sidecars are written or files are
+                // enumerated by other tools; only asset files determine validity.
+                if (entry.file().isFolder()) {
+                    continue;
+                }
                 stamp = stamp * 31 + entry.path().hashCode();
                 stamp = stamp * 31 + entry.file().lastModified().getTime();
                 stamp = stamp * 31 + entry.file().getSize();
@@ -327,6 +342,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                     objStamp = objStamp * 31 + entry.file().getSize();
                 }
             }
+            // Sidecars affect models but are not standalone browser items.
+            found.removeIf(entry -> !entry.file().isFolder()
+                    && (entry.file().getExt().equalsIgnoreCase("j3odata")
+                    || entry.file().getExt().equalsIgnoreCase("bin")));
             long changed = stamp;
             long objChanged = objStamp;
             SwingUtilities.invokeLater(() -> {
@@ -363,12 +382,6 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             }
             for (FileObject file : folder.getChildren()) {
                 if (file.getNameExt().startsWith(".")) { continue; }
-                // Import metadata and binary sidecars are managed by importers,
-                // not independently editable assets (also includes glTF buffers).
-                if (!file.isFolder() && (file.getExt().equalsIgnoreCase("j3odata")
-                        || file.getExt().equalsIgnoreCase("bin"))) {
-                    continue;
-                }
                 String relative = FileUtil.getRelativePath(root, file);
                 if (relative == null) { continue; }
                 if (file.isFolder()) {
@@ -404,10 +417,28 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         showSelected();
     }
 
+    /** Standalone images/audio/source only depend on themselves; composite assets
+     * retain conservative project dependency invalidation, including binary sidecars.
+     * Directory navigation never changes either revision. Explicit Refresh forces
+     * regeneration; filesystem notifications rescan off EDT after a short debounce.
+     * <pre>
+     * 第一步：打开目录，首次可见的资产生成并保存缩略图。
+     * 第二步：切换目录再返回，复用内存或磁盘缓存。
+     * 第三步：保存资源或其依赖，文件监听触发失效并更新可见缩略图。
+     * 第四步：需要强制重建时点击 Refresh；关闭窗口会取消待处理任务。
+     * </pre>
+     */
+    private long thumbnailRevision(Entry entry) {
+        return switch (entry.kind()) {
+            case TEXTURE, AUDIO, SHADER -> refreshVersion;
+            default -> entry.file().getExt().equalsIgnoreCase("obj") ? objRevision : revision;
+        };
+    }
+
     private AssetThumbnails.Result image(Entry entry) {
         if (entry.file().isFolder() || manager == null || thumbnails == null || !active) { return null; }
         return thumbnails.request(manager, entry.file(), entry.path(),
-                entry.file().getExt().equalsIgnoreCase("obj") ? objRevision : revision, result -> {
+                thumbnailRevision(entry), result -> {
             if (active) {
                 grid.repaint();
                 if (entry.equals(grid.getSelectedValue())) { showSelected(); }
@@ -532,13 +563,52 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
     }
 
+    private java.util.List<Entry> selectedFileEntries() {
+        FileObject target = folderMenuTarget;
+        if (target != null) {
+            if (!target.isValid() || target.equals(manager.getAssetFolder())) {
+                return java.util.List.of();
+            }
+            return java.util.List.of(new Entry(target,
+                    FileUtil.getRelativePath(manager.getAssetFolder(), target), null));
+        }
+        return grid.getSelectedValuesList();
+    }
+
+    /** Creates only one child directory, never an arbitrary relative path. */
+    private void createFolder(FileObject parent) {
+        NotifyDescriptor.InputLine input = new NotifyDescriptor.InputLine(
+                "Folder name", "New Folder");
+        if (!NotifyDescriptor.OK_OPTION.equals(DialogDisplayer.getDefault().notify(input))) {
+            return;
+        }
+        String name = input.getInputText().trim();
+        if (name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf((char) 92) >= 0) {
+            report(new java.io.IOException("Enter a single folder name."));
+            return;
+        }
+        io.post(() -> {
+            try {
+                if (parent.getFileObject(name) != null) {
+                    throw new java.io.IOException("A file or folder with this name already exists.");
+                }
+                parent.createFolder(name);
+            } catch (Exception error) {
+                SwingUtilities.invokeLater(() -> report(error));
+            } finally {
+                SwingUtilities.invokeLater(this::scan);
+            }
+        });
+    }
+
     private void installAssetActions() {
         copyAsset = new AbstractAction(text("Copy")) {
             @Override
             public void actionPerformed(ActionEvent event) {
                 try {
                     java.util.List<java.awt.datatransfer.Transferable> items = new ArrayList<>();
-                    for (Entry entry : grid.getSelectedValuesList()) {
+                    for (Entry entry : selectedFileEntries()) {
                         DataObject object = DataObject.find(entry.file());
                         if (!object.isCopyAllowed()) {
                             throw new java.io.IOException("This generated resource cannot be copied: " + entry.file().getNameExt());
@@ -561,13 +631,13 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         deleteAsset = new AbstractAction(text("Delete")) {
             @Override
             public boolean isEnabled() {
-                return !grid.isSelectionEmpty() && grid.getSelectedValuesList().stream()
+                return !selectedFileEntries().isEmpty() && selectedFileEntries().stream()
                         .allMatch(entry -> entry.file().isValid() && entry.file().canWrite());
             }
 
             @Override
             public void actionPerformed(ActionEvent event) {
-                java.util.List<Entry> selected = java.util.List.copyOf(grid.getSelectedValuesList());
+                java.util.List<Entry> selected = java.util.List.copyOf(selectedFileEntries());
                 if (selected.isEmpty() || !isEnabled()) {
                     return;
                 }
@@ -679,6 +749,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         } else if (!grid.isSelectedIndex(index)) {
             grid.setSelectedIndex(index);
         }
+        folderMenuTarget = null;
         syncAssetSelection();
         showAssetPopup(grid, event.getX(), event.getY());
     }
@@ -703,6 +774,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
         JPopupMenu menu = new JPopupMenu();
         menu.add(create);
+        JMenuItem newFolder = new JMenuItem("New Folder");
+        newFolder.setEnabled(folder.canWrite());
+        newFolder.addActionListener(event -> createFolder(folder));
+        menu.add(newFolder);
         menu.addSeparator();
         JMenuItem open = new JMenuItem(text("Open"));
         open.setEnabled(grid.getSelectedValue() != null);

@@ -52,8 +52,9 @@ import jme3tools.converters.ImageToAwt;
  * Bounded, lazy thumbnails. Disk IO runs on one worker; GPU jobs run one at a
  * time on the scene thread. Private views/targets are disposed after readback;
  * scene contents, camera and material state are never reused or edited.
- * Cache keys include the complete asset-root revision, so texture/MTL changes
- * also invalidate dependent models. Errors produce readable tiles, not retries
+ * Composite cache keys include the asset-file revision (excluding directories), so texture/MTL changes
+ * also invalidate dependent models. Standalone textures/audio/source use their own
+ * size and modification time. Errors produce readable tiles, not retries
  * every repaint. Closing the panel cancels queued work and stale UI callbacks.
  */
 final class AssetThumbnails implements AutoCloseable {

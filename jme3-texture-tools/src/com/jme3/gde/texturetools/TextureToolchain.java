@@ -16,6 +16,8 @@ import org.openide.modules.InstalledFileLocator;
  * also supports ARM64 and macOS. x86-64 uses SSE2, without assuming AVX support.
  * Calls block and must run off the Swing EDT and engine rendering thread.
  * No subprocess survives interruption or timeout. Tools are not game assets.
+ * A native access violation is retried once with fresh temporary output. Other
+ * failures are not retried; existing destinations remain unchanged on failure.
  * <pre>
  * // 第一步：在后台线程定位 SDK 随附工具；独立构建也可以传入工具根目录。
  * TextureToolchain tools = TextureToolchain.installed();
@@ -25,6 +27,7 @@ import org.openide.modules.InstalledFileLocator;
  * tools.astc(Path.of("source.png"), Path.of("output.astc"), true, "6x6");
  * // 第四步：ASTC 单文件只有一层；多层 KTX 由 CompressedTexture 编排。
  * // 第五步：切换目标只改变输出，源图始终保留；失败时不会替换已有输出。
+ * // 第六步：原生访问冲突仅重试一次；再次失败时按异常中的 Source 定位纹理。
  * </pre>
  */
 public final class TextureToolchain {
@@ -60,7 +63,7 @@ public final class TextureToolchain {
         if (!List.of("BC1", "BC2", "BC3", "BC4", "BC5", "BC7").contains(format) || levels < 1 || levels > 20) {
             throw new IllegalArgumentException("Unsupported BC format or mip count");
         }
-        encode(false, input, output, List.of("-fd", format, "-EncodeWith", "CPU",
+        encodeWithCrashRetry(false, input, output, List.of("-fd", format, "-EncodeWith", "CPU",
                 "-miplevels", Integer.toString(levels)), List.of());
     }
 
@@ -69,12 +72,53 @@ public final class TextureToolchain {
         if (!List.of("4x4", "5x5", "6x6", "8x8", "10x10", "12x12").contains(block)) {
             throw new IllegalArgumentException("Unsupported ASTC block size");
         }
-        encode(true, input, output, List.of(srgb ? "-cs" : "-cl"), List.of(block, "-medium"));
+        encodeWithCrashRetry(true, input, output, List.of(srgb ? "-cs" : "-cl"), List.of(block, "-medium"));
     }
 
-    /** CPU-decodes a single level to PNG, even when the host GPU lacks ASTC. */
+    /** CPU-decodes a single level to PNG. Retries a native access violation once;
+     * other failures and interruption propagate immediately. */
     public void decode(Path input, Path output, boolean astc, boolean srgb) throws IOException, InterruptedException {
-        encode(astc, input, output, astc ? List.of(srgb ? "-ds" : "-dl") : List.of(), List.of());
+        encodeWithCrashRetry(astc, input, output, astc ? List.of(srgb ? "-ds" : "-dl") : List.of(), List.of());
+    }
+
+    private void encodeWithCrashRetry(boolean astc, Path input, Path output,
+            List<String> before, List<String> after) throws IOException, InterruptedException {
+        IOException firstFailure = null;
+        for (int attempt = 0; ; attempt++) {
+            try {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("Texture operation cancelled");
+                }
+                encode(astc, input, output, before, after);
+                return;
+            } catch (IOException failure) {
+                if (attempt != 0 || !(failure instanceof ToolFailure nativeFailure)
+                        || nativeFailure.exitCode != -1073741819) {
+                    if (firstFailure != null) {
+                        failure.addSuppressed(firstFailure);
+                    }
+                    throw failure;
+                }
+                firstFailure = failure;
+                java.util.logging.Logger.getLogger(TextureToolchain.class.getName()).log(
+                        java.util.logging.Level.WARNING,
+                        "Texture tool crashed; retrying once with fresh temporary output: " + input, failure);
+            }
+        }
+    }
+
+    private static final class ToolFailure extends IOException {
+        private final int exitCode;
+
+        ToolFailure(int exitCode, Path executable, Path source, Path target,
+                List<String> command, String details) {
+            super("Texture encoder failed (exit " + exitCode + ", "
+                    + String.format(Locale.ROOT, "0x%08X", exitCode) + ")"
+                    + "\nTool: " + executable + "\nSource: " + source + "\nDestination: " + target
+                    + "\nArguments: " + command
+                    + "\nOutput: " + (details.isBlank() ? "(no diagnostic output)" : details));
+            this.exitCode = exitCode;
+        }
     }
 
     private Path executable(boolean astc) throws IOException {
@@ -158,7 +202,7 @@ public final class TextureToolchain {
                 try (var stream = Files.newInputStream(log)) {
                     details = new String(stream.readNBytes(16384), java.nio.charset.StandardCharsets.UTF_8);
                 }
-                throw new IOException("Texture encoder failed (exit " + process.exitValue() + "): " + details);
+                throw new ToolFailure(process.exitValue(), executable, source, target, command, details);
             }
             try {
                 if (System.getProperty("os.name").toLowerCase(Locale.ROOT).startsWith("windows")) {

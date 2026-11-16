@@ -149,9 +149,10 @@ public class PreviewHelper {
             try {
                 final BasicFileAttributes previewAttributes = Files.readAttributes(
                         previewPath, BasicFileAttributes.class);
-                final FileTime previewCreationTime = previewAttributes.creationTime();
+                // Rewriting a cached image preserves creationTime on Windows.
+                final FileTime previewCreationTime = previewAttributes.lastModifiedTime();
 
-                if (previewCreationTime.compareTo(assetModificationTime) > 0) {
+                if (previewCreationTime.compareTo(assetModificationTime) >= 0) {
                     System.out.println("existing preview OK " + previewFile);
                     BufferedImage image = ImageIO.read(previewFile);
                     if (image != null) {

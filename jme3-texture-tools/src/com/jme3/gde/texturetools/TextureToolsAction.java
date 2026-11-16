@@ -26,6 +26,7 @@ import org.openide.awt.ActionRegistration;
 /**
  * Opens the shared compressed texture tool from Tools / Textures.
  * Encoding and CPU preview run in a SwingWorker, never on the EDT.
+ * Decoded mips are cached up to 128 MiB per window; reopening clears the cache.
  * <pre>
  * 第一步：Tools → Textures → Compressed Texture Editor，打开 DDS、ASTC 或 ASTC KTX。
  * 第二步：选择 Mip 查看该层 CPU 解码预览，不要求 GPU 支持 ASTC。
@@ -78,6 +79,10 @@ public final class TextureToolsAction implements ActionListener {
         private java.awt.image.BufferedImage decoded;
         private CompressedTexture texture;
         private Path current;
+        // EDT-owned LRU, bounded to 128 MiB per editor; reopening clears it.
+        private final java.util.LinkedHashMap<Integer, java.awt.image.BufferedImage> previews =
+                new java.util.LinkedHashMap<>(16, 0.75f, true);
+        private long previewBytes;
         private boolean busy;
         private SwingWorker<?, ?> activeWorker;
 
@@ -145,6 +150,10 @@ public final class TextureToolsAction implements ActionListener {
         private void load(Path file) {
             run(() -> CompressedTexture.read(file), result -> {
                 texture = result;
+                previews.clear();
+                previewBytes = 0;
+                decoded = null;
+                image.setIcon(null);
                 current = file;
                 busy = true;
                 mip.removeAllItems();
@@ -158,7 +167,20 @@ public final class TextureToolsAction implements ActionListener {
 
         private void preview() {
             int level = (Integer) mip.getSelectedItem();
-            run(() -> texture.preview(level, TextureToolchain.installed()), preview -> {
+            java.awt.image.BufferedImage cached = previews.get(level);
+            run(() -> cached != null ? cached : texture.preview(level, TextureToolchain.installed()), preview -> {
+                if (cached == null) {
+                    long bytes = 4L * preview.getWidth() * preview.getHeight();
+                    while (!previews.isEmpty() && previewBytes + bytes > 128L * 1024 * 1024) {
+                        Integer oldest = previews.keySet().iterator().next();
+                        java.awt.image.BufferedImage removed = previews.remove(oldest);
+                        previewBytes -= 4L * removed.getWidth() * removed.getHeight();
+                    }
+                    if (bytes <= 128L * 1024 * 1024) {
+                        previews.put(level, preview);
+                        previewBytes += bytes;
+                    }
+                }
                 decoded = preview;
                 renderPreview();
                 status.setText(texture.format() + " | " + preview.getWidth() + " x " + preview.getHeight()
@@ -195,10 +217,21 @@ public final class TextureToolsAction implements ActionListener {
                 @Override
                 public void paintIcon(java.awt.Component component, java.awt.Graphics graphics, int left, int top) {
                     java.awt.Rectangle clip = graphics.getClipBounds();
+                    if (clip == null) {
+                        clip = new java.awt.Rectangle(left, top, width, height);
+                    }
                     int x0 = Math.max(0, clip.x - left);
                     int y0 = Math.max(0, clip.y - top);
                     int x1 = Math.min(width, clip.x + clip.width - left);
                     int y1 = Math.min(height, clip.y + clip.height - top);
+                    if (x1 <= x0 || y1 <= y0) {
+                        return;
+                    }
+                    // Batch the visible pixels into one raster instead of issuing millions
+                    // of setColor/fillRect calls and allocating a Color per pixel.
+                    java.awt.image.BufferedImage raster = new java.awt.image.BufferedImage(
+                            x1 - x0, y1 - y0, java.awt.image.BufferedImage.TYPE_INT_RGB);
+                    int[] pixels = ((java.awt.image.DataBufferInt) raster.getRaster().getDataBuffer()).getData();
                     for (int y = y0; y < y1; y++) {
                         for (int x = x0; x < x1; x++) {
                             int pixel = decoded.getRGB(Math.min(decoded.getWidth() - 1, (int) (x / scale)),
@@ -224,10 +257,10 @@ public final class TextureToolsAction implements ActionListener {
                                 }
                                 pixel = composed;
                             }
-                            graphics.setColor(new java.awt.Color(pixel, true));
-                            graphics.fillRect(left + x, top + y, 1, 1);
+                            pixels[(y - y0) * (x1 - x0) + x - x0] = pixel;
                         }
                     }
+                    graphics.drawImage(raster, left + x0, top + y0, null);
                 }
             });
             image.revalidate();

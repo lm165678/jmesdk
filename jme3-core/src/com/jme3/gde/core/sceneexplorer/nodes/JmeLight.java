@@ -49,6 +49,13 @@ import org.openide.util.actions.SystemAction;
 
 /**
  *
+ * Managed shadow strength workflow:
+ * 第一步：选择方向光、点光或聚光灯，打开 Shadows 属性组。
+ * 第二步：Shadow strength (0..1) 默认 1；0.5 减弱遮挡，0 无遮挡。
+ * 第三步：恢复 1 回到原有完整阴影；保存场景后偏好随灯光保存。
+ * 此参数不改变 GI 数据或其他灯；重新烘焙仍使用完整遮挡。
+ * Changes use the existing embedded-property render-thread mutation path.
+ *
  * @author normenhansen
  */
 @org.openide.util.lookup.ServiceProvider(service = SceneExplorerNode.class)
@@ -119,6 +126,8 @@ public class JmeLight extends AbstractSceneExplorerNode {
             var settings = obj.getShadowSettings();
             Class<?> type = com.jme3.shadow.LightShadowSettings.class;
             shadows.put(makeEmbedProperty(settings, type, int.class, "getMapSize", "setMapSize", "Resolution (64-4096)"));
+            // 阴影强度默认 1；0 无遮挡，调低只影响该灯直射光，不修改 GI 烘焙。
+            shadows.put(makeEmbedProperty(settings, type, float.class, "getStrength", "setStrength", "Shadow strength (0..1)"));
             shadows.put(makeEmbedProperty(settings, type, int.class, "getFilterRadius", "setFilterRadius", "PCF radius (0 / 1 / 2)"));
             shadows.put(makeEmbedProperty(settings, type, float.class, "getDepthBias", "setDepthBias", "Depth bias"));
             shadows.put(makeEmbedProperty(settings, type, float.class, "getNormalBias", "setNormalBias", "Normal bias"));

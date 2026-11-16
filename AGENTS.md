@@ -2,6 +2,13 @@
 
 ## Cross-machine handoff
 
+- Startup reading order, including after switching machines: this file ->
+  `DEV_HANDOFF.md` -> `../JMESources/RENDERING_QUALITY_ROADMAP.md`.
+  The local handoff contains the Lemur/dual-GUI and coding/scene Agent backlog;
+  the engine roadmap contains rendering and large-world surface-card performance
+  work. Remind the user of relevant pending items when resuming that area.
+  Plans are not implemented features; backlog entries alone do not authorize implementation.
+
 - Read `DEV_HANDOFF.md` before continuing. For engine integration also read
   `../JMESources/AGENTS.md` and `../JMESources/DEV_HANDOFF.md`.
 - Keep this file for stable rules. Update `DEV_HANDOFF.md` after meaningful work

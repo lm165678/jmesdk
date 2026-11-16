@@ -15,7 +15,6 @@ import de.lessvoid.nifty.Nifty;
 import de.lessvoid.nifty.tools.resourceloader.ResourceLocation;
 import jada.ngeditor.controller.CommandProcessor;
 import jada.ngeditor.controller.GUIEditor;
-import jada.ngeditor.guiviews.DND.PaletteDropTarget;
 import jada.ngeditor.guiviews.DND.TrasferHandling;
 import jada.ngeditor.guiviews.J2DNiftyView;
 import jada.ngeditor.listeners.events.SelectionChanged;
@@ -81,6 +80,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     private String serializedXml;
     private boolean loading;
     private boolean pending;
+    private boolean bindingsPending;
     private boolean closed;
     private final JLabel status = new JLabel();
      private final InstanceContent content = new InstanceContent();
@@ -119,17 +119,42 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
 
 
         initComponents();
-        view = new J2DNiftyView(800, 600);
+        view = new J2DNiftyView(800, 600) {
+            @Override
+            protected void paintComponent(java.awt.Graphics graphics) {
+                // Legacy end-of-frame reload actions consult the global editor.
+                // Bind this view before Nifty executes them during painting.
+                activateGui();
+                super.paintComponent(graphics);
+                if (bindingsPending && gui != null && nifty.getCurrentScreen() != null) {
+                    bindingsPending = false;
+                    gui.reloadAfterFresh();
+                }
+            }
+        };
         view.init(resourceLocation);
         this.scrollArea.getViewport().addChangeListener(view);
         this.scrollArea.setViewportView(view);
         TrasferHandling tranf = new TrasferHandling();
-        PaletteDropTarget tmp = new PaletteDropTarget();
+
         editor = obj.getLookup().lookup(GUIEditor.class);
         nodesManager = new ExplorerManager();
         nifty = view.getNifty();
         view.setTransferHandler(tranf);
-        view.setDropTarget(tmp);
+        view.setDropTarget(new GuiDropTarget(view, () -> {
+            if (gui == null || nifty.getCurrentScreen() == null) {
+                throw new IllegalStateException("Wait for the GUI screen to finish loading.");
+            }
+            activateGui();
+            if (gui.getCurrentLayer() == null && gui.getTopLayer() != null) {
+                gui.setCurrentLayer(gui.getTopLayer());
+            }
+        }, () -> javax.swing.SwingUtilities.invokeLater(this::synchronizeDocument), ex -> {
+            status.setText("Cannot drop component: " + ex.getMessage());
+            logger.log(Level.WARNING, "Cannot drop Nifty component", ex);
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Cannot drop component: " + ex.getMessage());
+        }));
        // editor.addObserver(view);
        // editor.addObserver(tranf);
 
@@ -151,6 +176,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         };
         CommandProcessor.getInstance().setUndoManager(undoSupport);
         this.content.set(Collections.singleton(obj.getNodeDelegate()), null);
+        this.content.add(com.jme3.gde.gui.palette.NiftyGUIPaletteFactory.createPalette());
         lookup = new org.openide.util.lookup.ProxyLookup(new AbstractLookup(content), obj.getLookup());
         toolbar.add(status);
     }
@@ -279,7 +305,9 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     private void activateGui() {
         if (gui != null) {
             GuiEditorModel model = (GuiEditorModel) CommandProcessor.getInstance().getObservable();
-            model.setCurrentGUI(guiID);
+            if (model.getCurrent() != gui) {
+                model.setCurrentGUI(guiID);
+            }
             CommandProcessor.getInstance().setUndoManager(undoSupport);
         }
     }
@@ -328,6 +356,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
                 content.add(new GElementNode(selection.getElement()));
             }
         } else if (source == gui && !pending) {
+            bindingsPending = true;
             // Notifications may arrive in the middle of a command.
             pending = true;
             javax.swing.SwingUtilities.invokeLater(() -> {
@@ -355,6 +384,49 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         }
     }
 
+    /**
+     * Repair legacy selection-state output and supply resources used by palette
+     * defaults. Custom styles load afterwards and retain override precedence.
+     * The source document is only rewritten after a visual model edit.
+     */
+    private byte[] prepareEditorXml(String xml) throws Exception {
+        javax.xml.parsers.DocumentBuilderFactory factory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        org.w3c.dom.Document document = factory.newDocumentBuilder().parse(
+                new org.xml.sax.InputSource(new java.io.StringReader(xml)));
+        org.w3c.dom.Element root = document.getDocumentElement();
+        for (org.w3c.dom.Node child = root.getFirstChild(); child != null;) {
+            org.w3c.dom.Node next = child.getNextSibling();
+            if ("currentLayer".equals(child.getLocalName())) {
+                root.removeChild(child);
+            }
+            child = next;
+        }
+        String[] tags = {"useStyles", "useControls"};
+        String[] files = {"nifty-default-styles.xml", "nifty-default-controls.xml"};
+        for (int i = 0; i < tags.length; i++) {
+            boolean present = false;
+            org.w3c.dom.NodeList references = root.getElementsByTagNameNS(root.getNamespaceURI(), tags[i]);
+            for (int j = 0; j < references.getLength(); j++) {
+                org.w3c.dom.Element reference = (org.w3c.dom.Element) references.item(j);
+                if (files[i].equals(reference.getAttribute("filename"))) {
+                    present = true;
+                }
+            }
+            if (!present) {
+                org.w3c.dom.Element reference = document.createElementNS(root.getNamespaceURI(), tags[i]);
+                reference.setAttribute("filename", files[i]);
+                root.insertBefore(reference, root.getFirstChild());
+            }
+        }
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        javax.xml.transform.TransformerFactory.newInstance().newTransformer().transform(
+                new javax.xml.transform.dom.DOMSource(document),
+                new javax.xml.transform.stream.StreamResult(output));
+        return output.toByteArray();
+    }
+
     private void loadGui() {
         loading = true;
         try {
@@ -369,7 +441,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
                 throw new IOException("Open this GUI in a project with an assets folder.");
             }
             try (InputStream input = new java.io.ByteArrayInputStream(
-                    xml.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                    prepareEditorXml(xml))) {
                 editor.createNewGui(nifty, input, new File(manager.getAssetFolder().getPath()));
             }
             detachGui();
@@ -379,6 +451,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             undoSupport.discardAllEdits();
             activateGui();
             view.newGui(gui);
+            bindingsPending = true;
             nodesManager.setRootContext(new GUINode(gui));
             gui.getSelection().addObserver(this);
             gui.addObserver(this);

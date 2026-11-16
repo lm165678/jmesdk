@@ -1,5 +1,7 @@
 package com.jme3.gde.core.assets;
 
+import static com.jme3.gde.core.assets.AnimationEditorMessages.text;
+
 import com.jme3.anim.AnimComposer;
 import com.jme3.anim.graph.AnimationGraph;
 import com.jme3.anim.graph.AnimationGraph.*;
@@ -39,7 +41,8 @@ import org.openide.windows.TopComponent;
  * Multiple composers are selectable; save or discard before changing composer.
  * <pre>
  * 第一步：右键 j3o 或场景节点选择 Open in Animation Editor。
- * 第二步：Parameters 添加 FLOAT / BOOLEAN / TRIGGER 参数，默认值分别为数字 / 0或1 / 0。
+ * 第二步：Parameters 添加 FLOAT / BOOLEAN / TRIGGER 参数，默认值分别为数字 / true或false / 0。
+ * 修改定义后重新 Apply preview；BOOLEAN 转换使用 TRUE / FALSE，实时参数只影响预览。
  * 第三步：States 设置动画片段；1D 混合用 | 分隔片段和递增阈值，指定 FLOAT 参数。
  * 第四步：Transitions 按行优先级设置条件、过渡秒数和最早退出秒数（-1 不限制）。
  * 第五步：Apply preview，拖动预览旋转、滚轮缩放，修改 Live parameters 检查状态高亮。
@@ -80,15 +83,16 @@ public final class AnimationEditorTopComponent extends TopComponent {
     private final JComboBox<String> ownerChoice = new JComboBox<>();
     private final JComboBox<AnimationEditorSupport.Preference> preference =
             new JComboBox<>(AnimationEditorSupport.Preference.values());
+    private final JLabel guidance = new JLabel();
     private final JTextField entry = new JTextField(12);
-    private final DefaultTableModel parameters = model("Name", "Type", "Default");
-    private final DefaultTableModel states = model("Name", "Blend parameter", "Clips (| separated)", "Thresholds (|)", "Loop", "X", "Y");
-    private final DefaultTableModel edges = model("From", "To", "Parameter", "Condition", "Value", "Fade seconds", "Exit seconds (-1=off)");
+    private final DefaultTableModel parameters = model(text("Animation.Name"), text("Animation.Type"), text("Animation.Default"));
+    private final DefaultTableModel states = model(text("Animation.Name"), text("Animation.Blend_parameter"), text("Animation.Clips_separated"), text("Animation.Thresholds"), text("Animation.Loop"), "X", "Y");
+    private final DefaultTableModel edges = model(text("Animation.From"), text("Animation.To"), text("Animation.Parameter"), text("Animation.Condition"), text("Animation.Value"), text("Animation.Fade_seconds"), text("Animation.Exit_seconds_1_off"));
     private final List<JTable> tables = new ArrayList<>();
     private final List<AnimationGraphComments.Box> comments = new ArrayList<>();
     private final JPanel previewPanel = new JPanel(new BorderLayout());
     private final JPanel live = new JPanel();
-    private final JLabel status = new JLabel("Loading preview...");
+    private final JLabel status = new JLabel(text("Animation.Loading_preview"));
     private final GraphCanvas canvas = new GraphCanvas();
     private final JTabbedPane tabs = new JTabbedPane();
     private final UndoRedo.Manager undo = new UndoRedo.Manager();
@@ -128,59 +132,103 @@ public final class AnimationEditorTopComponent extends TopComponent {
         this.root = root;
         this.owners = new ArrayList<>(owners);
         owner = owners.get(0);
-        setName("Animation: " + data.getPrimaryFile().getNameExt());
+        setName(text("Animation.Animation") + data.getPrimaryFile().getNameExt());
         setLayout(new BorderLayout(6, 6));
         setActivatedNodes(new org.openide.nodes.Node[]{data.getNodeDelegate()});
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT));
         for (int i = 0; i < owners.size(); i++) {
             ownerChoice.addItem(i + ": " + owners.get(i).getName() + " ("
-                    + owners.get(i).getControl(AnimComposer.class).getAnimClipsNames().size() + " clips)");
+                    + owners.get(i).getControl(AnimComposer.class).getAnimClipsNames().size() + text("Animation.clips")
+                    + owners.get(i).getControl(AnimComposer.class).getAnimClips().stream()
+                            .mapToInt(clip -> clip.getTracks().length).max().orElse(0) + text("Animation.tracks_max"));
         }
-        toolbar.add(new JLabel("Composer"));
+        toolbar.add(new JLabel(text("Animation.Composer")));
         toolbar.add(ownerChoice);
-        toolbar.add(new JLabel("Entry"));
+        ownerChoice.setToolTipText(text("Animation.More_tracks_may_cover_more_parts_See_Guide_for_track_targets_node"));
+        toolbar.add(new JLabel(text("Animation.Entry")));
         toolbar.add(entry);
-        toolbar.add(new JLabel("Double-click"));
+        toolbar.add(new JLabel(text("Animation.Double_click")));
         toolbar.add(preference);
+        preference.setRenderer(AnimationEditorMessages.valueRenderer());
         JPanel playback = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        playback.add(button("Apply preview", () -> applyPreview()));
-        playback.add(button("Pause", () -> enqueuePlayer(player -> player.setPaused(true))));
-        playback.add(button("Play", () -> enqueuePlayer(player -> player.setPaused(false))));
-        playback.add(button("Reset", () -> applyPreview()));
-        save = button("Save J3O", this::save);
+        playback.add(button(text("Animation.Guide"), this::showGuide));
+        playback.add(button(text("Animation.Preview_source_clip"), this::previewSourceClip));
+        playback.add(button(text("Animation.Apply_preview"), () -> applyPreview()));
+        playback.add(button(text("Animation.Pause"), () -> enqueuePlayer(player -> player.setPaused(true))));
+        playback.add(button(text("Animation.Play"), () -> enqueuePlayer(player -> player.setPaused(false))));
+        playback.add(button(text("Animation.Reset"), () -> applyPreview()));
+        save = button(text("Animation.Save_J3O"), this::save);
         playback.add(save);
-        undoButton = button("Undo", () -> undoEdit(false));
-        redoButton = button("Redo", () -> undoEdit(true));
+        undoButton = button(text("Animation.Undo"), () -> undoEdit(false));
+        redoButton = button(text("Animation.Redo"), () -> undoEdit(true));
         playback.add(undoButton);
         playback.add(redoButton);
         undo.addChangeListener(event -> updateHistoryButtons());
-        playback.add(new JLabel("Box-select + C: comment | Delete: remove | Drag blue port: connect"));
         JPanel top = new JPanel(new GridLayout(2, 1));
         top.add(toolbar);
         top.add(playback);
         add(top, BorderLayout.NORTH);
-        tabs.addTab("State graph", new JScrollPane(canvas));
-        tabs.addTab("Parameters", tablePanel(parameters, new Object[]{"Parameter", "FLOAT", "0"}));
-        tabs.addTab("States / 1D blend", tablePanel(states, new Object[]{"State", "", firstClip(), "0", "true", "40", "40"}));
-        tabs.addTab("Transitions", tablePanel(edges, new Object[]{"", "", "", "ALWAYS", "0", "0.2", "-1"}));
+        tabs.addTab(text("Animation.State_graph"), new JScrollPane(canvas));
+        tabs.addTab(text("Animation.Parameters"), tablePanel(parameters, new Object[]{text("Animation.Parameter"), "FLOAT", "0"}));
+        tabs.addTab(text("Animation.States_1D_blend"), tablePanel(states, new Object[]{text("Animation.State"), "", firstClip(), "0", "true", "40", "40"}));
+        tabs.addTab(text("Animation.Transitions"), tablePanel(edges, new Object[]{"", "", "", "ALWAYS", "0", "0.2", "-1"}));
         JPanel previewContainer = new JPanel(new BorderLayout());
         previewPanel.setPreferredSize(new Dimension(420, 380));
         previewContainer.add(previewPanel, BorderLayout.CENTER);
+        JCheckBox skeleton = new JCheckBox(text("Animation.Show_skeleton_targets_cyan_skeleton_orange_selected_joints_purple"));
+        skeleton.setToolTipText(text("Animation.This_graph_uses_the_selected_Composer_Highlights_show_direct_targ"));
+        skeleton.addActionListener(event -> {
+            boolean visible = skeleton.isSelected();
+            if (preview != null) {
+                Preview app = preview;
+                app.enqueue(() -> app.showTargets(visible));
+            }
+        });
+        previewContainer.add(skeleton, BorderLayout.NORTH);
         live.setLayout(new BoxLayout(live, BoxLayout.Y_AXIS));
         JScrollPane controls = new JScrollPane(live);
+        controls.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        controls.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        controls.getVerticalScrollBar().setUnitIncrement(24);
         controls.setPreferredSize(new Dimension(420, 170));
         previewContainer.add(controls, BorderLayout.SOUTH);
+        // Divider limits must not depend on translated help text or native panel size.
+        tabs.setMinimumSize(new Dimension(0, 0));
+        previewContainer.setMinimumSize(new Dimension(0, 0));
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tabs, previewContainer);
         split.setResizeWeight(0.60);
         add(split, BorderLayout.CENTER);
-        add(status, BorderLayout.SOUTH);
+        // Keep diagnostics on the existing bottom row, leaving more height for the graph.
+        JPanel footer = new JPanel(new GridLayout(1, 2, 12, 0)) {
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension size = super.getPreferredSize();
+                // Diagnostics use available width; JLabel clips with an ellipsis.
+                // Full text remains accessible through each label's tooltip.
+                return new Dimension(0, size.height);
+            }
+        };
+        guidance.setHorizontalAlignment(SwingConstants.RIGHT);
+        for (JLabel label : new JLabel[]{status, guidance}) {
+            label.setMinimumSize(new Dimension(0, label.getPreferredSize().height));
+            label.addPropertyChangeListener("text", event -> label.setToolTipText(label.getText()));
+            label.setToolTipText(label.getText());
+            footer.add(label);
+        }
+        add(footer, BorderLayout.SOUTH);
         String storedPreference = root.getUserData(AnimationEditorSupport.PREFERENCE);
         preference.setSelectedItem(storedPreference == null ? AnimationEditorSupport.Preference.SCENE
                 : parsePreference(storedPreference));
         loadOwner();
+        refreshGuidance();
         ownerChoice.addActionListener(event -> changeOwner());
         for (DefaultTableModel model : new DefaultTableModel[]{parameters, states, edges}) {
-            model.addTableModelListener(event -> changed());
+            model.addTableModelListener(event -> {
+                changed();
+                if (!loading && (model != states || event.getColumn() < 5)) {
+                    showPendingParameters();
+                }
+            });
         }
         entry.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             public void insertUpdate(javax.swing.event.DocumentEvent event) {
@@ -205,6 +253,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         bindHistory("control shift Z", true);
         updateHistoryButtons();
         timer = new Timer(100, event -> {
+            refreshGuidance();
             if (preview != null) {
                 activeState = preview.stateName;
                 if (!saving) {
@@ -216,7 +265,11 @@ public final class AnimationEditorTopComponent extends TopComponent {
     }
 
     private String firstClip() {
-        return owner.getControl(AnimComposer.class).getAnimClipsNames().iterator().next();
+        AnimComposer composer = owner.getControl(AnimComposer.class);
+        return composer.getAnimClips().stream()
+                .filter(clip -> !AnimationEditorSupport.constantTransformClip(clip))
+                .map(com.jme3.anim.AnimClip::getName).sorted().findFirst()
+                .orElseGet(() -> composer.getAnimClipsNames().stream().sorted().findFirst().orElseThrow());
     }
 
     private static AnimationEditorSupport.Preference parsePreference(String value) {
@@ -238,34 +291,92 @@ public final class AnimationEditorTopComponent extends TopComponent {
     }
 
     private JPanel tablePanel(DefaultTableModel model, Object[] defaults) {
-        JTable table = new JTable(model);
+        JTable table = new JTable(model) {
+            @Override
+            public javax.swing.table.TableCellEditor getCellEditor(int row, int column) {
+                if (model == parameters && column == 2
+                        && "BOOLEAN".equals(cell(model, row, 1))) {
+                    return valueEditor(new String[]{"true", "false"});
+                }
+                if (model == edges && column == 2) {
+                    List<String> names = new ArrayList<>();
+                    names.add("");
+                    Operator op = Operator.valueOf(cell(edges, row, 3));
+                    Type expected = op == Operator.TRIGGER ? Type.TRIGGER
+                            : op == Operator.TRUE || op == Operator.FALSE ? Type.BOOLEAN : Type.FLOAT;
+                    for (int i = 0; i < parameters.getRowCount(); i++) {
+                        if (op == Operator.ALWAYS || expected.name().equals(cell(parameters, i, 1))) {
+                            names.add(cell(parameters, i, 0));
+                        }
+                    }
+                    return new DefaultCellEditor(new JComboBox<>(names.toArray(String[]::new)));
+                }
+                if (model == edges && (column == 0 || column == 1)) {
+                    List<String> names = new ArrayList<>();
+                    names.add("");
+                    for (int i = 0; i < states.getRowCount(); i++) {
+                        names.add(cell(states, i, 0));
+                    }
+                    return new DefaultCellEditor(new JComboBox<>(names.toArray(String[]::new)));
+                }
+                return super.getCellEditor(row, column);
+            }
+
+            @Override
+            public Object getValueAt(int row, int column) {
+                Object value = super.getValueAt(row, column);
+                if (model == parameters && column == 2
+                        && "BOOLEAN".equals(cell(model, row, 1))) {
+                    return Boolean.toString(booleanDefault(value.toString()) != 0);
+                }
+                return value;
+            }
+        };
         tables.add(table);
+        table.setDefaultRenderer(Object.class, new javax.swing.table.DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable source, Object value, boolean selected,
+                    boolean focused, int row, int column) {
+                super.getTableCellRendererComponent(source, value, selected, focused, row, column);
+                if ((model == parameters && (column == 1 || (column == 2
+                        && "BOOLEAN".equals(cell(model, row, 1)))))
+                        || (model == edges && column == 3) || (model == states && column == 4)) {
+                    setText(AnimationEditorMessages.value(value));
+                }
+                return this;
+            }
+        });
         table.putClientProperty("terminateEditOnFocusLost", true);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
         for (int i = 0; i < table.getColumnCount(); i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(i == 2 && model == states ? 240 : 120);
         }
         if (model == parameters) {
-            table.getColumnModel().getColumn(1).setCellEditor(new DefaultCellEditor(new JComboBox<>(Type.values())));
+            table.getColumnModel().getColumn(1).setCellEditor(valueEditor(Type.values()));
         } else if (model == edges) {
-            table.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(new JComboBox<>(Operator.values())));
+            table.getColumnModel().getColumn(3).setCellEditor(valueEditor(Operator.values()));
         } else {
-            table.getColumnModel().getColumn(4).setCellEditor(new DefaultCellEditor(new JComboBox<>(new String[]{"true", "false"})));
+            table.getColumnModel().getColumn(4).setCellEditor(valueEditor(new String[]{"true", "false"}));
         }
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(new JScrollPane(table), BorderLayout.CENTER);
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        buttons.add(button("Add", () -> {
+        buttons.add(button(text("Animation.Add"), () -> {
             Object[] row = defaults.clone();
             if (model == states) {
-                row[0] = "State " + (states.getRowCount() + 1);
+                row[0] = text("Animation.State_40") + (states.getRowCount() + 1);
                 row[2] = firstClip();
             } else if (model == parameters) {
-                row[0] = "Parameter" + (parameters.getRowCount() + 1);
+                row[0] = text("Animation.Parameter") + (parameters.getRowCount() + 1);
             }
-            model.addRow(row);
+            edit(() -> {
+                model.addRow(row);
+                if (model == states && states.getRowCount() == 1) {
+                    entry.setText(row[0].toString());
+                }
+            });
         }));
-        buttons.add(button("Remove", () -> {
+        buttons.add(button(text("Animation.Remove"), () -> {
             int row = table.getSelectedRow();
             if (row >= 0) {
                 if (model == states) {
@@ -276,7 +387,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 }
             }
         }));
-        buttons.add(button("Move up", () -> {
+        buttons.add(button(text("Animation.Move_up"), () -> {
             int row = table.getSelectedRow();
             if (row > 0) {
                 model.moveRow(row, row, row - 1);
@@ -285,12 +396,58 @@ public final class AnimationEditorTopComponent extends TopComponent {
         }));
         panel.add(buttons, BorderLayout.SOUTH);
         if (model == states) {
-            JLabel help = new JLabel("1D blend: clips Idle|Walk|Run, thresholds 0|1|2, FLOAT parameter Speed. Single clip: threshold 0.");
+            JLabel help = new JLabel(text("Animation.1D_blend_clips_Idle_Walk_Run_thresholds_0_1_2_Float_parameter_Spe"));
             panel.add(help, BorderLayout.NORTH);
         } else if (model == edges) {
-            panel.add(new JLabel("Top row wins. Exit is elapsed seconds; -1 disables it. Active fades cannot be interrupted."), BorderLayout.NORTH);
+            panel.add(new JLabel(text("Animation.Top_row_wins_Exit_is_elapsed_seconds_1_disables_it_Active_fades_c")), BorderLayout.NORTH);
         }
         return panel;
+    }
+
+    private static DefaultCellEditor valueEditor(Object[] values) {
+        JComboBox<Object> choice = new JComboBox<>(values);
+        choice.setRenderer(AnimationEditorMessages.valueRenderer());
+        return new DefaultCellEditor(choice);
+    }
+
+    /**
+     * 第一步：编辑参数或转换；第二步：检查实时区待应用列表；第三步：应用预览。
+     * Editing definitions never silently restarts playback; stale controls cannot mutate the old player.
+     */
+    private void showPendingParameters() {
+        live.removeAll();
+        live.add(new JLabel(text("Animation.PendingPreview")));
+        for (int i = 0; i < parameters.getRowCount(); i++) {
+            live.add(new JLabel(cell(parameters, i, 0) + " ("
+                    + AnimationEditorMessages.value(cell(parameters, i, 1)) + ")"));
+        }
+        live.add(button(text("Animation.Apply_preview"), this::applyPreview));
+        compactLiveRows();
+        live.revalidate();
+        live.repaint();
+    }
+
+    /** Keep preview controls top-aligned; extra viewport height must not stretch parameter rows. */
+    private void compactLiveRows() {
+        int nameWidth = 0;
+        for (Component component : live.getComponents()) {
+            if (component instanceof JPanel row && row.getComponentCount() > 0
+                    && row.getComponent(0) instanceof JLabel name) {
+                nameWidth = Math.max(nameWidth, name.getFontMetrics(name.getFont()).stringWidth(name.getText()));
+            }
+        }
+        for (Component component : live.getComponents()) {
+            if (component instanceof JPanel row && row.getComponentCount() > 0
+                    && row.getComponent(0) instanceof JLabel name) {
+                name.setPreferredSize(new Dimension(nameWidth + 8, name.getPreferredSize().height));
+            }
+        }
+        for (Component component : live.getComponents()) {
+            if (component instanceof JComponent child) {
+                child.setAlignmentX(Component.LEFT_ALIGNMENT);
+                child.setMaximumSize(new Dimension(Integer.MAX_VALUE, child.getPreferredSize().height));
+            }
+        }
     }
 
     private void loadOwner() {
@@ -313,7 +470,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     initial.add(new State(clips.get(i), "", List.of(clips.get(i)), new float[]{0}, true,
                             40 + (i % 3) * 200, 40 + (i / 3) * 110));
                 }
-                graph = new AnimationGraph(clips.get(0), List.of(), initial, List.of());
+                graph = new AnimationGraph(firstClip(), List.of(), initial, List.of());
             } else {
                 graph = AnimationGraph.decode(savedGraph);
             }
@@ -334,7 +491,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             dirty = false;
             undo.discardAllEdits();
             snapshot = new Snapshot();
-            status.setText("Available clips: " + String.join(" | ", owner.getControl(AnimComposer.class).getAnimClipsNames()));
+            status.setText(text("Animation.Available_clips") + String.join(" | ", owner.getControl(AnimComposer.class).getAnimClipsNames()));
             canvas.repaint();
         } catch (Exception exception) {
             AnimationEditorSupport.error(exception);
@@ -365,14 +522,17 @@ public final class AnimationEditorTopComponent extends TopComponent {
         canvas.finishComment(true);
         for (JTable table : tables) {
             if (table.isEditing() && !table.getCellEditor().stopCellEditing()) {
-                throw new IllegalArgumentException("Finish editing the current cell");
+                throw new IllegalArgumentException(text("Animation.Finish_editing_the_current_cell"));
             }
         }
         List<Parameter> ps = new ArrayList<>();
         List<State> ss = new ArrayList<>();
         List<Transition> ts = new ArrayList<>();
         for (int i = 0; i < parameters.getRowCount(); i++) {
-            ps.add(new Parameter(cell(parameters, i, 0), Type.valueOf(cell(parameters, i, 1)), number(parameters, i, 2)));
+            Type type = Type.valueOf(cell(parameters, i, 1));
+            float initial = type == Type.BOOLEAN
+                    ? booleanDefault(cell(parameters, i, 2)) : number(parameters, i, 2);
+            ps.add(new Parameter(cell(parameters, i, 0), type, initial));
         }
         for (int i = 0; i < states.getRowCount(); i++) {
             String[] samples = cell(states, i, 2).split("\\|", -1);
@@ -383,12 +543,43 @@ public final class AnimationEditorTopComponent extends TopComponent {
             }
             String loop = cell(states, i, 4);
             if (!loop.equals("true") && !loop.equals("false")) {
-                throw new IllegalArgumentException("Loop must be true or false");
+                throw new IllegalArgumentException(text("Animation.Loop_must_be_true_or_false"));
             }
             ss.add(new State(cell(states, i, 0), cell(states, i, 1), Arrays.asList(samples), thresholds,
                     Boolean.parseBoolean(loop), number(states, i, 5), number(states, i, 6)));
         }
         for (int i = 0; i < edges.getRowCount(); i++) {
+            String from = cell(edges, i, 0);
+            String to = cell(edges, i, 1);
+            if (ss.stream().noneMatch(s -> s.name.equals(from)) || ss.stream().noneMatch(s -> s.name.equals(to))) {
+                tabs.setSelectedIndex(3);
+                tables.get(2).setRowSelectionInterval(i, i);
+                throw new IllegalArgumentException(String.format(text("Animation.UnknownTransitionState"), i + 1, from, to));
+            }
+            Operator operator = Operator.valueOf(cell(edges, i, 3));
+            String parameter = cell(edges, i, 2);
+            if (operator != Operator.ALWAYS) {
+                Parameter declaration = ps.stream().filter(p -> p.name.equals(parameter)).findFirst().orElse(null);
+                if (declaration == null) {
+                    tabs.setSelectedIndex(3);
+                    JTable transitionTable = tables.get(2);
+                    transitionTable.setRowSelectionInterval(i, i);
+                    transitionTable.scrollRectToVisible(transitionTable.getCellRect(i, 2, true));
+                    throw new IllegalArgumentException(String.format(text(parameter.isEmpty()
+                            ? "Animation.EmptyTransitionParameter" : "Animation.UnknownTransitionParameter"),
+                            i + 1, cell(edges, i, 0), cell(edges, i, 1),
+                            AnimationEditorMessages.value(operator), parameter));
+                }
+                Type expected = operator == Operator.TRIGGER ? Type.TRIGGER
+                        : operator == Operator.TRUE || operator == Operator.FALSE ? Type.BOOLEAN : Type.FLOAT;
+                if (declaration.type != expected) {
+                    tabs.setSelectedIndex(3);
+                    tables.get(2).setRowSelectionInterval(i, i);
+                    throw new IllegalArgumentException(String.format(text("Animation.WrongTransitionParameterType"),
+                            i + 1, cell(edges, i, 0), cell(edges, i, 1), parameter,
+                            AnimationEditorMessages.value(expected)));
+                }
+            }
             ts.add(new Transition(cell(edges, i, 0), cell(edges, i, 1), cell(edges, i, 2),
                     Operator.valueOf(cell(edges, i, 3)), number(edges, i, 4), number(edges, i, 5), number(edges, i, 6)));
         }
@@ -400,6 +591,17 @@ public final class AnimationEditorTopComponent extends TopComponent {
     private static String cell(DefaultTableModel model, int row, int column) {
         Object value = model.getValueAt(row, column);
         return value == null ? "" : value.toString().trim();
+    }
+
+    private static float booleanDefault(String value) {
+        if ("true".equalsIgnoreCase(value.trim())) {
+            return 1;
+        }
+        if ("false".equalsIgnoreCase(value.trim())) {
+            return 0;
+        }
+        // Preserve numeric defaults in existing graph documents.
+        return Float.parseFloat(value.trim()) != 0 ? 1 : 0;
     }
 
     private static float number(DefaultTableModel model, int row, int column) {
@@ -429,7 +631,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     after.restore();
                 }
                 public String getPresentationName() {
-                    return "Animation graph";
+                    return text("Animation.Animation_graph");
                 }
             });
         }
@@ -517,7 +719,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             canvas.clearSelection();
         });
         if (states.getRowCount() == 0) {
-            status.setText("Empty graph: add an entry state before previewing or saving. Imported animation clips are unchanged.");
+            status.setText(text("Animation.Empty_graph_add_an_entry_state_before_previewing_or_saving_Import"));
         }
     }
 
@@ -602,7 +804,9 @@ public final class AnimationEditorTopComponent extends TopComponent {
                             previewPanel.revalidate();
                             previewPanel.repaint();
                             applyPreview();
-                            timer.start();
+                            if (isShowing()) {
+                                timer.start();
+                            }
                         }
                     });
                 });
@@ -612,12 +816,84 @@ public final class AnimationEditorTopComponent extends TopComponent {
         });
     }
 
+    private void refreshGuidance() {
+        if (states.getRowCount() == 0) {
+            guidance.setText(text("Animation.Empty_graph_add_a_state_or_press_Ctrl_Z_to_restore_Preview_source"));
+            return;
+        }
+        boolean constant = false;
+        AnimComposer composer = owner.getControl(AnimComposer.class);
+        for (int i = 0; i < states.getRowCount(); i++) {
+            for (String name : cell(states, i, 2).split("\\|")) {
+                var clip = composer.getAnimClip(name.trim());
+                constant |= clip != null && AnimationEditorSupport.constantTransformClip(clip);
+            }
+        }
+        guidance.setText(constant
+                ? text("Animation.This_graph_includes_static_clips_See_Guide_for_diagnostics_or_cho")
+                : text("Animation.Check_motion_with_Preview_source_clip_then_Apply_preview_Uncondit"));
+    }
+
+    private boolean emptyDraft() {
+        if (states.getRowCount() != 0) {
+            return false;
+        }
+        ++previewRevision;
+        String hint = text("Animation.Empty_graph_add_a_state_or_use_Preview_source_clip_Ctrl_Z_restore");
+        status.setText(hint);
+        if (preview != null) {
+            Preview app = preview;
+            app.enqueue(() -> {
+                if (app.player != null) {
+                    app.player.close();
+                    app.player = null;
+                }
+                app.stateName = "";
+                app.message = hint;
+            });
+        }
+        return true;
+    }
+
+    /** 第一步：先预览源片段；第二步：再创建状态与条件，Apply preview 检查图。 */
+    private void previewSourceClip() {
+        Object clip = JOptionPane.showInputDialog(this, text("Animation.Select_a_source_clip_independent_of_the_graph"), text("Animation.Preview_source_clip"),
+                JOptionPane.PLAIN_MESSAGE, null, owner.getControl(AnimComposer.class).getAnimClipsNames().toArray(), firstClip());
+        if (clip == null) {
+            return;
+        }
+        AnimationGraph definition = new AnimationGraph(text("Animation.Source_clip"), List.of(),
+                List.of(new State(text("Animation.Source_clip"), "", List.of(clip.toString()), new float[]{0}, true, 0, 0)), List.of());
+        applyPreview(definition);
+    }
+
+    private void showGuide() {
+        JTextArea help = new JTextArea(AnimationEditorSupport.guide(owner));
+        help.setEditable(false);
+        help.setLineWrap(true);
+        help.setWrapStyleWord(true);
+        help.setCaretPosition(0);
+        JScrollPane scroll = new JScrollPane(help);
+        scroll.setPreferredSize(new Dimension(760, 600));
+        JOptionPane.showMessageDialog(this, scroll, text("Animation.Animation_Editor_Guide_and_clip_diagnostics"), JOptionPane.INFORMATION_MESSAGE);
+    }
+
     private void applyPreview() {
+        if (emptyDraft()) {
+            return;
+        }
+        try {
+            applyPreview(graph());
+        } catch (Exception exception) {
+            AnimationEditorSupport.error(exception);
+        }
+    }
+
+    private void applyPreview(AnimationGraph definition) {
         if (preview == null || disposed) {
             return;
         }
         try {
-            AnimationGraph definition = graph();
             Spatial selected = owner;
             Preview app = preview;
             int revision = ++previewRevision;
@@ -631,8 +907,13 @@ public final class AnimationEditorTopComponent extends TopComponent {
                             app.enqueue(() -> {
                                 try {
                                     app.install(clone.model(), clone.owner(), definition);
+                                    EventQueue.invokeLater(() -> {
+                                        if (!disposed && revision == previewRevision) {
+                                            setInputsEnabled(live, true);
+                                        }
+                                    });
                                 } catch (Exception exception) {
-                                    app.message = exception.getMessage();
+                                    app.message = AnimationEditorMessages.failure(exception);
                                     AnimationEditorSupport.error(exception);
                                 }
                             });
@@ -643,16 +924,17 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 }
             });
             live.removeAll();
-            live.add(new JLabel("Live parameters (preview only)"));
+            live.add(new JLabel(text("Animation.Live_parameters_preview_only_reapply_preview_after_editing_defini")));
             for (Parameter parameter : definition.parameters) {
                 JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
                 row.add(new JLabel(parameter.name));
                 if (parameter.type == Type.TRIGGER) {
-                    row.add(button("Trigger", () -> enqueuePlayer(p -> p.trigger(parameter.name))));
+                    row.add(button(text("Animation.Trigger"), () -> enqueuePlayer(p -> p.trigger(parameter.name))));
                 } else if (parameter.type == Type.BOOLEAN) {
-                    JCheckBox value = new JCheckBox("true", parameter.initial != 0);
+                    JCheckBox value = new JCheckBox(AnimationEditorMessages.value(parameter.initial != 0), parameter.initial != 0);
                     value.addActionListener(e -> {
                         boolean checked = value.isSelected();
+                        value.setText(AnimationEditorMessages.value(checked));
                         enqueuePlayer(p -> p.setBoolean(parameter.name, checked));
                     });
                     row.add(value);
@@ -665,7 +947,15 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     row.add(value);
                 }
                 live.add(row);
+                boolean used = definition.transitions.stream().anyMatch(t -> parameter.name.equals(t.parameter))
+                        || definition.states.stream().anyMatch(s -> parameter.name.equals(s.parameter));
+                if (!used) {
+                    row.add(new JLabel(text("Animation.Not_referenced_by_a_state_or_transition_no_effect_on_animation")));
+                }
             }
+            // Controls must not update the old player while the new clone is loading.
+            setInputsEnabled(live, false);
+            compactLiveRows();
             live.revalidate();
             live.repaint();
         } catch (Exception exception) {
@@ -685,6 +975,9 @@ public final class AnimationEditorTopComponent extends TopComponent {
     }
 
     private void save() {
+        if (emptyDraft()) {
+            return;
+        }
         if (saving) {
             return;
         }
@@ -697,16 +990,16 @@ public final class AnimationEditorTopComponent extends TopComponent {
             Spatial target = owner;
             saving = true;
             setInputsEnabled(this, false);
-            status.setText("Saving J3O...");
+            status.setText(text("Animation.Saving_J3O"));
             RequestProcessor.getDefault().post(() -> {
                 try {
                     if (data.loadAsset() != root) {
-                        throw new IllegalStateException("Model was reloaded; reopen the animation editor before saving");
+                        throw new IllegalStateException(text("Animation.Model_was_reloaded_reopen_the_animation_editor_before_saving"));
                     }
                     com.jme3.gde.core.scene.SceneApplication.getApplication().enqueue(() -> {
                         if (!java.util.Objects.equals(expected, target.getUserData(AnimationGraph.USER_DATA))
                                 || !java.util.Objects.equals(expectedComments, target.getUserData(AnimationGraphComments.USER_DATA))) {
-                            throw new IllegalStateException("Animation definition changed elsewhere; reopen the editor");
+                            throw new IllegalStateException(text("Animation.Animation_definition_changed_elsewhere_reopen_the_editor"));
                         }
                         String previousPreference = root.getUserData(AnimationEditorSupport.PREFERENCE);
                         try {
@@ -727,7 +1020,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                         savedGraph = text;
                         savedComments = commentText;
                         dirty = false;
-                        status.setText("Saved " + data.getPrimaryFile().getNameExt());
+                        status.setText(text("Animation.Saved") + data.getPrimaryFile().getNameExt());
                     });
                 } catch (Exception exception) {
                     data.setModified(true);
@@ -747,7 +1040,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
     private boolean discard() {
         return DialogDisplayer.getDefault().notify(new NotifyDescriptor.Confirmation(
-                "Discard unsaved animation changes? Use Save J3O to keep them.",
+                text("Animation.Discard_unsaved_animation_changes_Use_Save_J3O_to_keep_them"),
                 NotifyDescriptor.YES_NO_OPTION)) == NotifyDescriptor.YES_OPTION;
     }
 
@@ -764,6 +1057,20 @@ public final class AnimationEditorTopComponent extends TopComponent {
     public boolean canClose() {
         canvas.finishComment(true);
         return !saving && (!dirty || discard());
+    }
+
+    @Override
+    protected void componentShowing() {
+        super.componentShowing();
+        if (!disposed && preview != null) {
+            timer.start();
+        }
+    }
+
+    @Override
+    protected void componentHidden() {
+        timer.stop();
+        super.componentHidden();
     }
 
     @Override
@@ -807,11 +1114,11 @@ public final class AnimationEditorTopComponent extends TopComponent {
             setLayout(null);
             setPreferredSize(new Dimension(1600, 1200));
             setFocusable(true);
-            setToolTipText("Shift+wheel: zoom; middle drag: pan. Drag empty space to select states; C creates a comment. Delete removes selection. Double-click a comment to edit.");
+            setToolTipText(text("Animation.Shift_wheel_zoom_middle_drag_pan_Drag_empty_space_to_select_state"));
             graphAction("DELETE", "deleteSelection", this::deleteSelection);
             graphAction("C", "createComment", () -> {
                 if (!selectedStates.isEmpty()) {
-                    addComment("Comment");
+                    addComment(text("Animation.Comment"));
                     editComment(comments.size() - 1);
                 }
             });
@@ -1138,7 +1445,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             input.setLineWrap(true);
             input.setWrapStyleWord(true);
             input.setBorder(BorderFactory.createLineBorder(Color.CYAN));
-            input.setToolTipText("Ctrl+Enter: apply comment; Escape: cancel text edit");
+            input.setToolTipText(text("Animation.Ctrl_Enter_apply_comment_Escape_cancel_text_edit"));
             input.setBounds((int) (panX + (box.x() + 6) * zoom), (int) (panY + (box.y() + 4) * zoom),
                     (int) ((box.width() - 12) * zoom), Math.max(32, (int) (Math.min(56, box.height() - 12) * zoom)));
             commentEditor = input;
@@ -1284,10 +1591,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
             JPopupMenu menu = new JPopupMenu();
             int edge = selected < 0 ? edgeAt(point) : -1;
             if (edge >= 0) {
-                JMenuItem inspect = new JMenuItem("Edit transition");
+                JMenuItem inspect = new JMenuItem(text("Animation.Edit_transition"));
                 inspect.addActionListener(action -> editTransition(edge));
                 menu.add(inspect);
-                JMenuItem remove = new JMenuItem("Delete transition");
+                JMenuItem remove = new JMenuItem(text("Animation.Delete_transition"));
                 remove.addActionListener(action -> {
                     edges.removeRow(edge);
                     hoveredEdge = -1;
@@ -1298,10 +1605,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
             }
             int boxIndex = selected < 0 ? commentAt(point) : -1;
             if (boxIndex >= 0) {
-                JMenuItem editText = new JMenuItem("Edit comment");
+                JMenuItem editText = new JMenuItem(text("Animation.Edit_comment"));
                 editText.addActionListener(action -> editComment(boxIndex));
                 menu.add(editText);
-                JMenuItem remove = new JMenuItem("Delete comment (keep states)");
+                JMenuItem remove = new JMenuItem(text("Animation.Delete_comment_keep_states"));
                 remove.addActionListener(action -> {
                     selectedComment = boxIndex;
                     deleteSelection();
@@ -1315,22 +1622,22 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     selectedStates.add(selected);
                 }
                 selectedComment = -1;
-                JMenuItem remove = new JMenuItem("Delete selected states");
+                JMenuItem remove = new JMenuItem(text("Animation.Delete_selected_states"));
                 remove.addActionListener(action -> deleteSelection());
                 menu.add(remove);
             }
             if (!selectedStates.isEmpty()) {
-                JMenuItem comment = new JMenuItem("Create comment from selection (C)");
+                JMenuItem comment = new JMenuItem(text("Animation.Create_comment_from_selection_C"));
                 comment.addActionListener(action -> {
-                    addComment("Comment");
+                    addComment(text("Animation.Comment"));
                     editComment(comments.size() - 1);
                 });
                 menu.add(comment);
             }
-            JMenuItem add = new JMenuItem("Add clip state...");
+            JMenuItem add = new JMenuItem(text("Animation.Add_clip_state"));
             add.addActionListener(action -> {
-                Object clip = JOptionPane.showInputDialog(AnimationEditorTopComponent.this, "Animation clip",
-                        "New state", JOptionPane.PLAIN_MESSAGE, null,
+                Object clip = JOptionPane.showInputDialog(AnimationEditorTopComponent.this, text("Animation.Animation_clip"),
+                        text("Animation.New_state"), JOptionPane.PLAIN_MESSAGE, null,
                         owner.getControl(AnimComposer.class).getAnimClipsNames().toArray(), firstClip());
                 if (clip != null) {
                     String name = clip.toString();
@@ -1338,23 +1645,29 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     while (find(name) >= 0) {
                         name = clip + " " + suffix++;
                     }
-                    states.addRow(new Object[]{name, "", clip, "0", "true", point.x, point.y});
+                    String stateName = name;
+                    edit(() -> {
+                        states.addRow(new Object[]{stateName, "", clip, "0", "true", point.x, point.y});
+                        if (states.getRowCount() == 1) {
+                            entry.setText(stateName);
+                        }
+                    });
                 }
             });
             menu.add(add);
             if (selected >= 0) {
                 String source = cell(states, selected, 0);
-                JMenuItem start = new JMenuItem("Set as entry state");
+                JMenuItem start = new JMenuItem(text("Animation.Set_as_entry_state"));
                 start.addActionListener(action -> edit(() -> entry.setText(source)));
                 menu.add(start);
-                JMenuItem connect = new JMenuItem("Add transition to...");
+                JMenuItem connect = new JMenuItem(text("Animation.Add_transition_to"));
                 connect.addActionListener(action -> {
                     String[] names = new String[states.getRowCount()];
                     for (int i = 0; i < names.length; i++) {
                         names[i] = cell(states, i, 0);
                     }
-                    Object target = JOptionPane.showInputDialog(AnimationEditorTopComponent.this, "Target state",
-                            "New transition", JOptionPane.PLAIN_MESSAGE, null, names, source);
+                    Object target = JOptionPane.showInputDialog(AnimationEditorTopComponent.this, text("Animation.Target_state"),
+                            text("Animation.New_transition"), JOptionPane.PLAIN_MESSAGE, null, names, source);
                     if (target != null) {
                         addTransition(source, target.toString());
                     }
@@ -1441,7 +1754,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 g.drawRoundRect(b.x, b.y, b.width, b.height, 14, 14);
                 g.setColor(Color.WHITE);
                 g.drawString(name, b.x + 10, b.y + 23);
-                g.drawString(cell(states, i, 1).isEmpty() ? "Clip" : "1D: " + cell(states, i, 1), b.x + 10, b.y + 45);
+                g.drawString(!cell(states, i, 2).contains("|") ? text("Animation.Clip") : text("Animation.1D") + cell(states, i, 1), b.x + 10, b.y + 45);
                 g.setColor(new Color(75, 195, 240));
                 g.fillOval(b.x + b.width - 6, b.y + 26, 12, 12);
                 g.fillOval(b.x - 6, b.y + 26, 12, 12);
@@ -1461,6 +1774,16 @@ public final class AnimationEditorTopComponent extends TopComponent {
     }
 
     private static final class Preview extends com.jme3.gde.core.editor.SceneApplication {
+        private AnimationTargetOverlay targetOverlay;
+        private boolean targetsVisible;
+
+        void showTargets(boolean visible) {
+            targetsVisible = visible;
+            if (targetOverlay != null) {
+                targetOverlay.show(visible);
+            }
+        }
+
         private AnimationGraphPlayer player;
         private Vector3f center = new Vector3f();
         private float radius = 4;
@@ -1468,7 +1791,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         private float pitch = 0.15f;
         private com.jme3.light.LightProbe studioProbe;
         volatile String stateName = "";
-        volatile String message = "Preview ready";
+        volatile String message = text("Animation.Preview_ready");
 
         @Override
         public void simpleInitApp() {
@@ -1515,6 +1838,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             rootNode.attachChild(model);
             AnimComposer composer = selectedOwner.getControl(AnimComposer.class);
             composer.setEnabled(true);
+            composer.setGlobalSpeed(1);
             player = new AnimationGraphPlayer(graph, composer);
             center.set(0, 0, 0);
             radius = 4;
@@ -1526,6 +1850,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 }
             }
             studioProbe.setPosition(center);
+            targetOverlay = new AnimationTargetOverlay(assetManager, model, composer, radius * 0.006f);
+            rootNode.attachChild(targetOverlay.geometry);
+            targetOverlay.show(targetsVisible);
+            rootNode.updateGeometricState();
             studioProbe.getArea().setRadius(Math.max(100, radius * 10));
             orbit(0, 0, 1);
         }
@@ -1545,8 +1873,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
         public void simpleUpdate(float tpf) {
             if (player != null) {
                 stateName = player.getStateName();
-                message = String.format("%s  %.2fs%s | Drag: orbit / Wheel: zoom", stateName,
-                        player.getStateTime(), player.isTransitioning() ? "  (transition)" : "");
+                message = String.format(text("Animation.s_2fs_s_Drag_orbit_Wheel_zoom"), stateName,
+                        player.getStateTime(), player.isTransitioning() ? text("Animation.transition") : "");
             }
         }
     }

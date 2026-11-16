@@ -50,6 +50,8 @@ public final class AnimationEditorSmoke {
     }
 
     public static void main(String[] args) throws Exception {
+        java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+        java.util.Locale.setDefault(java.util.Locale.ENGLISH);
         Node root = model();
         require(!AnimationEditorSupport.prefersAnimation(root), "Old J3O defaults to scene");
         root.setUserData(AnimationEditorSupport.PREFERENCE, "AUTO");
@@ -73,7 +75,47 @@ public final class AnimationEditorSmoke {
         data.model(root);
         SwingUtilities.invokeAndWait(() -> {
             try {
+                java.util.Locale.setDefault(java.util.Locale.SIMPLIFIED_CHINESE);
+                AnimationEditorTopComponent localized = new AnimationEditorTopComponent(data, root, List.of(root));
+                require("Parameters".equals(((JTabbedPane) field(localized, "tabs")).getTitleAt(1)),
+                        "English-only SDK remains English on Chinese Windows");
+                require(!AnimationEditorSupport.guide(root).contains("第一步"), "Tutorial follows English SDK, not OS locale");
+                require("Boolean".equals(AnimationEditorMessages.value(AnimationGraph.Type.BOOLEAN)), "Enums follow SDK language");
+                require(AnimationEditorMessages.uiLocale(java.util.Locale.SIMPLIFIED_CHINESE, null, path -> false)
+                        .equals(java.util.Locale.ENGLISH), "Missing SDK language pack falls back to English");
+                require(AnimationEditorMessages.uiLocale(java.util.Locale.SIMPLIFIED_CHINESE, null,
+                        path -> path.endsWith("Bundle_zh_CN.properties")).equals(java.util.Locale.SIMPLIFIED_CHINESE),
+                        "Installed SDK Chinese pack enables Chinese editor");
+                require(AnimationEditorMessages.uiLocale(java.util.Locale.SIMPLIFIED_CHINESE, "sdk_test",
+                        path -> path.endsWith("Bundle_sdk_zh.properties")).equals(java.util.Locale.SIMPLIFIED_CHINESE),
+                        "Branded language packs and parent language are supported");
+                require("参数".equals(AnimationEditorMessages.messages(java.util.Locale.SIMPLIFIED_CHINESE)
+                        .getString("Animation.Parameters")), "Chinese resources remain available");
+                require("Parameters".equals(AnimationEditorMessages.messages(java.util.Locale.ENGLISH)
+                        .getString("Animation.Parameters")), "Explicit English must never fall back to Chinese OS locale");
+                String localizedGraph = ((AnimationGraph) call(localized, "graph")).encode();
+                java.util.Locale.setDefault(java.util.Locale.ENGLISH);
+                require(localizedGraph.equals(((AnimationGraph) call(localized, "graph")).encode()), "Locale never changes graph identifiers");
+                require("Boolean".equals(AnimationEditorMessages.value(AnimationGraph.Type.BOOLEAN)), "English enum display");
+                require(!AnimationEditorSupport.guide(root).contains("第一步"), "English tutorial has no Chinese text");
+                System.out.println("ANIMATION_LOCALIZATION_LOCALE_PERSISTENCE_PASS");
+
                 AnimationEditorTopComponent editor = new AnimationEditorTopComponent(data, root, List.of(root));
+                AnimationEditorTopComponent emptyEditor = new AnimationEditorTopComponent(data, root, List.of(root));
+                DefaultTableModel emptyStates = (DefaultTableModel) field(emptyEditor, "states");
+                emptyStates.setRowCount(0);
+                ((JTextField) field(emptyEditor, "entry")).setText("");
+                call(emptyEditor, "applyPreview");
+                call(emptyEditor, "save");
+                JTabbedPane emptyTabs = (JTabbedPane) field(emptyEditor, "tabs");
+                findButton((java.awt.Container) emptyTabs.getComponentAt(2), "Add").doClick();
+                require(emptyStates.getRowCount() == 1 && ((JTextField) field(emptyEditor, "entry")).getText()
+                        .equals(emptyStates.getValueAt(0, 0)), "First state after empty graph becomes entry");
+                emptyEditor.getUndoRedo().undo();
+                require(emptyStates.getRowCount() == 0 && ((JTextField) field(emptyEditor, "entry")).getText().isEmpty(),
+                        "Undo first state restores empty graph atomically");
+                require(AnimationEditorSupport.guide(root).contains("Parameters"), "Embedded beginner guide is available");
+                System.out.println("ANIMATION_EMPTY_DRAFT_ENTRY_GUIDE_PASS");
                 DefaultTableModel parameters = (DefaultTableModel) field(editor, "parameters");
                 DefaultTableModel states = (DefaultTableModel) field(editor, "states");
                 DefaultTableModel edges = (DefaultTableModel) field(editor, "edges");
@@ -105,6 +147,86 @@ public final class AnimationEditorSmoke {
                 verifyGraphEdits(editor, root);
                 parameters.addRow(new Object[]{"Speed", "FLOAT", "0"});
                 parameters.addRow(new Object[]{"Attack", "TRIGGER", "0"});
+                parameters.addRow(new Object[]{"Grounded", "BOOLEAN", "true"});
+                require(((AnimationGraph) call(editor, "graph")).parameters.get(2).initial == 1,
+                        "Boolean true compiles to runtime value");
+                parameters.setValueAt("false", 2, 2);
+                require(((AnimationGraph) call(editor, "graph")).parameters.get(2).initial == 0,
+                        "Boolean false compiles to runtime value");
+                parameters.setValueAt("1.0", 2, 2);
+                require(((AnimationGraph) call(editor, "graph")).parameters.get(2).initial == 1,
+                        "Legacy numeric boolean defaults remain readable");
+                parameters.removeRow(2);
+                parameters.addRow(new Object[]{"End", "BOOLEAN", "false"});
+                AnimationGraph endGraph = (AnimationGraph) call(editor, "graph");
+                require(endGraph.parameters.get(2).name.equals("End") && endGraph.parameters.get(2).initial == 0,
+                        "Adding End without a transition reference is valid");
+                edges.addRow(new Object[]{"Idle", "Run", "", "TRUE", "0", "0.2", "-1"});
+                try {
+                    call(editor, "graph");
+                    throw new AssertionError("Missing transition reference must fail validation");
+                } catch (java.lang.reflect.InvocationTargetException expected) {
+                    require(expected.getCause().getMessage().contains("Transition row 1 (Idle -> Run)"),
+                            "Missing parameter error identifies the exact transition");
+                    require(tabs.getSelectedIndex() == 3, "Invalid transition is revealed");
+                }
+                edges.setValueAt("End", 0, 2);
+                @SuppressWarnings("unchecked")
+                List<JTable> editorTables = (List<JTable>) field(editor, "tables");
+                JTable transitionTable = editorTables.get(2);
+                JComboBox<?> parameterChoices = (JComboBox<?>) transitionTable.getCellEditor(0, 2)
+                        .getTableCellEditorComponent(transitionTable, "End", true, 0, 2);
+                require(!parameterChoices.isEditable() && parameterChoices.getItemCount() == 2
+                        && "End".equals(parameterChoices.getItemAt(1)), "Boolean condition offers existing boolean parameters only");
+                for (int column = 0; column < 2; column++) {
+                    JComboBox<?> stateChoices = (JComboBox<?>) transitionTable.getCellEditor(0, column)
+                            .getTableCellEditorComponent(transitionTable, "Idle", true, 0, column);
+                    require(!stateChoices.isEditable() && stateChoices.getItemCount() == states.getRowCount() + 1,
+                            "From and To use noneditable current-state choices");
+                }
+                JPanel livePanel = (JPanel) field(editor, "live");
+                JPanel sampleLiveRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT));
+                sampleLiveRow.add(new JLabel("End"));
+                sampleLiveRow.add(new JCheckBox());
+                livePanel.add(sampleLiveRow);
+                JPanel longLiveRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT));
+                longLiveRow.add(new JLabel("Long parameter name"));
+                longLiveRow.add(new JCheckBox());
+                livePanel.add(longLiveRow);
+                call(editor, "compactLiveRows");
+                livePanel.setSize(420, 400);
+                livePanel.doLayout();
+                sampleLiveRow.doLayout();
+                longLiveRow.doLayout();
+                require(sampleLiveRow.getComponent(1).getX() == longLiveRow.getComponent(1).getX(),
+                        "Live controls align despite different parameter name lengths");
+                require(sampleLiveRow.getHeight() == sampleLiveRow.getPreferredSize().height,
+                        "Extra viewport height does not stretch live parameter rows");
+                livePanel.remove(sampleLiveRow);
+                livePanel.remove(longLiveRow);
+                JScrollPane liveScroll = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, livePanel);
+                require(liveScroll != null && liveScroll.getVerticalScrollBarPolicy() == JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        "Live parameters retain vertical scrolling");
+                System.out.println("ANIMATION_LIVE_PARAMETER_COMPACT_LAYOUT_SCROLL_PASS");
+                require(java.util.Arrays.stream(livePanel.getComponents()).anyMatch(component -> component instanceof JLabel label
+                        && label.getText().startsWith("End (")), "New parameter appears immediately in pending preview list");
+                edges.setValueAt("Typo", 0, 2);
+                try {
+                    call(editor, "graph");
+                    throw new AssertionError("Stale parameter reference must be rejected");
+                } catch (java.lang.reflect.InvocationTargetException expected) {
+                    require(expected.getCause().getMessage().contains("parameter \"Typo\" was not found"),
+                            "Invalid existing parameter name is distinguished from empty reference");
+                }
+                edges.setValueAt("End", 0, 2);
+                require(((AnimationGraph) call(editor, "graph")).transitions.get(0).parameter.equals("End"),
+                        "Binding End makes the graph valid");
+                edges.setRowCount(0);
+                parameters.removeRow(2);
+                System.out.println("ANIMATION_END_PARAMETER_TRANSITION_VALIDATION_PASS");
+                System.out.println("ANIMATION_REFERENCE_DROPDOWNS_PENDING_PARAMETERS_PASS");
+
+                System.out.println("ANIMATION_BOOLEAN_DEFAULT_COMPATIBILITY_PASS");
                 states.addRow(new Object[]{"Locomotion", "Speed", "Idle|Walk|Run", "0|1|2", "true", "40", "40"});
                 ((JTextField) field(editor, "entry")).setText("Locomotion");
                 edges.addRow(new Object[]{"Locomotion", "Run", "Attack", "TRIGGER", "0", "0.3", "-1"});
@@ -167,6 +289,21 @@ public final class AnimationEditorSmoke {
             }
         });
         System.exit(0);
+    }
+
+    private static JButton findButton(java.awt.Container root, String label) {
+        for (java.awt.Component component : root.getComponents()) {
+            if (component instanceof JButton button && label.equals(button.getText())) {
+                return button;
+            }
+            if (component instanceof java.awt.Container container) {
+                JButton found = findButton(container, label);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private static final class FaultFileSystem extends org.openide.filesystems.LocalFileSystem {

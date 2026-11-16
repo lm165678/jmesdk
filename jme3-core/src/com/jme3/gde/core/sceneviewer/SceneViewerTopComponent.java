@@ -546,6 +546,8 @@ public final class SceneViewerTopComponent extends TopComponent {
         jToolBar1.add(enableCamLight);
         jToolBar1.add(jToggleButton1);
         jToolBar1.add(enablePBRSky);
+        javax.swing.JButton renderDocCapture =
+                com.jme3.gde.core.renderdoc.RenderDocSupport.installButton(jToolBar1);
         jToolBar1.addSeparator();
         for (java.awt.Component component : controls.getComponents()) {
             jToolBar1.add(component);
@@ -648,7 +650,7 @@ public final class SceneViewerTopComponent extends TopComponent {
             giMenu.show(gi, 0, gi.getHeight());
         });
         com.jme3.gde.core.util.OverflowToolbar.install(jToolBar1,
-                new java.awt.Component[]{enableCamLight, jToggleButton1, enablePBRSky},
+                new java.awt.Component[]{enableCamLight, jToggleButton1, enablePBRSky, renderDocCapture},
                 new java.awt.Component[]{new javax.swing.JLabel(ui("Render") + " "), paths},
                 new java.awt.Component[]{new javax.swing.JLabel(ui("View") + " "), modes},
                 new java.awt.Component[]{gi},

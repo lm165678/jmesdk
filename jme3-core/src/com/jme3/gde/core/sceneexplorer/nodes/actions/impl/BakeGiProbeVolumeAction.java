@@ -41,6 +41,11 @@ import org.openide.util.lookup.ServiceProvider;
  * 默认最多 4 块；每块占用现有流送槽位，整个活动集合仍最多 16 个 Volume。
  * 第五步：可随时 Cancel；全部完成才发布新数据，保存场景后运行时自动流送。
  * 关闭自适应并重新烘焙可恢复普通网格；仅移除自动生成的加密子节点。
+ * 第六步：Diffuse bounce passes 默认 1，可选 2..8 进行多次漫反射烘焙。
+ * 每轮只读取上一轮完整结果，旧数据不参与反馈；运行时仍使用原来的八探针设置。
+ * 烘焙时间和临时内存增加，结果保存到原 GI 数据格式；取消保留旧结果。
+ * 面板重新打开时次数恢复为 1；选择 1 并重新烘焙可恢复单次反射。
+ * 多次反射暂不支持 Adaptive local refinement；体积应覆盖需要接收反射的表面。
  * </pre>
  */
 @ServiceProvider(service = ToolAction.class)
@@ -175,6 +180,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         }
         JSpinner capture = spinner(fields, "Capture size", 64, 4, 2048);
         JSpinner samples = spinner(fields, "Radiance samples", 1024, 32, 65536);
+        JSpinner bounces = spinner(fields, "Diffuse bounce passes", 1, 1, 8);
+        bounces.setToolTipText("Default 1. More passes propagate diffuse indirect light; increases bake time, not runtime probe count. Cancel preserves old data.");
         JSpinner visibility = spinner(fields, "Visibility resolution", 16, 2, 64);
         JSpinner clearance = new JSpinner(new SpinnerNumberModel(0.05, 0.001, 1000.0, 0.01));
         fields.add(new JLabel("Probe clearance"));
@@ -339,6 +346,11 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.probeClearance = ((Number) clearance.getValue()).floatValue();
             quality.captureSize = (Integer) capture.getValue();
             quality.radianceSamples = (Integer) samples.getValue();
+            quality.bounceCount = (Integer) bounces.getValue();
+            if (quality.bounceCount > 1 && adaptive.isSelected() && !surfaceLayout.isSelected()) {
+                status.setText("Multiple bounce passes require Adaptive local refinement to be off.");
+                return;
+            }
             quality.visibilityResolution = (Integer) visibility.getValue();
             quality.far = ((Integer) far.getValue()).floatValue();
             quality.compactStorage = compact.isSelected();
@@ -394,7 +406,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                             snapshot.updateGeometricState();
                             job = GiAdaptiveBakeJob.start(app.getRenderManager(), snapshot, volume, quality, layout,
                                     view -> { }, cancelled::get,
-                                    count -> SwingUtilities.invokeLater(() -> status.setText("Completed probes: " + count)));
+                                    count -> SwingUtilities.invokeLater(() -> status.setText("Completed probe passes: " + count)));
                         } catch (RuntimeException error) {
                             finish("Bake failed: " + error.getMessage());
                         }

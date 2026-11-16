@@ -17,6 +17,18 @@ import java.util.concurrent.TimeUnit;
 
 /** Exercises the actual editor preview class and OpenGL context without showing a window. */
 public final class AnimationPreviewSmoke {
+    private static boolean changes(Object[] values) {
+        if (values == null) {
+            return false;
+        }
+        for (int i = 1; i < values.length; i++) {
+            if (!values[0].equals(values[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static void main(String[] args) throws Exception {
         Class<?> type = Class.forName("com.jme3.gde.core.assets.AnimationEditorTopComponent$Preview");
         Constructor<?> constructor = type.getDeclaredConstructor();
@@ -30,6 +42,7 @@ public final class AnimationPreviewSmoke {
             javax.swing.SwingUtilities.invokeAndWait(() -> {
                 window[0] = new javax.swing.JFrame("Animation preview lifecycle test");
                 window[0].setUndecorated(true);
+                window[0].setFocusableWindowState(false);
                 window[0].add(app.getPanel());
                 window[0].setSize(360, 240);
                 window[0].setLocation(-10000, -10000);
@@ -71,6 +84,26 @@ public final class AnimationPreviewSmoke {
                             || original.getLocalTranslation().x != 0) {
                         throw new AssertionError("Preview must animate the clone only");
                     }
+                    AnimationGraph boolGraph = new AnimationGraph("Off",
+                            List.of(new AnimationGraph.Parameter("Moving", AnimationGraph.Type.BOOLEAN, 0)),
+                            List.of(new AnimationGraph.State("Off", "", List.of("Idle"), new float[]{0}, true, 0, 0),
+                                    new AnimationGraph.State("On", "", List.of("Run"), new float[]{0}, true, 0, 0)),
+                            List.of(new AnimationGraph.Transition("Off", "On", "Moving", AnimationGraph.Operator.TRUE, 0, 0, -1),
+                                    new AnimationGraph.Transition("On", "Off", "Moving", AnimationGraph.Operator.FALSE, 0, 0, -1)));
+                    var boolModel = original.clone();
+                    AnimationGraphPlayer boolPlayer = new AnimationGraphPlayer(boolGraph, boolModel.getControl(AnimComposer.class));
+                    boolPlayer.setBoolean("Moving", true);
+                    boolModel.updateLogicalState(0.1f);
+                    if (!"On".equals(boolPlayer.getStateName()) || Math.abs(boolModel.getLocalTranslation().x - 2) > 0.001f) {
+                        throw new AssertionError("Boolean true must switch state and animated pose");
+                    }
+                    boolPlayer.setBoolean("Moving", false);
+                    boolModel.updateLogicalState(0.1f);
+                    if (!"Off".equals(boolPlayer.getStateName()) || Math.abs(boolModel.getLocalTranslation().x) > 0.001f) {
+                        throw new AssertionError("Boolean false must restore state and animated pose");
+                    }
+                    boolPlayer.close();
+                    System.out.println("ANIMATION_BOOLEAN_TRANSITION_POSE_PASS");
                     app.getRootNode().updateGeometricState();
                     com.jme3.texture.FrameBuffer buffer = new com.jme3.texture.FrameBuffer(320, 240, 1);
                     buffer.setDepthTarget(com.jme3.texture.FrameBuffer.FrameBufferTarget.newTarget(com.jme3.texture.Image.Format.Depth));
@@ -83,7 +116,7 @@ public final class AnimationPreviewSmoke {
                     view.attachScene(app.getRootNode());
                     app.getRenderManager().renderViewPort(view, 0.016f);
                     java.nio.ByteBuffer pixels = com.jme3.util.BufferUtils.createByteBuffer(320 * 240 * 4);
-                    app.getRenderer().readFrameBuffer(buffer, pixels);
+                    app.getRenderer().readFrameBufferWithFormat(buffer, pixels, com.jme3.texture.Image.Format.BGRA8);
                     boolean colored = false;
                     for (int i = 0; i < pixels.capacity(); i += 4) {
                         if ((pixels.get(i) & 255) > 100 || (pixels.get(i + 2) & 255) > 100) {
@@ -110,7 +143,26 @@ public final class AnimationPreviewSmoke {
                         originals[i] = sourceArmature.getJoint(i).getLocalTransform().clone();
                     }
                     install.invoke(app, skinCopy, skinGraph);
+                    Method showTargets = type.getDeclaredMethod("showTargets", boolean.class);
+                    showTargets.setAccessible(true);
+                    showTargets.invoke(app, true);
+                    Field overlayField = type.getDeclaredField("targetOverlay");
+                    overlayField.setAccessible(true);
+                    AnimationTargetOverlay overlay = (AnimationTargetOverlay) overlayField.get(app);
+                    long expectedLinks = copyArmature.getJointList().stream().filter(joint -> joint.getParent() != null).count();
+                    if (overlay.boneLinkCount != expectedLinks || expectedLinks == 0) {
+                        throw new AssertionError("Skeleton overlay must connect every parent-child bone");
+                    }
+                    System.out.println("OVERLAY_JOINTS=" + overlay.jointCount + " SELECTED=" + overlay.selectedJointCount);
+                    if (overlay.jointCount != copyArmature.getJointCount() || overlay.selectedJointCount == 0
+                            || overlay.geometry.getMesh().getVertexCount() == 0) {
+                        throw new AssertionError("Overlay must show skeleton and track-target highlights");
+                    }
                     skinCopy.updateLogicalState(0.37f);
+                    app.getRootNode().updateLogicalState(0);
+                    System.out.println("OVERLAY_BOUND=" + overlay.geometry.getMesh().getBound()
+                            + " MODEL=" + skinCopy.getWorldBound() + " CAM=" + app.getCamera().getLocation()
+                            + " CULL=" + overlay.geometry.getCullHint() + " VERTICES=" + overlay.geometry.getMesh().getVertexCount());
                     app.getRootNode().updateGeometricState();
                     boolean jointMoved = false;
                     for (int i = 0; i < originals.length; i++) {
@@ -126,12 +178,32 @@ public final class AnimationPreviewSmoke {
                     camera.resize(320, 240, true);
                     app.getRenderManager().renderViewPort(view, 0.016f);
                     pixels.clear();
-                    app.getRenderer().readFrameBuffer(buffer, pixels);
+                    app.getRenderer().readFrameBufferWithFormat(buffer, pixels, com.jme3.texture.Image.Format.BGRA8);
                     java.awt.image.BufferedImage capture = new java.awt.image.BufferedImage(320, 240,
                             java.awt.image.BufferedImage.TYPE_4BYTE_ABGR);
                     com.jme3.util.Screenshots.convertScreenShot(pixels, capture);
+                    int highlightedPixels = 0;
+                    for (int y = 0; y < capture.getHeight(); y++) {
+                        for (int x = 0; x < capture.getWidth(); x++) {
+                            int rgb = capture.getRGB(x, y);
+                            int red = (rgb >> 16) & 255;
+                            int green = (rgb >> 8) & 255;
+                            int blue = rgb & 255;
+                            if (red > 180 && green > 60 && green < 210 && blue < 70) {
+                                highlightedPixels++;
+                            }
+                        }
+                    }
+                    if (highlightedPixels == 0) {
+                        throw new AssertionError("Selected joint overlay must be visible in rendered pixels");
+                    }
                     javax.imageio.ImageIO.write(capture, "png", new java.io.File("build/animation-smoke/skinned-preview.png"));
                     System.out.println("ANIMATION_SKINNED_MODEL_CLONE_RENDER_PASS joints=" + originals.length);
+                    showTargets.invoke(app, false);
+                    if (overlay.isEnabled() || overlay.geometry.getCullHint() != com.jme3.scene.Spatial.CullHint.Always) {
+                        throw new AssertionError("Hidden overlay must stop updating and rendering");
+                    }
+                    System.out.println("ANIMATION_SKELETON_TARGET_OVERLAY_PASS");
                     Method fullInstall = type.getDeclaredMethod("install", com.jme3.scene.Spatial.class,
                             com.jme3.scene.Spatial.class, AnimationGraph.class);
                     fullInstall.setAccessible(true);
@@ -141,6 +213,13 @@ public final class AnimationPreviewSmoke {
                     hierarchy.attachChild(cube.clone(true));
                     var fullCopy = AnimationEditorSupport.cloneForPreview(hierarchy, animationOwner);
                     fullInstall.invoke(app, fullCopy.model(), fullCopy.owner(), graph);
+                    showTargets.invoke(app, true);
+                    AnimationTargetOverlay nodeOverlay = (AnimationTargetOverlay) overlayField.get(app);
+                    if (nodeOverlay.nodeLinkCount == 0 || nodeOverlay.jointCount != 0) {
+                        throw new AssertionError("Node animation must show parent links without inventing a skeleton");
+                    }
+                    showTargets.invoke(app, false);
+                    app.getRootNode().updateGeometricState();
                     if (((Node) fullCopy.model()).getQuantity() != 2 || fullCopy.owner() == animationOwner) {
                         throw new AssertionError("Preview must include sibling geometry and a cloned controller");
                     }
@@ -148,10 +227,10 @@ public final class AnimationPreviewSmoke {
                     camera.resize(320, 240, true);
                     app.getRenderManager().renderViewPort(view, 0.016f);
                     pixels.clear();
-                    app.getRenderer().readFrameBuffer(buffer, pixels);
+                    app.getRenderer().readFrameBufferWithFormat(buffer, pixels, com.jme3.texture.Image.Format.BGRA8);
                     int visible = 0;
                     for (int i = 0; i < pixels.capacity(); i += 4) {
-                        if ((pixels.get(i) & 255) > 100) {
+                        if ((pixels.get(i) & 255) > 100 || (pixels.get(i + 2) & 255) > 100) {
                             visible++;
                         }
                     }
@@ -162,20 +241,53 @@ public final class AnimationPreviewSmoke {
                     if (args.length == 2) {
                         app.getAssetManager().registerLocator(args[0], com.jme3.asset.plugins.FileLocator.class);
                         var asset = app.getAssetManager().loadModel(args[1]);
-                        var assetOwner = AnimationEditorSupport.owners(asset).get(0);
-                        String assetClip = assetOwner.getControl(AnimComposer.class).getAnimClipsNames().iterator().next();
+                        var assetOwners = AnimationEditorSupport.owners(asset);
+                        System.out.println("ASSET_COMPOSERS=" + assetOwners.size());
+                        for (var candidate : assetOwners) {
+                            System.out.println(AnimationEditorSupport.guide(candidate).split("当前 Composer 的源片段：")[1]);
+                            for (var candidateClip : candidate.getControl(AnimComposer.class).getAnimClips()) {
+                                for (var track : candidateClip.getTracks()) {
+                                    if (track instanceof com.jme3.anim.TransformTrack t) {
+                                        boolean changes = changes(t.getTranslations()) || changes(t.getRotations()) || changes(t.getScales());
+                                        System.out.println("KEYS_CHANGE " + candidate.getName() + "/" + candidateClip.getName() + "=" + changes);
+                                    }
+                                }
+                            }
+                        }
+                        var assetOwner = assetOwners.stream().filter(o -> "RootNode".equals(o.getName())).findFirst().orElse(assetOwners.get(0));
+                        String assetClip = assetOwner.getControl(AnimComposer.class).getAnimClips().stream()
+                                .filter(c -> !AnimationEditorSupport.constantTransformClip(c))
+                                .map(com.jme3.anim.AnimClip::getName).sorted().findFirst().orElseThrow();
+                        System.out.println("ACTIVE_ASSET_CLIP=" + assetClip);
                         AnimationGraph assetGraph = new AnimationGraph("Preview", List.of(),
                                 List.of(new AnimationGraph.State("Preview", "", List.of(assetClip),
                                         new float[]{0}, true, 0, 0)), List.of());
                         var assetCopy = AnimationEditorSupport.cloneForPreview(asset, assetOwner);
                         fullInstall.invoke(app, assetCopy.model(), assetCopy.owner(), assetGraph);
-                        assetCopy.model().updateLogicalState(0.1f);
+                        java.util.Map<com.jme3.scene.Spatial, com.jme3.math.Transform> poses = new java.util.IdentityHashMap<>();
+                        assetCopy.model().depthFirstTraversal(spatial -> poses.put(spatial, spatial.getLocalTransform().clone()));
+                        boolean animated = false;
+                        double seconds = assetOwner.getControl(AnimComposer.class).getAnimClip(assetClip).getLength();
+                        for (int step = 0; step < 100; step++) {
+                            app.getRootNode().updateLogicalState((float) (seconds / 100));
+                            animated |= poses.entrySet().stream().anyMatch(e -> !e.getValue().equals(e.getKey().getLocalTransform()));
+                        }
+                        System.out.println("ACTUAL_PLAYER_TIME=" + ((AnimationGraphPlayer) field.get(app)).getStateTime());
+                        for (var track : assetCopy.owner().getControl(AnimComposer.class).getAnimClip(assetClip).getTracks()) {
+                            if (track instanceof com.jme3.anim.TransformTrack t) {
+                                System.out.println("TARGET_ATTACHED=" + poses.containsKey(t.getTarget()) + " " + t.getTarget());
+                            }
+                        }
+                        if (!animated) {
+                            throw new AssertionError("Source clip did not move any node");
+                        }
+                        System.out.println("ANIMATION_REAL_ASSET_MOVEMENT_PASS");
                         app.getRootNode().updateGeometricState();
                         camera.copyFrom(app.getCamera());
                         camera.resize(320, 240, true);
                         app.getRenderManager().renderViewPort(view, 0.016f);
                         pixels.clear();
-                        app.getRenderer().readFrameBuffer(buffer, pixels);
+                        app.getRenderer().readFrameBufferWithFormat(buffer, pixels, com.jme3.texture.Image.Format.BGRA8);
                         com.jme3.util.Screenshots.convertScreenShot(pixels, capture);
                         javax.imageio.ImageIO.write(capture, "png", new java.io.File("build/animation-smoke/asset-preview.png"));
                         System.out.println("ANIMATION_EXTERNAL_ASSET_PREVIEW_CAPTURE owner=" + assetOwner.getName());
