@@ -236,3 +236,5 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - The inspected user capture contains desktop OpenGL draw/dispatch events, a 32x32 default backbuffer and an offscreen 1229x469 viewport. Replay logs contain glslang built-in parsing errors. Blank displayed output remains unresolved; no mobile pipeline regression has been established. Investigation paused at user request.
 - User requested Git snapshots of both repositories. No new builds or runtime validation for this request. Exclude generated archives, downloaded tools, extracted assets, logs and automatic build revision increments. Pre-snapshot engine base 788a3577409fb057b452c1435ef8ba76fd101ecb, SDK base 067a2f80; paired pending engine changes concern GI/shadows. Verify remote refs before claiming push success.
 
+## 2026-11-17 paired implementation snapshot
+- Engine implementation: 4ee85daa4; SDK implementation: e38d71c5. These identify the paired source snapshots, not a newly validated binary release. No additional build/runtime checks for this Git request. Earlier test results and unresolved issues remain as documented.
