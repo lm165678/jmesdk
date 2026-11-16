@@ -1,5 +1,9 @@
 # Development handoff — 2026-11-16
 
+## 2026-11-16 eight-probe engine integration
+- GI Properties adds `27-probe quality mode`, default off. GiPreview forwards the persistent volume option to the new engine streamer overload; saved scenes restore via engine automatic services. No rebake needed. Requires matching engine commit adding setWideProbeSampling (see sibling DEV_HANDOFF).
+- Changed SDK sources passed targeted javac against updated engine classes. Full SDK build and live UI interaction were NOT run; no runtime JAR export or push. Engine GPU regression and timing evidence is recorded in sibling handoff.
+
 这是开发状态摘要，不是完整聊天记录。以源码、测试和实际运行结果为准。
 
 ## 配套仓库与恢复
