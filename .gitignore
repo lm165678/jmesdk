@@ -1,4 +1,5 @@
 jme3-core-baselibs/release/modules/ext
+/jme3-texture-tools/release/texture-tools/
 jme3-core-libraries/release/modules/ext
 jme3-project-baselibs/release/libs
 io_export_ogreDotScene.py

@@ -48,12 +48,17 @@ public final class TextureToolchain {
         this.timeout = timeout;
     }
 
-    /** Locates installed module resources; missing tools cause an explicit error. */
+    /**
+     * Locates installed module resources. The Gradle {@code prepareTextureTools}
+     * task downloads the official encoders before the SDK is built. Missing tools
+     * cause an explicit error rather than silently skipping texture conversion.
+     */
     public static TextureToolchain installed() throws IOException {
         var location = InstalledFileLocator.getDefault().locate(
                 "texture-tools", "com.jme3.gde.texturetools", false);
         if (location == null) {
-            throw new IOException("Texture Tools module resources are missing");
+            throw new IOException("Texture Tools module resources are missing; "
+                    + "run Gradle prepareTextureTools and rebuild the SDK");
         }
         return new TextureToolchain(location.toPath());
     }

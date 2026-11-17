@@ -32,6 +32,8 @@ You also have to know that the build process changes from time to time, so have 
 
 Technically the gradle task `buildSdk` is the main task which builds the sdk (Invoking `./gradlew buildSdk` or `gradlew.bat buildSdk` on Windows).
 
+`buildSdk` also runs `prepareTextureTools`, which verifies the repository's original Compressonator 4.6.0 and astcenc 5.7.1 archives in `third-party/texture-tools` against pinned SHA-256 hashes, then unpacks them into `jme3-texture-tools/release/texture-tools`. The original archives are versioned so clean and offline SDK builds do not depend on upstream download availability; only the extracted binaries are ignored by Git. To restore only these resources without compiling the SDK, run `gradlew.bat prepareTextureTools` on Windows or `./gradlew prepareTextureTools` on other hosts. Model-to-J3O conversion requires these host-side tools; their absence is an SDK installation/build issue, not a game-project asset error.
+
 __If you just want to run the SDK on your machine:__   
     call `./gradlew run` (`gradlew.bat run`), which internally calls `buildSdk` and then uses `ant` to run the SDK.
     

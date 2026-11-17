@@ -670,6 +670,77 @@ tasks.register('prepareSdkPhysicsNatives', Sync) {
     into 'jme3-core-baselibs/release/native-libs'
 }
 
+// Original native encoder archives are versioned for reproducible offline builds.
+// Every archive is pinned to an official release and its published SHA-256.
+def textureToolPackages = [
+        [url: 'https://github.com/GPUOpen-Tools/compressonator/releases/download/V4.6.0/compressonatorcli-4.6.0-win64.zip',
+         sha256: '6fb42c9b7de0bd0f626bea8a17975a343f3cde7a5ef57a754582eb59b18543d5',
+         archive: 'compressonatorcli-4.6.0-win64.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/compressonator/4.6.0/windows-x86_64'],
+        [url: 'https://github.com/GPUOpen-Tools/compressonator/releases/download/V4.6.0/compressonatorcli_linux_x86_64_4.6.0.tar.gz',
+         sha256: 'b5e6b9d30c7beceba2c4c18517fa89c087274443fdd33488eef068433422d093',
+         archive: 'compressonatorcli_linux_x86_64_4.6.0.tar.gz',
+         destination: 'jme3-texture-tools/release/texture-tools/compressonator/4.6.0/linux-x86_64'],
+        [url: 'https://github.com/ARM-software/astc-encoder/releases/download/5.7.1/astcenc-5.7.1-windows-x64.zip',
+         sha256: '117ed7cc2b0cc4f3d5774eaa1bde3a2ba75695c2f490e84e4a08d1726c963db8',
+         archive: 'astcenc-5.7.1-windows-x64.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/windows-x86_64'],
+        [url: 'https://github.com/ARM-software/astc-encoder/releases/download/5.7.1/astcenc-5.7.1-windows-arm64.zip',
+         sha256: '2d8f4084fd2d5d88e5caca1c6c1fe6916f053510b26ec0be0bf12bef9ffe99dd',
+         archive: 'astcenc-5.7.1-windows-arm64.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/windows-arm64'],
+        [url: 'https://github.com/ARM-software/astc-encoder/releases/download/5.7.1/astcenc-5.7.1-linux-x64.zip',
+         sha256: 'f1d576f0801e7701548da78d782f4bf70dfde3673a238d1a2ac0ebd3511b2f37',
+         archive: 'astcenc-5.7.1-linux-x64.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/linux-x86_64'],
+        [url: 'https://github.com/ARM-software/astc-encoder/releases/download/5.7.1/astcenc-5.7.1-linux-arm64.zip',
+         sha256: 'd87287e02e3fd335334dace5a6a1ffcb705ed5aa9d5a5c5624fa50860f665fde',
+         archive: 'astcenc-5.7.1-linux-arm64.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/linux-arm64'],
+        [url: 'https://github.com/ARM-software/astc-encoder/releases/download/5.7.1/astcenc-5.7.1-macos-universal.zip',
+         sha256: 'cb2dd75e33fcc12ebaae9e2230649e30da10c152b029a6d2f3440f6d45ed5c45',
+         archive: 'astcenc-5.7.1-macos-universal.zip',
+         destination: 'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/macos-universal']
+]
+def textureToolBinaries = [
+        'jme3-texture-tools/release/texture-tools/compressonator/4.6.0/windows-x86_64/compressonatorcli-4.6.0-win64/compressonatorcli.exe',
+        'jme3-texture-tools/release/texture-tools/compressonator/4.6.0/linux-x86_64/compressonatorcli_linux_x86_64_4.6.0/compressonatorcli-bin',
+        'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/windows-x86_64/bin/astcenc-sse2.exe',
+        'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/windows-arm64/bin/astcenc-neon.exe',
+        'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/linux-x86_64/bin/astcenc-sse2',
+        'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/linux-arm64/bin/astcenc-neon',
+        'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/macos-universal/bin/astcenc'
+]
+
+tasks.register('prepareTextureTools') {
+    group = 'build setup'
+    description = 'Verifies and unpacks the versioned native texture encoder archives.'
+    inputs.files(textureToolPackages.collect { file("third-party/texture-tools/${it.archive}") })
+    inputs.property('expectedHashes', textureToolPackages.collect { "${it.archive}|${it.sha256}" })
+    outputs.files(textureToolBinaries)
+    doLast {
+        textureToolPackages.each { tool ->
+            def archive = file("third-party/texture-tools/${tool.archive}")
+            if (!archive.isFile()) {
+                throw new GradleException("Missing versioned texture tool archive: ${archive}")
+            }
+            if (!getSHA256Hash(archive).equalsIgnoreCase(tool.sha256)) {
+                throw new GradleException("Texture tool checksum verification failed: ${archive}")
+            }
+            copy {
+                from(tool.archive.endsWith('.tar.gz') ? tarTree(resources.gzip(archive)) : zipTree(archive))
+                into tool.destination
+                includeEmptyDirs = false
+            }
+        }
+        textureToolBinaries.each { binary ->
+            if (!file(binary).isFile()) {
+                throw new GradleException("Texture tool package has an unexpected layout; missing ${binary}")
+            }
+        }
+    }
+}
+
 tasks.register('verifyLocalEngine') {
     group = 'verification'
     description = 'Checks the local engine coordinates and required custom feature classes.'
@@ -717,7 +788,7 @@ tasks.register('verifyLocalEngine') {
 }
 
 tasks.register('buildSdk') {
-    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig, verifyLocalEngine, prepareSdkPhysicsNatives
+    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig, verifyLocalEngine, prepareSdkPhysicsNatives, prepareTextureTools
     doLast {
         ant.propertyfile(file: "nbproject/project.properties") {
             entry(key: "plugins.version", value: "${jmeVersion}")
@@ -753,6 +824,7 @@ tasks.register('cleanSdk') {
         file("jme3-project-baselibs/release/").deleteDir()
         file("jme3-project-libraries/release/").deleteDir()
         file("jme3-project-testdata/release/").deleteDir()
+        file("jme3-texture-tools/release/texture-tools/").deleteDir()
         file("JME3TestsTemplate/src/jme3test/").deleteDir()
         file("JME3TestsTemplateAndroid/src/jme3test/").deleteDir()
     }

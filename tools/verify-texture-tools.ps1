@@ -7,6 +7,10 @@ if (-not $jdk) {
 Push-Location $sdkRoot
 try {
     $env:JAVA_HOME = $jdk
+    & './gradlew.bat' prepareTextureTools
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Texture Tools resource preparation failed'
+    }
     & './netbeans/extide/ant/bin/ant.bat' -f jme3-texture-tools/build.xml netbeans
     if ($LASTEXITCODE -ne 0) {
         throw 'Texture Tools module build failed'
