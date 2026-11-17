@@ -1,3 +1,9 @@
+## 2026-11-18 paired source revisions
+
+- Engine: `caa5af33978f9818516485d86134aa49a6db5461` on `dev_fix_lightprobe_issue`.
+- SDK: `42ef57e85ca789daaf92625f7dd07de07889f2f0` on `master`.
+- Use this source pair for the changes below; documentation-only commits may follow. Full SDK integration/build verification is still pending, as documented below.
+
 ## 2026-11-18 fork publication checkpoint
 
 - Publish current SDK source changes: Unity importer, material graph interaction and comment deletion fix, texture import/editor changes, asset-browser folder rename, GI inspector layout and exposure integration. Historical uncommitted labels below describe earlier checkpoints.
