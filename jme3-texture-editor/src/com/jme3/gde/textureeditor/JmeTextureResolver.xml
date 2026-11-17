@@ -16,6 +16,8 @@ and open the template in the editor.
         <ext name="JPEG"/>
         <ext name="TGA"/>
         <ext name="tga"/>
+        <ext name="HDR"/>
+        <ext name="hdr"/>
         <resolver mime="image/x-jmetexture"/>
     </file>
 </MIME-resolver>

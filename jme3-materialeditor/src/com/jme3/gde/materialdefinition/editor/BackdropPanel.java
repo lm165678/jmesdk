@@ -491,11 +491,13 @@ public class BackdropPanel extends JPanel implements MouseListener, ChangeListen
             int width = viewPort.getWidth();
             int height = viewPort.getHeight();
 
-            int size = Math.min(width, height) - 25;
+            double zoom = getParent() instanceof Diagram ? ((Diagram) getParent()).getZoom() : 1.0;
+            int size = (int) Math.round((Math.min(width, height) - 25) / zoom);
             setSize(size, size);
             setBounds(0, 0, size, size);
-            Point pos= viewPort.getViewPosition();
-            setLocation(pos.x + width / 2 - size / 2, pos.y + height / 2 - size / 2);
+            Point pos = viewPort.getViewPosition();
+            setLocation((int) Math.round((pos.x + width / 2.0) / zoom) - size / 2,
+                    (int) Math.round((pos.y + height / 2.0) / zoom) - size / 2);
 
             repaint();
             if (recalculateTimer.isRunning()) {

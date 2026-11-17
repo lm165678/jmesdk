@@ -78,21 +78,15 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         dialog.setVisible(true);
     }
 
-    /** Embeddable EDT inspector; hiding it cancels in-flight work without replacing old data. */
+    /**
+     * Embeddable EDT inspector; hiding it cancels in-flight work without replacing
+     * old data. A dialog packs at 360 pixels. As a direct JScrollPane view the root
+     * tracks viewport width, including when the vertical scrollbar appears, so
+     * asynchronous grid/status text cannot widen the Properties dock or clip labels.
+     */
     public JPanel createPanel(GiProbeVolume volume, DataObject file) {
-        // Diagnostic text must not become the inspector's preferred width.
-        // Parent scroll panes can otherwise expand to a multi-kilobyte error.
-        JPanel dialog = new JPanel(new BorderLayout(4, 4)) {
-            @Override
-            public java.awt.Dimension getPreferredSize() {
-                return new java.awt.Dimension(360, super.getPreferredSize().height);
-            }
-
-            @Override
-            public java.awt.Dimension getMinimumSize() {
-                return new java.awt.Dimension(0, 0);
-            }
-        };
+        JPanel dialog = new com.jme3.gde.core.util.InspectorColumns.WidthTrackedPanel(
+                new BorderLayout(4, 4), 360);
         JPanel fields = new com.jme3.gde.core.util.InspectorColumns("gi.bake");
         JCheckBox surfaceLayout = new JCheckBox("Surface probe layout");
         JSpinner countX = spinner(fields, ui("GiCountX"), 5, 2, 128);

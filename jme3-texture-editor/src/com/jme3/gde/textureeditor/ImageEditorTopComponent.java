@@ -45,6 +45,10 @@ import org.netbeans.api.settings.ConvertAsProperties;
 import org.openide.filesystems.FileObject;
 import org.openide.util.Exceptions;
 import org.openide.util.lookup.AbstractLookup;
+import org.openide.util.RequestProcessor;
+import org.openide.DialogDisplayer;
+import org.openide.NotifyDescriptor;
+import javax.swing.SwingUtilities;
 import org.openide.windows.CloneableTopComponent;
 
 /**
@@ -61,23 +65,25 @@ public final class ImageEditorTopComponent  extends CloneableTopComponent {
     private final ImageEditorComponent EDITOR = ImageEditorComponent.create();
     
     public ImageEditorTopComponent() {
-        
+        initializeEditor();
     }
-    
-    public ImageEditorTopComponent(FileObject currentFile) {
-        initComponents();
-        setName(NbBundle.getMessage(ImageEditorTopComponent.class, "CTL_ImageEditorTopComponent"));
-        setToolTipText(NbBundle.getMessage(ImageEditorTopComponent.class, "HINT_ImageEditorTopComponent"));
-        setIcon(ImageUtilities.loadImage(ICON_PATH, true));
-        add(EDITOR.getComponent());
 
-        //Add the dynamic object to the TopComponent Lookup:
-        associateLookup(new AbstractLookup(EDITOR.getContent()));
+    public ImageEditorTopComponent(FileObject currentFile) {
+        initializeEditor();
         try {
             setEditedImage(currentFile);
         } catch (IOException | URISyntaxException ex) {
             Exceptions.printStackTrace(ex);
         }
+    }
+
+    private void initializeEditor() {
+        initComponents();
+        setName(NbBundle.getMessage(ImageEditorTopComponent.class, "CTL_ImageEditorTopComponent"));
+        setToolTipText(NbBundle.getMessage(ImageEditorTopComponent.class, "HINT_ImageEditorTopComponent"));
+        setIcon(ImageUtilities.loadImage(ICON_PATH, true));
+        add(EDITOR.getComponent());
+        associateLookup(new AbstractLookup(EDITOR.getContent()));
     }
 
     /** This method is called from within the constructor to
@@ -165,13 +171,37 @@ public final class ImageEditorTopComponent  extends CloneableTopComponent {
     }
 
     public void setEditedImage(FileObject file) throws FileNotFoundException, IOException, URISyntaxException {
-        if (file != null) {
-            setName("PixelHead - " + file.getName());
-        } else {
+        if (file == null) {
             setName("PixelHead - No name");
+            return;
         }
-        BufferedImage image = IOModule.create().load(file);
-        EDITOR.setEditedImage(this, image, file);
+        setName("PixelHead - " + file.getNameExt());
+        setToolTipText("Loading " + file.getNameExt() + "...");
+        EDITOR.setLoadingState();
+        RequestProcessor.getDefault().post(() -> {
+            try {
+                BufferedImage image = IOModule.create().load(file);
+                SwingUtilities.invokeLater(() -> {
+                    EDITOR.setEditedImage(this, image, file);
+                    boolean hdr = "hdr".equalsIgnoreCase(file.getExt());
+                    if (hdr) {
+                        setName("PixelHead - " + file.getNameExt() + " [read-only]");
+                    }
+                    setToolTipText(hdr
+                            ? file.getNameExt() + " - Reinhard tone-mapped HDR preview; original is read-only"
+                            : file.getPath());
+                });
+            } catch (Exception failure) {
+                SwingUtilities.invokeLater(() -> {
+                    EDITOR.setLoadFailed(failure.getMessage());
+                    setName("PixelHead - Cannot open " + file.getNameExt());
+                    setToolTipText(failure.getMessage());
+                    DialogDisplayer.getDefault().notify(new NotifyDescriptor.Message(
+                            "Cannot open " + file.getNameExt() + ":\n" + failure.getMessage(),
+                            NotifyDescriptor.ERROR_MESSAGE));
+                });
+            }
+        });
     }
 
     void setEditedImage(BufferedImage image) {

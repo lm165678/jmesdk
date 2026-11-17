@@ -82,10 +82,13 @@ public class JmeLightProbe extends JmeLight {
         }
 
         if (obj instanceof com.jme3.light.SkyLight) {
+            set.put(makeEmbedProperty(obj, com.jme3.light.SkyLight.class, float.class,
+                    "getIntensity", "setIntensity", "Sky light intensity (>=0)"));
             set.put(makeProperty(obj, boolean.class, "isDiffuseEnabled", "setDiffuseEnabled", "Diffuse enabled"));
             com.jme3.environment.SkyLightControl control = findSkyControl();
             if (control != null) {
-                set.put(makeProperty(control, int.class, "getResolution", "setResolution", "Capture resolution"));
+                set.put(makeEmbedProperty(control, com.jme3.environment.SkyLightControl.class,
+                        int.class, "getResolution", "setResolution", "Capture resolution"));
                 set.put(createButtonProperty());
             }
             sheet.put(set);

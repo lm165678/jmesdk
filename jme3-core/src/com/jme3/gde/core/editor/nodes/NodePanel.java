@@ -174,11 +174,11 @@ public abstract class NodePanel extends DraggablePanel implements Selectable, Ke
 
     @Override
     public void mousePressed(MouseEvent e) {
-        super.mousePressed(e);        
         diagram.select(this, e.isShiftDown() || e.isControlDown());
+        super.mousePressed(e);
         showToolBar();
     }
-    
+
     private void showToolBar(){
         if (toolBar != null) {
             toolBar.display();
@@ -188,8 +188,20 @@ public abstract class NodePanel extends DraggablePanel implements Selectable, Ke
     @Override
     public void mouseReleased(MouseEvent e) {
         diagram.fixSize();
-        if (svdx != getLocation().x) {
-            getDiagram().getEditorParent().savePositionToMetaData(getKey(), getLocation().x, getLocation().y);
+        if (svdx != getLocation().x || svdy != getLocation().y) {
+            boolean saved = false;
+            for (Selectable selected : diagram.getSelectedItems()) {
+                if (selected instanceof NodePanel) {
+                    NodePanel selectedNode = (NodePanel) selected;
+                    getDiagram().getEditorParent().savePositionToMetaData(
+                            selectedNode.getKey(), selectedNode.getLocation().x, selectedNode.getLocation().y);
+                    saved |= selectedNode == this;
+                }
+            }
+            if (!saved) {
+                getDiagram().getEditorParent().savePositionToMetaData(
+                        getKey(), getLocation().x, getLocation().y);
+            }
         }
     }
 

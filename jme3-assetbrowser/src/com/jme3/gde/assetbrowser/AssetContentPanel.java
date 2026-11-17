@@ -6,6 +6,7 @@ import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.core.assets.SpatialAssetDataObject;
 import com.jme3.gde.core.assets.FilterDataObject;
 import com.jme3.gde.core.scene.SceneApplication;
+import com.jme3.gde.texturetools.GeneratedTextures;
 import com.jme3.gde.scenecomposer.SceneComposerTopComponent;
 import com.jme3.gde.textureeditor.ImageEditorTopComponent;
 import java.awt.*;
@@ -47,6 +48,8 @@ import org.openide.windows.TopComponent;
  * <pre>
  * 第一步：选择 Assets 子目录，右键 New File 使用项目的 JME3 资产模板。
  * 新建文件夹：右键目录或空白处选择 New Folder；目录树右键复制/删除作用于该目录。
+ * 重命名文件夹：右键目录选择 Rename；生成纹理的 dds 目录受登记表保护而禁用，
+ * 需重命名源纹理并重新转换，避免 J3O 中的逻辑纹理 key 与物理输出失配。
  * 第二步：选择资产，Ctrl+C / Ctrl+V 复制粘贴，Delete 使用标准删除确认。
  * 第三步：双击资产打开编辑器，拖动模型或材质到当前项目的 3D Viewer。
  * 第四步：源模型右键 Convert to J3O 配置导出，取消不会写入文件。
@@ -602,6 +605,96 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         });
     }
 
+    /** True when a folder directly holds registered DDS outputs owned by the texture registry. */
+    private boolean isGeneratedDdsFolder(FileObject folder) {
+        File local = FileUtil.toFile(folder);
+        if (local == null) {
+            return false;
+        }
+        GeneratedTextures store = GeneratedTextures.containing(local.toPath());
+        if (store == null) {
+            return false;
+        }
+        try {
+            return store.isGeneratedOutputDirectory(local.toPath());
+        } catch (java.io.IOException error) {
+            DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
+                    text("RenameFailed") + ": " + error.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
+            // Fail closed: an unreadable ownership registry must not permit renaming.
+            return true;
+        }
+    }
+
+    /** Resolves the folder a rename command acts on; the asset root is never a target. */
+    private FileObject renameFolderTarget() {
+        FileObject target = folderMenuTarget;
+        if (target == null) {
+            java.util.List<Entry> selected = grid.getSelectedValuesList();
+            if (selected.size() != 1) {
+                return null;
+            }
+            target = selected.get(0).file();
+        }
+        if (target == null || !target.isValid() || !target.isFolder()
+                || manager == null || target.equals(manager.getAssetFolder())) {
+            return null;
+        }
+        return target;
+    }
+
+    /** Renames one folder only; asset contents and referenced paths are left untouched. */
+    private void renameFolder(FileObject folder) {
+        if (isGeneratedDdsFolder(folder)) {
+            DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
+                    text("RenameGenerated"), NotifyDescriptor.INFORMATION_MESSAGE));
+            return;
+        }
+        NotifyDescriptor.InputLine input = new NotifyDescriptor.InputLine(
+                folder.getName(), text("RenameFolder"));
+        if (!NotifyDescriptor.OK_OPTION.equals(DialogDisplayer.getDefault().notify(input))) {
+            return;
+        }
+        String name = input.getInputText().trim();
+        if (name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf((char) 92) >= 0) {
+            report(new java.io.IOException("Enter a single folder name."));
+            return;
+        }
+        if (name.equals(folder.getName())) {
+            return;
+        }
+        String oldRelative = FileUtil.getRelativePath(manager.getAssetFolder(), folder);
+        boolean currentIsInside = oldRelative != null
+                && (directory.equals(oldRelative) || directory.startsWith(oldRelative + "/"));
+        String prefix = oldRelative == null ? "" : oldRelative.substring(0, oldRelative.lastIndexOf('/') + 1);
+        io.post(() -> {
+            try {
+                FileObject parent = folder.getParent();
+                if (parent == null || !parent.isValid()) {
+                    throw new java.io.IOException("The folder has no writable parent.");
+                }
+                if (parent.getFileObject(name) != null) {
+                    throw new java.io.IOException("A file or folder with this name already exists.");
+                }
+                try (var lock = folder.lock()) {
+                    folder.rename(lock, name, "");
+                }
+                SwingUtilities.invokeLater(() -> {
+                    folderMenuTarget = null;
+                    if (currentIsInside) {
+                        directory = prefix + name + directory.substring(oldRelative.length());
+                    }
+                    scan();
+                });
+            } catch (Exception error) {
+                SwingUtilities.invokeLater(() -> DialogDisplayer.getDefault().notifyLater(
+                        new NotifyDescriptor.Message(
+                                text("RenameFailed") + ": " + error.getMessage(),
+                                NotifyDescriptor.ERROR_MESSAGE)));
+            }
+        });
+    }
+
     private void installAssetActions() {
         copyAsset = new AbstractAction(text("Copy")) {
             @Override
@@ -778,6 +871,17 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         newFolder.setEnabled(folder.canWrite());
         newFolder.addActionListener(event -> createFolder(folder));
         menu.add(newFolder);
+        FileObject renameTarget = renameFolderTarget();
+        if (renameTarget != null) {
+            boolean generated = isGeneratedDdsFolder(renameTarget);
+            JMenuItem rename = new JMenuItem(text("Rename"));
+            rename.setEnabled(!generated && renameTarget.canWrite());
+            if (generated) {
+                rename.setToolTipText(text("RenameGeneratedTip"));
+            }
+            rename.addActionListener(event -> renameFolder(renameTarget));
+            menu.add(rename);
+        }
         menu.addSeparator();
         JMenuItem open = new JMenuItem(text("Open"));
         open.setEnabled(grid.getSelectedValue() != null);

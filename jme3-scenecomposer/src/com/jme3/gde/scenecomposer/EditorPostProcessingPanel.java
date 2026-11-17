@@ -14,6 +14,8 @@ final class EditorPostProcessingPanel extends JPanel {
         JPanel global = new InspectorColumns("scene.postprocessing");
         toggle(global, "Enabled", true);
         stack.add(global);
+        JPanel exposure = section(stack, "Exposure");
+        number(exposure, "ExposureCompensation", 0, -16, 16, 0.25);
         JPanel bloom = section(stack, "Bloom");
         toggle(bloom, "Bloom", false);
         number(bloom, "BloomIntensity", 2, 0, 10, 0.1);

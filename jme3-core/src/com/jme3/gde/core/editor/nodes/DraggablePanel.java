@@ -32,6 +32,7 @@
 package com.jme3.gde.core.editor.nodes;
 
 import java.awt.Dimension;
+import java.awt.Point;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.event.MouseMotionListener;
@@ -83,6 +84,10 @@ public class DraggablePanel extends JPanel implements MouseListener, MouseMotion
         svdx = getLocation().x;
     }
 
+    public Point getDragStartLocation() {
+        return new Point(svdx, svdy);
+    }
+
     // empty dummy overrides
     @Override
     public void mouseReleased(MouseEvent e) {
@@ -100,11 +105,12 @@ public class DraggablePanel extends JPanel implements MouseListener, MouseMotion
     @Override
     public void mouseDragged(MouseEvent e) {
         if (!SwingUtilities.isMiddleMouseButton(e)) {
+            double zoom = diagram.getZoom();
             int xoffset = 0;
             if (!vertical) {
-                xoffset = e.getLocationOnScreen().x - svdex;
+                xoffset = (int) Math.round((e.getLocationOnScreen().x - svdex) / zoom);
             }
-            int yoffset = e.getLocationOnScreen().y - svdey;
+            int yoffset = (int) Math.round((e.getLocationOnScreen().y - svdey) / zoom);
             movePanel(xoffset, yoffset);
             diagram.multiMove(this, xoffset, yoffset);
             e.consume();

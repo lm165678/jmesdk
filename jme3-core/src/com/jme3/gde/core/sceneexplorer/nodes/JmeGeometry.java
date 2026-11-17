@@ -47,7 +47,12 @@ import org.openide.nodes.Sheet;
 import org.openide.util.Exceptions;
 
 /**
- *
+ * Sky lighting workflow (changes use the existing render-thread property path):
+ * 第一步：选择带 SkyLightControl 的 Sky 几何体，展开 Sky lighting 属性组。
+ * 第二步：修改 Sky light intensity，默认 1，0 关闭天光，2 加倍；不改变背景。
+ * 第三步：恢复 1 回到默认，Ctrl+S 保存到 J3O；已有 GI 需要单独重新烘焙。
+ * The same value is exposed on the SkyLight node. No capture is needed for
+ * intensity edits; local reflection probes retain their own radiance.
  * @author normenhansen
  */
 @org.openide.util.lookup.ServiceProvider(service = SceneExplorerNode.class)
@@ -126,6 +131,16 @@ public class JmeGeometry extends JmeSpatial implements MaterialChangeListener {
         set.put(makeProperty(obj, Mesh.class, "getMesh", "Mesh"));
 
         sheet.put(set);
+        com.jme3.environment.SkyLightControl sky = obj.getControl(
+                com.jme3.environment.SkyLightControl.class);
+        if (sky != null) {
+            Sheet.Set lighting = Sheet.createPropertiesSet();
+            lighting.setName("SkyLighting");
+            lighting.setDisplayName("Sky lighting");
+            lighting.put(makeEmbedProperty(sky.getLight(), com.jme3.light.SkyLight.class,
+                    float.class, "getIntensity", "setIntensity", "Sky light intensity (>=0)"));
+            sheet.put(lighting);
+        }
         return sheet;
 
     }

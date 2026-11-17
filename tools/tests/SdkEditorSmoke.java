@@ -1,5 +1,6 @@
 package com.jme3.gde.scenecomposer;
 
+import com.jme3.gde.core.util.InspectorColumns;
 import com.jme3.input.KeyInput;
 import com.jme3.input.event.KeyInputEvent;
 import com.jme3.math.Vector3f;
@@ -9,7 +10,11 @@ import com.jme3.scene.Node;
 import com.jme3.scene.VertexBuffer;
 import com.jme3.scene.shape.Sphere;
 import com.jme3.scene.plugins.sdf.*;
+import java.awt.BorderLayout;
 import java.util.Arrays;
+import javax.swing.JLabel;
+import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 
 /** Run with tools/verify-editor.ps1 after buildSdk. */
 public final class SdkEditorSmoke {
@@ -21,7 +26,42 @@ public final class SdkEditorSmoke {
             throw new AssertionError(message);
         }
     }
+    private static void verifyInspectorScrolling() {
+        InspectorColumns.WidthTrackedPanel content = new InspectorColumns.WidthTrackedPanel(
+                new BorderLayout(4, 4), 360);
+        InspectorColumns fields = new InspectorColumns("gi.bake.test");
+        JLabel changingValue = new JLabel(" ");
+        for (int i = 0; i < 12; i++) {
+            fields.add(new JLabel("Probe field " + i));
+            fields.add(i == 0 ? changingValue : new JLabel("Value " + i));
+        }
+        JLabel status = new JLabel(" ");
+        content.add(fields, BorderLayout.NORTH);
+        content.add(status, BorderLayout.CENTER);
+        JScrollPane scroll = new JScrollPane(content, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        require(content.getPreferredSize().width == 360, "Standalone dialog width changed");
+        require(content.getPreferredScrollableViewportSize().width == 0,
+                "Embedded inspector still requests horizontal growth");
+        for (int width : new int[]{240, 180, 260}) {
+            changingValue.setText("512 probes | 4.54 / 2.29 / ".repeat(12));
+            status.setText("Asynchronous GI diagnostic text must not widen the properties dock. ".repeat(8));
+            scroll.setSize(width, 120);
+            content.revalidate();
+            scroll.doLayout();
+            scroll.getViewport().doLayout();
+            fields.doLayout();
+            require(content.getWidth() == scroll.getViewport().getExtentSize().width,
+                    "Inspector does not track viewport width");
+            require(fields.getWidth() == content.getWidth(), "Field columns do not use the tracked width");
+            require(scroll.getVerticalScrollBar().isVisible(), "Test requires vertical overflow");
+            require(!scroll.getHorizontalScrollBar().isVisible(), "Horizontal scrollbar returned");
+        }
+        System.out.println("SDK_GI_INSPECTOR_WIDTH_PASS");
+    }
+
     public static void main(String[] args) throws Exception {
+        SwingUtilities.invokeAndWait(SdkEditorSmoke::verifyInspectorScrolling);
         EditorShortcutPolicy policy = new EditorShortcutPolicy();
         require(policy.accept(key(KeyInput.KEY_LCONTROL, true)) == 0, "Ctrl");
         for (int code : new int[]{KeyInput.KEY_C, KeyInput.KEY_V, KeyInput.KEY_X, KeyInput.KEY_S,

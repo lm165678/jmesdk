@@ -301,8 +301,13 @@ public final class ModelDetailTopComponent extends TopComponent {
                         if (gi) {
                             if (panel.giTarget != spatial) {
                                 panel.giPanel.removeAll();
-                                panel.giPanel.add(new JScrollPane(new com.jme3.gde.core.sceneexplorer.nodes.actions.impl.BakeGiProbeVolumeAction()
-                                        .createPanel((com.jme3.environment.gi.GiProbeVolume) spatial, request.getDataObject())), BorderLayout.CENTER);
+                                JPanel giContent = new com.jme3.gde.core.sceneexplorer.nodes.actions.impl.BakeGiProbeVolumeAction()
+                                        .createPanel((com.jme3.environment.gi.GiProbeVolume) spatial, request.getDataObject());
+                                JScrollPane giScroll = new JScrollPane(giContent, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                                giScroll.setBorder(null);
+                                giScroll.setMinimumSize(new java.awt.Dimension(0, 0));
+                                panel.giPanel.add(giScroll, BorderLayout.CENTER);
                                 panel.giTarget = spatial;
                             }
                             panel.contexts.show(panel.contextual, "gi");

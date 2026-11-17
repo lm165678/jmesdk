@@ -219,12 +219,15 @@ public class AssetDataObject extends MultiDataObject {
      * all defaults; ordinary J3O saves ignore generation options.
      * Source conversion also generates/revalidates referenced PNG/JPEG PC DDS
      * variants before opening the J3O output. Material keys remain logical.
+     * Supported GLB/glTF stream textures are first extracted to content-hashed
+     * PNG files in the source model's ".textures" directory, so their J3O keys
+     * remain reloadable instead of pointing at nonexistent imageN.png files.
      * <pre>
      * 第一步：工作线程 loadAsset()，用 ModelConversionAnalysis.inspect(model) 检查动画与蒙皮。
      * 第二步：在 EDT 调用 ModelConversionOptions.ask(analysis, name)，取消则返回。
      * 第三步：回到工作线程调用 saveAsset(options)。
-     * 第四步：转换自动生成或更新纹理旁 dds 子目录，材质仍引用原图 key。
-     * 第五步：打开同目录生成的 J3O；本次选项不会影响后续普通保存。
+     * 第四步：外部纹理在原位置生成 DDS；支持的内嵌纹理先解到 模型名.textures。
+     * 第五步：打开同目录生成的 J3O；内嵌纹理保存稳定路径，本次选项不影响普通保存。
      * </pre>
      */
     public synchronized void saveAsset(ModelConversionOptions options) throws IOException {
@@ -248,7 +251,8 @@ public class AssetDataObject extends MultiDataObject {
                 && this.savable instanceof com.jme3.scene.Spatial model) {
             // Prepare only source-model conversion, before creating/truncating output.
             savable = ModelConversionPreparation.prepare(model, conversionOptions, getLookup().lookup(ProjectAssetManager.class));
-            ModelTexturePreparation.prepare((com.jme3.scene.Spatial) savable, getLookup().lookup(ProjectAssetManager.class));
+            ModelTexturePreparation.prepare((com.jme3.scene.Spatial) savable,
+                    getLookup().lookup(ProjectAssetManager.class), getPrimaryFile());
         } else {
             savable = this.savable;
         }

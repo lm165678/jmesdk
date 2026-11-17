@@ -76,10 +76,15 @@ public class ShaderOutBusPanel extends DraggablePanel implements ComponentListen
         setBounds(0, 0, 300, 50);
         JLabel title = new JLabel();
         this.name = name;
-        title.setFont(new java.awt.Font("Impact", 1, 15)); // NOI18N
-        title.setForeground(new java.awt.Color(153, 153, 153));
+        java.awt.Font labelFont = javax.swing.UIManager.getFont("Label.font");
+        if (labelFont == null) {
+            labelFont = title.getFont();
+        }
+        title.setFont(labelFont.deriveFont(java.awt.Font.BOLD, 13.0f));
+        title.setForeground(new java.awt.Color(225, 225, 225));
         title.setHorizontalAlignment(javax.swing.SwingConstants.RIGHT);
         title.setText(name);
+        int titleWidth = title.getFontMetrics(title.getFont()).stringWidth(name) + 12;
         setOpaque(false);
         panel = new InnerPanel();
 
@@ -90,7 +95,7 @@ public class ShaderOutBusPanel extends DraggablePanel implements ComponentListen
                 .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, outBusPanel1Layout.createSequentialGroup()
                 .addContainerGap(70, 70)
                 .addComponent(panel, 20, 200, Short.MAX_VALUE)
-                .addComponent(title, GroupLayout.PREFERRED_SIZE, 70, GroupLayout.PREFERRED_SIZE)
+                .addComponent(title, GroupLayout.PREFERRED_SIZE, titleWidth, GroupLayout.PREFERRED_SIZE)
                 .addGap(30, 30, 30)));
         outBusPanel1Layout.setVerticalGroup(
                 outBusPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
@@ -132,7 +137,11 @@ public class ShaderOutBusPanel extends DraggablePanel implements ComponentListen
     public Shader.ShaderType getType(){
         return type;
     }
-    
+
+    public void cleanup() {
+        preview.cleanup();
+    }
+
     @Override
     protected void paintComponent(Graphics g1) {
         Graphics2D g = (Graphics2D) g1;

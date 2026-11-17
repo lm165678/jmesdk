@@ -79,10 +79,25 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
     private final BackdropPanel backDrop = new BackdropPanel();
     private Thread backgroundThread;
     private UpdateBackgroundRunnable backgroundUpdate = new UpdateBackgroundRunnable();
+    private final List<ShaderCommentPanel> comments = new ArrayList<ShaderCommentPanel>();
+    private int commentSequence;
 
     @SuppressWarnings("LeakingThisInConstructor")
     public ShaderNodeDiagram() {
         super();
+        setFocusable(true);
+        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_C, 0), "createComment");
+        getActionMap().put("createComment", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                java.awt.Component focusOwner = java.awt.KeyboardFocusManager
+                        .getCurrentKeyboardFocusManager().getFocusOwner();
+                if (!(focusOwner instanceof javax.swing.text.JTextComponent)) {
+                    createCommentFromSelection();
+                }
+            }
+        });
     }
     
     @Override
@@ -103,6 +118,7 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
     @Override
     public void mouseReleased(MouseEvent e) {
         if (SwingUtilities.isLeftMouseButton(e)) {
+            super.mouseReleased(e);
             if (draggedFrom != null && draggedFrom.getNode() instanceof ShaderOutBusPanel) {
                 MouseEvent me = SwingUtilities.convertMouseEvent(this, e, draggedFrom.getNode());
                 draggedFrom.getNode().dispatchEvent(me);
@@ -126,6 +142,7 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
     @Override
     public void mouseDragged(MouseEvent e) {
         if (SwingUtilities.isLeftMouseButton(e)) {
+            super.mouseDragged(e);
             if (draggedFrom == null) {
                 for (Selectable selectedItem : selectedItems) {
                     if (selectedItem instanceof ShaderOutBusPanel) {
@@ -170,11 +187,11 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
     public void displayBackdrop() {
         if (backDrop.getParent() == null) {
             add(backDrop);
-            ((JViewport)getParent()).addChangeListener(backDrop);
+            getViewport().addChangeListener(backDrop);
         }
 
         backDrop.setVisible(true);
-        backDrop.update(((JViewport)getParent()));
+        backDrop.update(getViewport());
     }
     
     public void setCurrentTechniqueName(String currentTechniqueName) {
@@ -183,6 +200,15 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
 
     public String getCurrentTechniqueName() {
         return currentTechniqueName;
+    }
+
+    @Override
+    protected void notifyConnectionRejected(com.jme3.gde.core.editor.nodes.ConnectionEndpoint start,
+            com.jme3.gde.core.editor.nodes.ConnectionEndpoint end) {
+        String message = org.openide.util.NbBundle.getMessage(ShaderNodeDiagram.class,
+                "ShaderNodeDiagram.connectionRejected", start.getText(), end.getText());
+        org.openide.DialogDisplayer.getDefault().notify(
+                new org.openide.NotifyDescriptor.Message(message, org.openide.NotifyDescriptor.WARNING_MESSAGE));
     }
 
     @Override
@@ -222,6 +248,74 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
         addComponentListener(bus);
         bus.componentResized(new ComponentEvent(this, ActionEvent.ACTION_PERFORMED));
         bus.revalidate();
+    }
+
+    private void createCommentFromSelection() {
+        java.awt.Rectangle bounds = null;
+        for (Selectable selected : selectedItems) {
+            if (selected instanceof NodePanel) {
+                java.awt.Rectangle nodeBounds = ((NodePanel) selected).getBounds();
+                bounds = bounds == null ? new java.awt.Rectangle(nodeBounds) : bounds.union(nodeBounds);
+            }
+        }
+        if (bounds == null) {
+            return;
+        }
+        bounds.grow(22, 32);
+        String id = Long.toString(System.currentTimeMillis(), 36) + "-" + commentSequence++;
+        String text = org.openide.util.NbBundle.getMessage(ShaderNodeDiagram.class,
+                "ShaderNodeDiagram.comment.defaultText");
+        ShaderCommentPanel comment = new ShaderCommentPanel(id, text, bounds);
+        addComment(comment);
+        selectComment(comment, false);
+        persistComments();
+    }
+
+    private void addComment(ShaderCommentPanel comment) {
+        comments.add(comment);
+        comment.setDiagram(this);
+        add(comment);
+        setComponentZOrder(comment, getComponentCount() - 1);
+        comment.revalidate();
+    }
+
+    public void selectComment(ShaderCommentPanel comment, boolean multi) {
+        if (!multi) {
+            selectedItems.clear();
+        }
+        if (!selectedItems.contains(comment)) {
+            selectedItems.add(comment);
+        }
+        // Containment affects dragging only; it must never expand the deletion selection.
+        comment.requestFocusInWindow();
+        repaint();
+    }
+
+    public void loadComments(String encoded) {
+        for (ShaderCommentPanel comment : ShaderCommentPanel.decodeComments(encoded)) {
+            addComment(comment);
+        }
+    }
+
+    public void persistComments() {
+        if (parent instanceof MatDefEditorlElement) {
+            ((MatDefEditorlElement) parent).saveCommentsToMetaData(
+                    ShaderCommentPanel.encodeComments(comments));
+        }
+    }
+
+    public void deleteSelectedItems() {
+        removeSelected();
+    }
+
+    @Override
+    protected void removeCustomSelectable(Selectable selectable) {
+        if (selectable instanceof ShaderCommentPanel) {
+            ShaderCommentPanel comment = (ShaderCommentPanel) selectable;
+            comments.remove(comment);
+            remove(comment);
+            persistComments();
+        }
     }
 
     private String fixNodeName(String name) {
@@ -314,14 +408,30 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
                 return outBusPanel;
             }
         }
-        
+        for (ShaderCommentPanel comment : comments) {
+            if (comment.getKey().equals(key)) {
+                return comment;
+            }
+        }
         return null;
     }
-    
+
     @Override
     public void clear() {
+        for (ShaderOutBusPanel outBus : outBuses) {
+            outBus.cleanup();
+        }
         super.clear();
         outBuses.clear();
+        comments.clear();
+        backgroundUpdate.setRunning(false);
+    }
+
+    public void cleanup() {
+        for (ShaderOutBusPanel outBus : outBuses) {
+            outBus.cleanup();
+        }
+        backDrop.cleanup();
         backgroundUpdate.setRunning(false);
     }
 
@@ -403,19 +513,28 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
 
     @Override
     protected int calcMaxWidth() {
-        int maxHeight = 0;
+        int maxWidth = 0;
         for (ShaderOutBusPanel outBusPanel : outBuses) {
-            int h = outBusPanel.getLocation().y + outBusPanel.getHeight();
-            if (h > maxHeight) {
-                maxHeight = h;
-            }
+            int width = outBusPanel.getLocation().x + outBusPanel.getWidth();
+            maxWidth = Math.max(maxWidth, width);
         }
-        return maxHeight;
+        for (ShaderCommentPanel comment : comments) {
+            maxWidth = Math.max(maxWidth, comment.getX() + comment.getWidth() + 80);
+        }
+        return maxWidth;
     }
-    
+
     @Override
     protected int calcMaxHeight() {
-        return 0;
+        int maxHeight = 0;
+        for (ShaderOutBusPanel outBusPanel : outBuses) {
+            int height = outBusPanel.getLocation().y + outBusPanel.getHeight() + 80;
+            maxHeight = Math.max(maxHeight, height);
+        }
+        for (ShaderCommentPanel comment : comments) {
+            maxHeight = Math.max(maxHeight, comment.getY() + comment.getHeight() + 80);
+        }
+        return maxHeight;
     }
     
     int minWidth = 0;

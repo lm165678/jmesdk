@@ -12,7 +12,9 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import javax.swing.AbstractButton;
 import javax.swing.ButtonGroup;
 import javax.swing.ImageIcon;
@@ -87,6 +89,12 @@ public class ImageEditorComponent implements EditorToolTarget {
     private EditorTool currentTool;
     private SaveNode saveNode = new SaveNode();
     private boolean newFile = false;
+    private boolean readOnly = false;
+    private boolean loading = false;
+    private String loadError;
+    private final List<AbstractButton> editControls = new ArrayList<>();
+    private final JLabel statusLabel = new JLabel(" ");
+    private JMenu filtersMenu;
     private final InstanceContent content;
 
     private void doPaint(Graphics2D g) {
@@ -103,6 +111,7 @@ public class ImageEditorComponent implements EditorToolTarget {
         JToolBar bottomBar = new JToolBar();
         bottomBar.setFloatable(false);
         bottomBar.add(COLOR_CONTROLLER.getComponent());
+        bottomBar.add(statusLabel);
         createToolBar();
         createMenuBar();
         imageContainer = new JPanel(new GridBagLayout());
@@ -148,7 +157,9 @@ public class ImageEditorComponent implements EditorToolTarget {
     }
 
     private void enableSaving() {
-        saveNode.fire(true);
+        if (!readOnly && !loading && editedImage != null) {
+            saveNode.fire(true);
+        }
     }
 
     private void disableSaving() {
@@ -158,6 +169,11 @@ public class ImageEditorComponent implements EditorToolTarget {
     public void setEditedImage(TopComponent component, BufferedImage image, FileObject file) {
         this.owner = component;
         component.setActivatedNodes(new Node[]{saveNode});
+        editedFile = file;
+        editedImage = image;
+        loading = false;
+        loadError = null;
+        readOnly = file != null && "hdr".equalsIgnoreCase(file.getExt());
         if (file == null) {
             newFile = true;
             enableSaving();
@@ -165,12 +181,62 @@ public class ImageEditorComponent implements EditorToolTarget {
             newFile = false;
             disableSaving();
         }
-        editedFile = file;
-        editedImage = image;
+        updateReadOnlyState();
         resizeDisplay();
     }
 
+    /** Enters a non-editable loading state before file I/O starts on a worker thread. */
+    public void setLoadingState() {
+        loading = true;
+        readOnly = false;
+        loadError = null;
+        newFile = false;
+        editedFile = null;
+        editedImage = null;
+        setCurrentTool(null);
+        disableSaving();
+        updateReadOnlyState();
+        resizeDisplay();
+    }
+
+    /** Keeps editing disabled after a decode failure instead of exposing a null image. */
+    public void setLoadFailed(String message) {
+        loading = false;
+        readOnly = false;
+        loadError = message;
+        editedImage = null;
+        disableSaving();
+        updateReadOnlyState();
+        resizeDisplay();
+    }
+
+    private void updateReadOnlyState() {
+        boolean editable = !loading && !readOnly && editedImage != null;
+        for (AbstractButton control : editControls) {
+            control.setEnabled(editable);
+        }
+        if (filtersMenu != null) {
+            filtersMenu.setEnabled(editable);
+        }
+        if (loading) {
+            statusLabel.setText("Loading image...");
+        } else if (loadError != null) {
+            statusLabel.setText("Cannot open image");
+        } else {
+            statusLabel.setText(readOnly ? "HDR preview: Reinhard, 0 EV (read-only)" : " ");
+        }
+        if (!editable) {
+            disableSaving();
+        }
+    }
+
     private void resizeDisplay() {
+        if (editedImage == null) {
+            imageScreen.setPreferredSize(new Dimension(0, 0));
+            COMPONENT.revalidate();
+            COMPONENT.repaint();
+            return;
+        }
         Dimension s = new Dimension(
                 (int) (editedImage.getWidth() * scaleX),
                 (int) (editedImage.getHeight() * scaleY));
@@ -248,9 +314,17 @@ public class ImageEditorComponent implements EditorToolTarget {
                 rotateLeft, mirrorX, mirrorY, colorPicker, imageCrop)) {
             b.addActionListener(al);
         }
+        editControls.addAll(Arrays.asList(resize, rotateLeft, mirrorX, mirrorY,
+                colorPicker, imageCrop));
     }
 
     private void confirmAndSave() {
+        if (readOnly || editedImage == null) {
+            DialogDisplayer.getDefault().notify(new NotifyDescriptor.Message(
+                    readOnly ? "HDR preview is read-only." : "No image is available to save.",
+                    NotifyDescriptor.INFORMATION_MESSAGE));
+            return;
+        }
         Confirmation msg = new NotifyDescriptor.Confirmation("Confirm overwriting?",
                 NotifyDescriptor.OK_CANCEL_OPTION,
                 NotifyDescriptor.QUESTION_MESSAGE);
@@ -356,7 +430,8 @@ public class ImageEditorComponent implements EditorToolTarget {
 
     private void createMenuBar() {
         JMenuBar menuBar = new JMenuBar();
-        JMenu filters = new JMenu("Filters");
+        filtersMenu = new JMenu("Filters");
+        JMenu filters = filtersMenu;
         menuBar.add(filters);
         topContainer.add(menuBar, BorderLayout.NORTH);
 

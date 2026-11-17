@@ -159,9 +159,24 @@ public class ShaderNodePanel extends NodePanel implements InOut,
     @Override
     public void mouseReleased(MouseEvent e) {
         super.mouseReleased(e);
-        if (svdx != getLocation().x) {
-            firePropertyChange(ShaderNodeBlock.POSITION, svdx, getLocation().x);
+        if (svdx != getLocation().x || svdy != getLocation().y) {
+            boolean updated = false;
+            for (com.jme3.gde.core.editor.nodes.Selectable selected : diagram.getSelectedItems()) {
+                if (selected instanceof ShaderNodePanel) {
+                    ShaderNodePanel selectedNode = (ShaderNodePanel) selected;
+                    selectedNode.notifyPositionChanged(selectedNode.getDragStartLocation().x,
+                            selectedNode.getLocation().x);
+                    updated |= selectedNode == this;
+                }
+            }
+            if (!updated) {
+                notifyPositionChanged(getDragStartLocation().x, getLocation().x);
+            }
         }
+    }
+
+    public void notifyPositionChanged(int oldX, int newX) {
+        firePropertyChange(ShaderNodeBlock.POSITION, oldX, newX);
     }
 
     @Override

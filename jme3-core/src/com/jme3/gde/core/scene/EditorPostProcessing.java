@@ -16,10 +16,13 @@ import java.util.Map;
  * or non-Lit diagnostic view bypasses this chain to avoid processing twice.
  * RGBA16F is preferred, RGBA32F is the fallback; unsupported GPUs bypass it.
  * This processor never attaches to GI capture viewports or modifies scene assets.
+ * Manual exposure defaults to 0 EV, after scene effects and before Bloom/ToneMap.
  * <pre>
  * 第一步：展开 Scene Details 的 Post processing，默认启用 HDR、ToneMap 和 FXAA。
  * 第二步：勾选所需效果，展开各效果子分组，调整参数；关闭效果会保留其参数。
  * 第三步：关闭 Global HDR / FPP 进行原始结果对照，再开启恢复配置。
+ * 第四步：展开 Exposure，调节 Compensation (EV)；+1 加倍、-1 减半，0 恢复。
+ * 曝光仅影响预览，随此处理器的旁路规则关闭；它不替代 Bloom 的提取参数。
  * </pre>
  */
 final class EditorPostProcessing {
@@ -47,6 +50,7 @@ final class EditorPostProcessing {
         add("SSAO", new SSAOFilter(), false);
         add("Fog", new FogFilter(), false);
         add("DepthOfField", new DepthOfFieldFilter(), false);
+        add("Exposure", new ExposureFilter(), true);
         add("Bloom", new BloomFilter(BloomFilter.GlowMode.Scene), false);
         add("ToneMap", new ToneMapFilter(), true);
         add("FXAA", new FXAAFilter(), true);
@@ -66,6 +70,8 @@ final class EditorPostProcessing {
             enabled = value != 0;
         } else if (option.equals("Lit")) {
             lit = value != 0;
+        } else if (processor != null && option.equals("ExposureCompensation")) {
+            ((ExposureFilter) filters.get("Exposure")).setExposureCompensation((float) value);
         } else if (processor != null && option.equals("BloomIntensity")) {
             ((BloomFilter) filters.get("Bloom")).setBloomIntensity((float) value);
         } else if (processor != null && option.equals("WhitePoint")) {

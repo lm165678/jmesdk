@@ -44,7 +44,6 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.event.MouseMotionListener;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Icon;
@@ -80,8 +79,11 @@ public abstract class Diagram extends JPanel implements MouseListener,
     protected ConnectionEndpoint draggedFrom;
     protected ConnectionEndpoint draggedTo;  
     private final Point pp = new Point();
-    protected Point clickLoc = new Point(0, 0);    
-    
+    protected Point clickLoc = new Point(0, 0);
+    private Rectangle selectionRectangle;
+    private Point selectionOrigin;
+    private double zoom = 1.0;
+
     // dynamic switching between the regular and the move cursor (MMB)
     private final Cursor defCursor = Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR);
     private final Cursor hndCursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR);
@@ -114,7 +116,7 @@ public abstract class Diagram extends JPanel implements MouseListener,
     public void mousePressed(MouseEvent e) {
         if (SwingUtilities.isLeftMouseButton(e)) {
             if (mouseLMBPrePressedEvent(e)) {
-                return; // event already consumed
+                return;
             }
 
             for (Connection connection : connections) {
@@ -125,57 +127,125 @@ public abstract class Diagram extends JPanel implements MouseListener,
                 }
             }
 
-            selectedItems.clear();
+            if (!e.isShiftDown() && !e.isControlDown()) {
+                selectedItems.clear();
+            }
+            selectionOrigin = e.getPoint();
+            selectionRectangle = new Rectangle(selectionOrigin);
+            requestFocusInWindow();
             repaint();
         } else if (e.getButton() == MouseEvent.BUTTON2) {
-            // change to "move using mouse wheel button" and set the cursor
             setCursor(hndCursor);
             pp.setLocation(e.getPoint());
-            ((JScrollPane)getParent().getParent()).setWheelScrollingEnabled(false);
+            JScrollPane scrollPane = getScrollPane();
+            if (scrollPane != null) {
+                scrollPane.setWheelScrollingEnabled(false);
+            }
         }
     }
 
     @Override
     public void mouseReleased(MouseEvent e) {
+        if (SwingUtilities.isLeftMouseButton(e) && selectionRectangle != null) {
+            updateSelectionRectangle(e.getPoint());
+            for (NodePanel node : nodes) {
+                if (selectionRectangle.intersects(node.getBounds()) && !selectedItems.contains(node)) {
+                    selectedItems.add(node);
+                }
+            }
+            selectionRectangle = null;
+            selectionOrigin = null;
+            repaint();
+        }
         switch (e.getButton()) {
             case MouseEvent.BUTTON2:
                 setCursor(defCursor);
-                ((JScrollPane) getParent().getParent()).setWheelScrollingEnabled(true);
+                JScrollPane scrollPane = getScrollPane();
+                if (scrollPane != null) {
+                    scrollPane.setWheelScrollingEnabled(true);
+                }
                 break;
             case MouseEvent.BUTTON3:
-                contextMenu.show(this, e.getX(), e.getY());
+                contextMenu.show(this, (int) Math.round(e.getX() * zoom),
+                        (int) Math.round(e.getY() * zoom));
                 clickLoc.setLocation(e.getX(), e.getY());
                 break;
         }
-
     }
-    
+
     @Override
     public void mouseEntered(MouseEvent e) {}
 
     @Override
     public void mouseExited(MouseEvent e) {}
-    
+
     @Override
     public void mouseMoved(MouseEvent e) {}
-    
+
     @Override
     public void mouseDragged(MouseEvent e) {
-        if (SwingUtilities.isLeftMouseButton(e)) {
+        if (SwingUtilities.isLeftMouseButton(e) && selectionRectangle != null) {
+            updateSelectionRectangle(e.getPoint());
+            repaint();
         } else if (SwingUtilities.isMiddleMouseButton(e)) {
-            JViewport vport = (JViewport) getParent();
-            Point cp = e.getPoint();
-            Point vp = vport.getViewPosition();
-            vp.translate(pp.x - cp.x, pp.y - cp.y);
-            scrollRectToVisible(new Rectangle(vp, vport.getSize()));
-            //pp.setLocation(cp);
+            JViewport viewport = getViewport();
+            if (viewport != null) {
+                Point cp = e.getPoint();
+                Point vp = viewport.getViewPosition();
+                vp.translate((int) Math.round((pp.x - cp.x) * zoom),
+                        (int) Math.round((pp.y - cp.y) * zoom));
+                Dimension viewSize = viewport.getViewSize();
+                Dimension extentSize = viewport.getExtentSize();
+                vp.x = Math.max(0, Math.min(vp.x, viewSize.width - extentSize.width));
+                vp.y = Math.max(0, Math.min(vp.y, viewSize.height - extentSize.height));
+                viewport.setViewPosition(vp);
+            }
         }
+    }
+
+    private void updateSelectionRectangle(Point current) {
+        selectionRectangle.x = Math.min(selectionOrigin.x, current.x);
+        selectionRectangle.y = Math.min(selectionOrigin.y, current.y);
+        selectionRectangle.width = Math.abs(current.x - selectionOrigin.x);
+        selectionRectangle.height = Math.abs(current.y - selectionOrigin.y);
+    }
+
+    @Override
+    protected void paintComponent(java.awt.Graphics graphics) {
+        super.paintComponent(graphics);
+        if (selectionRectangle != null) {
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) graphics.create();
+            g2.setColor(new Color(100, 150, 255, 45));
+            g2.fill(selectionRectangle);
+            g2.setColor(new Color(160, 200, 255, 220));
+            g2.draw(selectionRectangle);
+            g2.dispose();
+        }
+    }
+
+    public JViewport getViewport() {
+        return (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, this);
+    }
+
+    public JScrollPane getScrollPane() {
+        return (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+    }
+
+    public double getZoom() {
+        return zoom;
+    }
+
+    public void setZoom(double zoom) {
+        this.zoom = zoom;
+    }
+
+    protected void notifyConnectionRejected(ConnectionEndpoint start, ConnectionEndpoint end) {
     }
 
     public NodeEditor getEditorParent() {
         return parent;
     }
-    
+
     public void setEditorParent(NodeEditor parent) {
         this.parent = parent;
     }
@@ -241,16 +311,23 @@ public abstract class Diagram extends JPanel implements MouseListener,
         int result = JOptionPane.showConfirmDialog(null, "Delete all selected items, nodes and mappings?", "Delete Selected", JOptionPane.OK_CANCEL_OPTION);
         
         if (result == JOptionPane.OK_OPTION) {
-            for (Selectable selectedItem : selectedItems) {
+            List<Selectable> itemsToRemove = new ArrayList<Selectable>(selectedItems);
+            for (Selectable selectedItem : itemsToRemove) {
                 if (selectedItem instanceof NodePanel) {
-                    removeNode((NodePanel)selectedItem);
-                }
-                if (selectedItem instanceof Connection) {
+                    removeNode((NodePanel) selectedItem);
+                } else if (selectedItem instanceof Connection) {
                     removeSelectedConnection(selectedItem);
+                } else {
+                    removeCustomSelectable(selectedItem);
                 }
             }
             selectedItems.clear();
+            revalidate();
+            repaint();
         }
+    }
+
+    protected void removeCustomSelectable(Selectable selectable) {
     }
 
     /**
@@ -259,13 +336,15 @@ public abstract class Diagram extends JPanel implements MouseListener,
      */
     public void removeNode(NodePanel node) {
         nodes.remove(node);
-        for (Iterator<Connection> it = connections.iterator(); it.hasNext();) {
-            Connection conn = it.next();
+        List<Connection> nodeConnections = new ArrayList<Connection>();
+        for (Connection conn : connections) {
             if (conn.start.getNode() == node || conn.end.getNode() == node) {
-                it.remove();
-                removeConnection(conn);
-                parent.notifyRemoveConnection(conn);
+                nodeConnections.add(conn);
             }
+        }
+        for (Connection conn : nodeConnections) {
+            removeConnection(conn);
+            parent.notifyRemoveConnection(conn);
         }
 
         node.cleanup();
@@ -370,7 +449,7 @@ public abstract class Diagram extends JPanel implements MouseListener,
         if (!multi && !selectedItems.contains(selectable)) {
             selectedItems.clear();
         }
-        if (selectable != null) {
+        if (selectable != null && !selectedItems.contains(selectable)) {
             selectedItems.add(selectable);
         }
         if (selectable instanceof Component) {
@@ -434,6 +513,13 @@ public abstract class Diagram extends JPanel implements MouseListener,
         removeAll();
         connections.clear();
         nodes.clear();
+        selectedItems.clear();
+        draggedFrom = null;
+        draggedTo = null;
+        selectionRectangle = null;
+        selectionOrigin = null;
+        revalidate();
+        repaint();
     }
 
     /**
@@ -483,18 +569,28 @@ public abstract class Diagram extends JPanel implements MouseListener,
     private void removeConnection(Connection selectedConnection) {
         ConnectionEndpoint start = selectedConnection.getStart();
         ConnectionEndpoint end = selectedConnection.getEnd();
-        
+        Rectangle oldBounds = selectedConnection.getBounds();
+
         connections.remove(selectedConnection);
-        end.disconnect();
-        start.disconnect();
+        selectedItems.remove(selectedConnection);
+        if (draggedFrom == start || draggedFrom == end) {
+            draggedFrom = null;
+        }
+        if (draggedTo == start || draggedTo == end) {
+            draggedTo = null;
+        }
+        end.disconnect(selectedConnection);
+        start.disconnect(selectedConnection);
         remove(selectedConnection);
-        
+
         if (start.getNode() instanceof NodePanel) {
-            ((NodePanel)start.getNode()).onDisconnect(selectedConnection);
+            ((NodePanel) start.getNode()).onDisconnect(selectedConnection);
         }
         if (end.getNode() instanceof NodePanel) {
-            ((NodePanel)end.getNode()).onDisconnect(selectedConnection);
+            ((NodePanel) end.getNode()).onDisconnect(selectedConnection);
         }
+        revalidate();
+        repaint(oldBounds);
     }
 
     /**

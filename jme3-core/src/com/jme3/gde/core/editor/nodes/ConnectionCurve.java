@@ -37,6 +37,7 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.RenderingHints;
+import java.awt.Rectangle;
 import java.awt.event.ComponentEvent;
 import java.awt.event.ComponentListener;
 import java.awt.event.KeyEvent;
@@ -264,6 +265,7 @@ public class ConnectionCurve extends JPanel implements ComponentListener,
     }
 
     public final void resize(ConnectionEndpoint start, ConnectionEndpoint end) {
+        Rectangle oldBounds = getBounds();
         Point startLocation = start.getStartLocation();
         Point endLocation = end.getEndLocation();
 
@@ -281,70 +283,45 @@ public class ConnectionCurve extends JPanel implements ComponentListener,
             points[1].x = endLocation.x;
             points[1].y = startLocation.y;
             points[2].setLocation(endLocation);
-        } else if (startLocation.x + MARGIN <= endLocation.x - MARGIN) {
-            pointsSize = 4;
-            points[0].setLocation(startLocation);
-            points[1].x = getVMiddleStart();
-            points[1].y = startLocation.y;
-            points[2].x = getVMiddleStart();
-            points[2].y = endLocation.y;
-            points[3].setLocation(endLocation);
         } else if (startLocation.x <= endLocation.x) {
             pointsSize = 4;
+            int distance = endLocation.x - startLocation.x;
+            int controlDistance = distance >= MARGIN * 2
+                    ? distance / 2 : Math.max(8, distance / 2);
             points[0].setLocation(startLocation);
-            points[1].x = getVMiddleStartNoMargin();
+            points[1].x = startLocation.x + controlDistance;
             points[1].y = startLocation.y;
-            points[2].x = getVMiddleStartNoMargin();
+            points[2].x = endLocation.x - controlDistance;
             points[2].y = endLocation.y;
             points[3].setLocation(endLocation);
         } else {
             pointsSize = 7;
+            int lane = 6 * (start.getIndex() + end.getIndex() + 1);
+            int right = Math.max(start.getNode().getLocation().x + start.getNode().getWidth(),
+                    end.getNode().getLocation().x + end.getNode().getWidth()) + MARGIN + lane;
+            int left = Math.min(start.getNode().getLocation().x,
+                    end.getNode().getLocation().x) - MARGIN - lane;
+            int bottom = Math.max(start.getNode().getLocation().y + start.getNode().getHeight(),
+                    end.getNode().getLocation().y + end.getNode().getHeight()) + MARGIN + lane;
             points[0].setLocation(startLocation);
-            points[6].setLocation(endLocation);
-            points[1].x = getVMiddleStart();
+            points[1].x = right;
             points[1].y = startLocation.y;
-
-            points[5].x = getVMiddleEnd();
+            points[2].x = right;
+            points[2].y = bottom;
+            points[3].x = (right + left) / 2;
+            points[3].y = bottom;
+            points[4].x = left;
+            points[4].y = bottom;
+            points[5].x = left;
             points[5].y = endLocation.y;
-            if ((start.getNode().getLocation().y + start.getNode().getHeight() + MARGIN
-                    > end.getNode().getLocation().y - MARGIN)
-                    && (end.getNode().getLocation().y + end.getNode().getHeight() + MARGIN
-                    > start.getNode().getLocation().y - MARGIN)) {
-
-                if (startLocation.y + MARGIN <= endLocation.y - MARGIN) {
-                    points[1].x = getVMiddleStartClampedRight();
-                    points[2].x = getVMiddleStartClampedRight();
-                } else {
-                    points[1].x = getVMiddleStart();
-                    points[2].x = getVMiddleStart();
-                }
-                points[2].y = getHBottom();
-                points[4].y = getHBottom();
-
-                if (startLocation.y + MARGIN > endLocation.y - MARGIN) {
-                    points[4].x = getVMiddleEndClampedLeft();
-                    points[5].x = getVMiddleEndClampedLeft();
-                    points[3].x = points[4].x + (points[2].x - points[4].x) / 2;
-
-                } else {
-                    points[4].x = getVMiddleEnd();
-                    points[5].x = getVMiddleEnd();
-                    points[3].x = points[4].x + (points[2].x - points[4].x) / 2;
-                }
-
-                points[3].y = getHBottom();
-
-            } else {
-
-                points[2].x = getVMiddleStart();
-                points[2].y = getHMiddle();
-                points[3].x = points[4].x + (points[2].x - points[4].x) / 2;
-                points[3].y = getHMiddle();
-                points[4].x = getVMiddleEnd();
-                points[4].y = points[3].y;
-            }
+            points[6].setLocation(endLocation);
         }
         updateBounds();
+        Diagram diagram = getDiagram();
+        if (diagram != null) {
+            diagram.repaint(oldBounds);
+            diagram.repaint(getBounds());
+        }
     }
 
     private void updateBounds() {
@@ -413,7 +390,8 @@ public class ConnectionCurve extends JPanel implements ComponentListener,
         boolean selected = false;
 
         for (int i = 0; i < nbCurve && !selected; i++) {
-            selected = curves[i].intersects(e.getX() - margin, e.getY() - margin, e.getX() + margin, e.getY() + margin);
+            selected = curves[i].intersects(e.getX() - margin, e.getY() - margin,
+                    margin * 2, margin * 2);
         }
 
         if (selected) {

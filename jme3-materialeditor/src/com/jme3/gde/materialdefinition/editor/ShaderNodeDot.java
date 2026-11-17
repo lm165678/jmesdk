@@ -50,16 +50,6 @@ public class ShaderNodeDot extends ConnectionEndpoint {
     
     @Override
     public boolean canConnect(ConnectionEndpoint pair) {
-        // One is at least outBus but the shaderType doesn't match
-        if (pair != null && pair instanceof ShaderNodeDot &&
-                (pair.getNode() instanceof ShaderOutBusPanel || 
-                    node instanceof ShaderOutBusPanel) && 
-                    shaderType != ((ShaderNodeDot)pair).shaderType) {
-            setIcon(Icons.imgOrange);
-            return false;
-        }
-        
-        // cannot connect to: nothing || input panels ||
         if (pair == null || paramType == ParamType.Input) {
             setIcon(Icons.imgOrange);
             return false;
@@ -71,14 +61,36 @@ public class ShaderNodeDot extends ConnectionEndpoint {
             return false;
         }
     }
-    
+
     @Override
     protected boolean allowConnection(ConnectionEndpoint pair) {
-        return matches(pair.getType(), getType()) && (pair.getParamType() != getParamType()
-            || pair.getParamType() == ParamType.Both
-            || getParamType() == ParamType.Both)
-            || ShaderUtils.isSwizzlable(pair.getType())
-            && ShaderUtils.isSwizzlable(getType());
+        boolean directionAllowed = pair.getParamType() != getParamType()
+                || pair.getParamType() == ParamType.Both
+                || getParamType() == ParamType.Both;
+        boolean typesAllowed = matches(pair.getType(), getType())
+                || ShaderUtils.isSwizzlable(pair.getType())
+                && ShaderUtils.isSwizzlable(getType());
+        return directionAllowed && typesAllowed && isStageConnectionAllowed(pair);
+    }
+
+    private boolean isStageConnectionAllowed(ConnectionEndpoint pair) {
+        if (!(pair instanceof ShaderNodeDot)) {
+            return true;
+        }
+        ShaderNodeDot other = (ShaderNodeDot) pair;
+        if (pair.getNode() instanceof ShaderOutBusPanel || node instanceof ShaderOutBusPanel) {
+            return shaderType == other.shaderType;
+        }
+        if (shaderType == Shader.ShaderType.Fragment
+                && other.shaderType == Shader.ShaderType.Vertex) {
+            return false;
+        }
+        if (node instanceof ShaderNodePanel
+                && ((ShaderNodePanel) node).getType() == ShaderNodePanel.NodeType.Attribute
+                && other.shaderType == Shader.ShaderType.Fragment) {
+            return false;
+        }
+        return true;
     }
     
     /**

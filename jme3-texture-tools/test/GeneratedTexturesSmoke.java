@@ -47,6 +47,9 @@ public final class GeneratedTexturesSmoke {
         require(store.ensure(key, tools).equals(generated), "Reuse path");
         require(Files.getLastModifiedTime(generated).equals(timestamp), "Fresh DDS was rewritten");
         require(new GeneratedTextures(root).resolve(key).equals(generated), "Registry did not persist");
+        require(store.isGeneratedOutputDirectory(model.resolve("dds")), "Generated output folder not detected");
+        require(!store.isGeneratedOutputDirectory(model), "Source folder wrongly flagged as generated output");
+        require(!store.isGeneratedOutputDirectory(root), "Asset root wrongly flagged as generated output");
         System.out.println("PASS generation, reuse and persistent logical mapping");
 
         image.setRGB(1, 1, 0xff00ff00);

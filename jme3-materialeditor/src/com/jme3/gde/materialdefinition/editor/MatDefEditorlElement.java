@@ -35,6 +35,7 @@ import com.jme3.gde.core.editor.nodes.ConnectionEndpoint;
 import com.jme3.gde.core.editor.nodes.Connection;
 import com.jme3.gde.core.editor.nodes.NodeEditor;
 import com.jme3.gde.core.editor.nodes.Diagram;
+import com.jme3.gde.core.editor.nodes.DiagramZoomLayer;
 import com.jme3.gde.core.editor.nodes.NodePanel;
 import com.jme3.gde.core.editor.nodes.Selectable;
 import com.jme3.gde.core.assets.ProjectAssetManager;
@@ -117,6 +118,7 @@ public final class MatDefEditorlElement extends JPanel implements
     @SuppressWarnings("LeakingThisInConstructor")
     public MatDefEditorlElement(final Lookup lkp) {
         initComponents();
+        jScrollPane1.setViewportView(new DiagramZoomLayer(diagram1));
         obj = lkp.lookup(MatDefDataObject.class);
         metaData = lkp.lookup(MatDefMetaData.class);
         if (obj == null) { // This happens when there was an error or maybe the object
@@ -175,6 +177,8 @@ public final class MatDefEditorlElement extends JPanel implements
         List<ShaderNodeVariable> attributes = new ArrayList<ShaderNodeVariable>();
         List<ShaderNodeVariable> uniforms = new ArrayList<ShaderNodeVariable>();
         initData(technique, manager, vertexGlobals, fragmentGlobals, attributes, matDef, uniforms);
+        ensureGlobal(vertexGlobals, "position");
+        ensureGlobal(fragmentGlobals, "color");
 
         int i = 0;
         for (ShaderNodeBlock sn : technique.getShaderNodes()) {
@@ -225,6 +229,9 @@ public final class MatDefEditorlElement extends JPanel implements
                 i++;
             }
         }
+
+        diagram1.loadComments(metaData.getProperty(
+                diagram1.getCurrentTechniqueName() + "/__comments", ""));
 
         for (ShaderNodeBlock sn : technique.getShaderNodes()) {
             //NodePanel np = diagram1.getNodePanel(sn.getName());
@@ -381,7 +388,12 @@ public final class MatDefEditorlElement extends JPanel implements
         shaderEditPanel1.revalidate();
         if (!shaderEditPanel1.isVisible() || jSplitPane.getDividerLocation() == jSplitPane.getMinimumDividerLocation()) {
             shaderEditPanel1.setVisible(true);
-            jSplitPane.setDividerLocation(650);
+            int width = jSplitPane.getWidth();
+            int divider = width > 0 ? Math.round(width * 0.55f) : 650;
+            if (width > 0) {
+                divider = Math.min(divider, Math.max(200, width - 300));
+            }
+            jSplitPane.setDividerLocation(divider);
         }
 
     }
@@ -497,6 +509,7 @@ public final class MatDefEditorlElement extends JPanel implements
 
     @Override
     public void componentClosed() {
+        diagram1.cleanup();
     }
 
     @Override
@@ -646,6 +659,15 @@ public final class MatDefEditorlElement extends JPanel implements
         conn.makeKey(mapping, diagram1.getCurrentTechniqueName());
     }
 
+    private void ensureGlobal(List<ShaderNodeVariable> globals, String name) {
+        for (ShaderNodeVariable global : globals) {
+            if (name.equals(global.getName())) {
+                return;
+            }
+        }
+        globals.add(0, new ShaderNodeVariable("vec4", name));
+    }
+
     private void initData(TechniqueBlock technique, ProjectAssetManager manager, List<ShaderNodeVariable> vertexGlobals, List<ShaderNodeVariable> fragmentGlobals, List<ShaderNodeVariable> attributes, MatDefBlock matDef, List<ShaderNodeVariable> uniforms) {
         for (ShaderNodeBlock sn : technique.getShaderNodes()) {
             ShaderNodeDefinition def = MaterialUtils.loadShaderNodeDefinition(sn, manager);
@@ -730,6 +752,10 @@ public final class MatDefEditorlElement extends JPanel implements
     @Override
     public void savePositionToMetaData(String key, int x, int y) throws NumberFormatException {
         metaData.setProperty(diagram1.getCurrentTechniqueName() + "/" + key, x + "," + y);
+    }
+
+    public void saveCommentsToMetaData(String encodedComments) {
+        metaData.setProperty(diagram1.getCurrentTechniqueName() + "/__comments", encodedComments);
     }
 
     public void reload() {

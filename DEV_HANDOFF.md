@@ -1,3 +1,86 @@
+## 2026-11-18 fork publication checkpoint
+
+- Publish current SDK source changes: Unity importer, material graph interaction and comment deletion fix, texture import/editor changes, asset-browser folder rename, GI inspector layout and exposure integration. Historical uncommitted labels below describe earlier checkpoints.
+- Preserve the validation distinctions below: targeted compilation/smoke checks for Unity, graph zoom, comment deletion and exposure are recorded; the complete SDK and the other pending UI/native scenarios have not been validated for this publication. No full SDK build was run.
+- Generated engine JARs, extracted templates/test assets, crash/build logs and regenerated deployment archives remain local and are excluded. Exact paired implementation revisions follow in a documentation-only commit.
+- Sponza marked-view single-bounce rebake was accepted visually by the user; baking quality comparisons are left to the user. Do not claim all dark regions or TestScene3 visuals validated.
+
+## 2026-11-18 材质备注删除保护（工作区修改，未提交）
+
+- ShaderNodeDiagram.selectComment 不再自动把框内节点加入 selectedItems，普通点击备注会清除其他选集。Delete 使用显式选集，因此单选备注只删除备注；Ctrl/Shift 手动多选节点仍保留原多选语义。
+- ShaderCommentPanel 将框内未显式选中的节点起始位置单独记录，拖动时按备注实际位移移动，释放时保存节点坐标及排序通知；缩放备注框不移动节点。包含关系不再等同删除关系。
+- JDK 25 独立编译通过。tools/tests/MaterialCommentSmoke.java 的 EDT 鼠标/键盘回归输出 MATERIAL_COMMENT_DELETE_DRAG_PASS，退出码 0：单选、拖动、坐标保存、Delete 后节点仍在。测试只绕过删除确认弹窗，没有运行原生预览或完整 SDK。未提交或推送。
+
+## 2026-11-18 Unity importer 全模块复查与材质编辑器检查（工作区修改，未提交）
+
+- Unity 插件此前没有经过完整模块编译：除上一轮重复资源键外，UnityMaterialReader 将 loadAsset(String) 的 Object 返回为 Material；改用 loadMaterial。原 smoke 对 Spatial 调用 Node.getChild 的两处编译错误也已修复。
+- 通读全部 9 个生产 Java 文件、测试及模块配置。修正 .meta 数字键被强制转为 String 的问题、禁用 Renderer 仍生成网格、循环父子关系、没有 Unity YAML 文档却返回空场景、并发共享 YAML Load；内置 Cylinder/Capsule 轴向和 Plane/Quad 中心修正。
+- JDK 25 全插件源码和测试含注解处理独立编译通过。扩展 UnitySceneImporterSmoke：真实材质/Prefab 覆盖、J3O 保存重载、两种数字网格 ID 表、已有 J3M、原点/轴向、禁用 Renderer、循环层级、非法场景；运行输出 UNITY_SCENE_IMPORTER_SMOKE_PASS。独立 NetBeans 运行需 java.net add-opens 和临时 netbeans.user；测试断言结束后 NetBeans 后台线程不退出，手工结束测试进程。命令进程仍偶发 0xC0000005；未修改全局 JVM 参数。
+- 材质编辑器全部 Java 源码与共享节点组件独立 javac 编译通过（不运行注解处理）；未执行完整 SDK 构建或 UI/原生预览验收。新备注的撤销未接入，且仅改备注时元数据保存依赖 J3MD 文件变更事件，仍需后续解决独立保存流程。复杂 Unity 嵌套 Prefab/stripped 父引用、完整骨骼重映射、真实项目渲染不在本次通过的用例范围。
+
+## 2026-11-18 Unity importer 注册编译修复（工作区修改，未提交）
+
+- SDK daemon 日志确认 `UnitySceneDataObject` 的实际错误为 `Key LBL_UNITY_LOADER is a duplicate of one from Bundle.properties`。删除重复的 `@Messages` 注解及 import，保留 Bundle.properties 的资源键和现有显示名称引用。
+- JDK 25 单文件编译启用完整注解处理（`-proc:full`）通过，输出到 build/unity-registration-check；生成的 NetBeans layer 保留 Unity scene/prefab MIME、DataObject 和动作注册。未构建或启动完整 SDK，未提交或推送。
+- 首次普通 javac 进程以 Windows 0xC0000005 退出；仅此次验证增加 `-J-Xint` 重试成功，仍有一个无关注解处理器 source 版本警告。未修改全局 JVM/构建参数；进程偶发崩溃原因仍未确定。
+
+## 2026-11-18 Shader Node 缩放层编译修复（工作区修改，未提交）
+
+- 从 Gradle daemon 编译日志确认 3 个错误均在 `DiagramZoomLayer`：继承 final `JLayer`、玻璃面板不是要求的 `JPanel`、`LayerUI.paint` 覆盖签名错误。旧动画 API 的 deprecation 警告不是此次失败原因。
+- 改为 `JPanel` 包装 `JLayer<Diagram>`，使用透明 `JPanel` 接收缩放后的鼠标事件；修正绘制覆盖签名并按缩放比例布局内部 Diagram，保留现有 getView 调用方式。
+- 使用本机 JDK 25 对 core/editor/nodes 全部源码进行独立 javac 编译通过。新增 `tools/tests/DiagramZoomSmoke.java`，无窗口 Swing EDT 测试通过 `DIAGRAM_ZOOM_COMPOSITION_PAINT_INPUT_PASS`：2 倍绘制、逆变换鼠标坐标、恢复 1 倍事件处理。输出仅在 build/diagram-zoom-check。
+- 未执行完整 SDK 构建、部署或启动；实际 NetBeans 编辑器交互仍待用户重建后验证。现有 SDK 缓存类为 Java 25 class version 69，不能使用 JDK 21 编译器读取。未更改全局 JDK 或引擎源码，也未提交或推送。
+
+## 2026-11-17 材质定义 Shader Node 编辑器完善（工作区修改，未提交）
+
+- 标准 `position`/`color` 输出总线在加载每个 Technique 时显式补齐并去重，不再依赖残留连接。修正底部输出总线的画布宽高、默认元数据回退和标题字体，保留黄/蓝总线及预览交互。
+- 端口跟踪全部连接，删除单条扇出连接不会把仍有连接的端口变灰；断线清理选集、临时拖拽状态和旧曲线区域。非法连接仅在鼠标释放时弹出一次英文或简体中文警告。
+- 紧密节点使用稳定 S 曲线，反向连接使用底部动态通道；修正曲线命中区域及删除节点时重复移除连接的问题。
+- 支持 Shift+滚轮以光标为锚点缩放（25%–300%），普通滚轮仍滚动。缩放层通过玻璃面板反变换并重新分派事件，保证节点、端口和框选命中；拖拽连接时独立更新悬停端口。
+- 空白拖拽框选、Ctrl/Shift 多选和整组移动可用，移动后保存全部节点坐标及空间顺序。框选后按 C 创建备注框，双击编辑，拖动备注框移动完全包含的整组节点，右下角仅调整框大小。备注以独立 `.properties` 元数据按 Technique 保存，不改变 J3MD；文本输入时 C 不触发备注。
+- 修正 Shader 页工具栏对齐和源码分割比例，`.java`/`.form` 已同步。切换 Technique 清理输出总线预览，关闭编辑器清理背景预览。
+- 未获构建授权，未编译或启动 SDK。两轮只读静态复查发现的问题已修复，IDE 诊断无错误。仍需实际 SDK 验证缩放后连线、框选/C、备注和输出条保存重开及多语言弹窗。
+
+## 2026-11-17 GI inspector horizontal growth fix
+- Root cause: ModelDetailTopComponent wrapped the GI root in a default JScrollPane. The ordinary root JPanel requested 360px, so the nested InspectorColumns width tracking never reached the viewport. Narrow docks/vertical scrollbars plus asynchronous grid/status relayout could produce horizontal scrolling and left-clipped labels.
+- Added InspectorColumns.WidthTrackedPanel: standalone dialogs still pack at 360px, while direct scroll views request zero preferred viewport width and always track actual viewport width. Long content affects height only. BakeGiProbeVolumeAction uses it; the GI Properties host now explicitly disables horizontal scrolling, uses vertical-as-needed scrolling and has zero minimum size/border.
+- SdkEditorSmoke adds SDK_GI_INSPECTOR_WIDTH_PASS with repeated 240/180/260px resizes, long changing grid/diagnostic text and vertical overflow, asserting exact root/field viewport widths and no horizontal scrollbar.
+- Validation: read-only host-chain review and IDE diagnostics clean. No build/compile/smoke/SDK run per user preference; actual NetBeans dock timing and visuals require rebuild/restart verification. Not committed or pushed.
+
+## 2026-11-17 GLB/glTF embedded texture extraction and DDS
+- Source-model conversion now passes the actual FileObject into ModelTexturePreparation. Root-level glTF imageN.png/jpg/jpeg keys are normalized from loaded pixels into `modelName.textures/imageN-fullSHA256.png`; this handles bufferView/data-URI images and prevents an unrelated root image0.png from capturing the J3O reference. Other external paths are unchanged; an ambiguous external root imageN URI is also safely normalized from its own pixels.
+- Stable TextureKeys retain mip/anisotropy/type hints and use flipY=false because extracted PNG rows already match decoded pixels. Equal content reuses the PNG/DDS; changed content gets a new hash and preserves old bytes. Writes use temporary files/no-overwrite moves and asset-root checks. J3O stores the stable logical key, and existing GeneratedTextures creates BC3/full-mip DDS beside the extracted source.
+- Supported extraction is non-compressed 8-bit luminance, luminance-alpha, RGB and RGBA. Compressed, missing-pixel, 16-bit, WebP/KTX2 and other unsupported cases retain their original key with warnings; no DDS success is claimed. Extraction/compression I/O failures abort before opening J3O output. Ordinary J3O saves and engine GltfLoader are unchanged.
+- ModelTextureMappingSmoke now covers root-name collisions, orientation/key flags, reuse/non-overwrite, per-model isolation, gray-alpha channels and a real generated minimal GLB through GltfLoader/Stb -> extraction -> DDS -> J3O reload. These tests are written, NOT run.
+- Validation: two read-only review passes; the root imageN collision found by review was fixed. IDE diagnostics clean. No build/compile/smoke/SDK run per the user's standing preference, so native encoding, actual GLB/J3O round trips, visible orientation and real-world assets remain unverified. Not committed or pushed.
+
+## 2026-11-17 texture editor PNG/JPG/TGA/HDR viewing
+- JmeTextureDataObject now registers hdr/HDR and always supplies OpenTexture; the malformed Loaders/image/image/x-jmetexture action path was corrected and unrelated text/plain registration removed.
+- IOModule now closes ImageIO streams, rejects null/corrupt images with IOException, reads TGA through a closeable MemoryCacheImageInputStream, and decodes HDR with StbImageLoader without texture-coordinate flipping. core.baselibs/core.libraries dependencies were added for Stb.
+- HdrImageConverter supports half-float RGB/RGBA/luminance images with 0 EV exposure, Reinhard tone mapping and linear-to-sRGB display conversion. HDR is explicitly read-only and cannot overwrite its source through IOModule.
+- File decoding runs on RequestProcessor with EDT UI updates. Loading/failure states disable editing; both TopComponent constructors share full component/Lookup initialization. PNG/JPG/TGA retain editing, while HDR disables filters/transforms/crop/save and shows the tone-mapping mode.
+- Added TextureEditorSmoke for PNG/JPG/TGA round trips, corrupt files, a real Radiance HDR decoded through Stb, half-float tone mapping and HDR write-back rejection. Static review findings (DataObject import, empty constructor initialization and loading-time null editing) were fixed.
+- Validation: IDE diagnostics clean. No build/compile/smoke/SDK run per the user's standing no-build preference, so native HDR decoding, actual file opening, Swing state and visual output remain unverified. Not committed or pushed.
+
+## 2026-11-17 independent Unity scene/prefab importer
+- Added suite module `jme3-unity-scene` (`com.jme3.gde.unityscene`). No existing module business code was changed; only the suite module list was extended. The module depends on core/engine public APIs and NetBeans SnakeYAML Engine, never the reverse.
+- AssetManagerConfigurator registers `.unity`/`.prefab`; the DataObject reuses core Open Model and Convert Model actions. Users copy Unity assets with `.meta` sidecars into the JME asset root, preview the YAML scene, then save a J3O snapshot with Convert Model.
+- Implemented YAML documents, GUID indexing, old/new material property layouts, imported mesh fileID names, GameObject/Transform hierarchy, built-in meshes, external model reuse with baked ancestor transforms, Standard/URP Lit/Legacy/Unlit materials, alpha cutout/blending, basic lights and prefab instances with grouped transform/name/activity/material overrides. Coordinate conversion is `(x,y,-z)` and `(-x,-y,z,w)`.
+- Explicit limits: no C# behaviour conversion, terrain/UI/physics/baked lighting/arbitrary component overrides, packed metallic-smoothness map conversion or Unity-identical rendering. Missing references produce `[Unity import]` warnings and a fallback/skip, not silent success. Cameras are metadata only.
+- Added headless `UnitySceneImporterSmoke` for real YAML-to-scene conversion and J3O round trip, including PBR, prefab quaternion/material overrides and alpha blending. Two read-only review passes were performed and their concrete findings fixed.
+- Validation: IDE diagnostics clean. No build/compile/smoke/SDK run per the user's standing no-build preference; preview, real-world Unity compatibility and rendering remain unverified. The generic same-version build-impl was included after diff confirmed only its project name differed; NetBeans may generate genfiles.properties later. A final git diff --check attempt hit the known 0xC0000005 shell crash and is not recorded as passed. Not committed or pushed.
+
+## 2026-11-17 manual preview exposure
+- Main scene EditorPostProcessing now owns ExposureFilter after DOF and before scene Bloom/ToneMap; default 0 EV preserves brightness. Post processing > Exposure > Compensation (EV), range -16..16, step .25. Reset to 0 restores brightness. Existing render-thread enqueue, Global HDR/FPP, diagnostic-view, unsupported-HDR and scene-owned-FPP bypass rules apply. Does not change J3O/GI capture or automatically add the chain to animation previews.
+- Engine ExposureFilter and shader/resources required, based on engine 25d2b714d / SDK a116cf8d plus these local changes. Targeted javac of panel/processor/helpers passed (build/exposure-sdk-compile.log); engine serialization and real ANGLE GPU HDR/alpha/bypass checks passed. Additional desktop-MSAA run blocked by host JVM/toolchain failures, not claimed passed. No running SDK UI validation, SDK build/deployment or push. Full color pipeline and automatic exposure remain future work.
+
+## 2026-11-17 asset folder rename with generated DDS guard
+- Asset Browser tree/grid folder context menu now offers Rename folder. Tree right-click targets the right-clicked folder; grid right-click targets a single selected folder. The asset root is excluded.
+- Rename validates a single name, rejects existing names, runs on the background RequestProcessor via FileObject.rename, and updates the current browse path when it is inside the renamed folder before rescanning.
+- GeneratedTextures.isGeneratedOutputDirectory(Path) detects a folder that directly holds registered DDS outputs from the ownership manifest, without relying on the "dds" name. Rename is disabled with an explanatory tooltip for such folders, and fail-closed if the registry cannot be read. The NetBeans masterfs move/rename interceptor still keeps the registry consistent for allowed moves.
+- jme3-assetbrowser now has a compile dependency on com.jme3.gde.texturetools; Bundle strings and a GeneratedTexturesSmoke assertion were added.
+- Validation: IDE diagnostics clean; no build/compile/smoke run/SDK restart per the user's standing no-build preference, so visible behavior and reference integrity after rename remain unverified. Rebuild/restart SDK and test ordinary folder rename, the dds disable message, and J3O/texture resolution. Not committed or pushed.
+
 ## 2026-11-17 paired implementation revisions
 - Engine implementation: `6f31fb125635c32e85184576f514dbf353aff27b` on `dev_fix_lightprobe_issue`.
 - SDK implementation: `029771dd08dc37e05ecc88ee012d2e7a9fdf8404` on `master` (also includes the preceding offline texture-tool archive commit).
@@ -310,3 +393,20 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - Property sheets expose common size/layout/alignment/visibility attributes. Layout, alignment and boolean values use choice editors; resource fields use the resource chooser. Sizes are validated through Nifty SizeValue and bare numbers become px; colors and malformed values are rejected inside the property panel without escaping to the EDT.
 - GElementNode observes its model and immediately refreshes Navigator labels after ID edits. A source-level EditAttributeCommand override validates IDs against the live GUI tree, fixing undo after rename. GUIWriter falls back to hierarchy-position matching so unknown content survives ID renames.
 - JDK 25 compilation and both smoke tests passed again, including choice editors, unit completion, size undo/redo, ID tree refresh/undo/redo and post-rename XML preservation. Redeployed the module JAR; restart required. Manual NetBeans interaction remains unverified. No commit/push.
+
+## 2026-11-17 local SDK daemon startup follow-up
+- User engine export succeeded (155 tasks); SDK Gradle 9.2.1 then failed to start its daemon with empty process output. No SDK compilation was reached; iOS deprecation notes were not the failure.
+- Retried only `gradlew.bat help --offline --stacktrace` with the same local Adoptium JDK 25 path: BUILD SUCCESSFUL in 16s, new daemon 28820, engine export revision 25d2b714d recognized. Startup failure is not reproduced; root cause remains unknown. No JDK/Gradle configuration change or complete SDK build performed.
+- Next user action: rerun build-and-run-sdk.bat to reuse the exported engine and build/start SDK. Full SDK compilation and runtime remain unverified by this follow-up.
+
+## 2026-11-17 sky intensity and SkyLight property cast repair
+- Added Sky lighting > Sky light intensity (>=0) to Sky geometry carrying SkyLightControl, and the same property on SkyLight. Default1, zero removes contribution, above1 brightens; serialized by new engine API. Existing render-thread embedded property/dirty path retained. Background/local reflection probes unchanged; baked GI not recomputed.
+- User screenshot/stack confirms ClassCastException at JmeLightProbe.createSheet: Capture resolution used makeProperty, which casts the control to the node LightProbe type. Changed it to makeEmbedProperty with SkyLightControl.class. Running old SDK requires rebuild/restart.
+- HDR linear-color messages are separate Material.checkTextureColorSpace warnings for parameters without an explicit requirement; no evidence that these caused the property exception. No forced sRGB conversion or global warning suppression applied.
+- Requires matching local engine changes after25d2b714d and SDK aftera116cf8d. Extended engine smoke example, but no build/compile/native UI/persistence validation run per existing preference. Source/diff checks only; no commit/push. Preserve unrelated concurrent edits.
+
+## 2026-11-18 Unity package import
+- Added .unitypackage MIME/data object and Import Unity Package action. Worker restores standard gzip/tar GUID asset/pathname/asset.meta entries into a fresh UnityImport-* sibling folder, preserving Assets paths and metadata. Existing assets are not overwritten. Optional J3O conversion delegates discovered .unity/.prefab files to existing ConvertModel dialogs; packages without scenes can still expose source models for individual conversion.
+- Rejects traversal, duplicate entries/paths, links and unsupported tar extensions; checks checksums/truncation and limits import to 100000 entries/4 GiB. Failed restoration removes its new output. Repeated imports prefer GUID references inside the current import directory. Missing dependencies and unsupported Unity components retain existing importer limitations.
+- Added standalone UnityPackageImporterSmoke source covering restoration, repeat imports, traversal cleanup and invalid gzip. Not compiled or executed, and no SDK build/deployment or actual user package conversion per existing no-build preference. Manual verification after rebuild: right-click package -> Import Unity Package -> optional conversion; inspect imported metadata, materials and J3O. Extended tar/PAX variants currently report unsupported entries rather than silently importing incomplete data.
+- SDK HEAD inspected a116cf8d; no engine API changes. Concurrent unrelated work preserved; no commit/push for this task.

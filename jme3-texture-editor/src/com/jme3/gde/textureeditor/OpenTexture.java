@@ -45,10 +45,7 @@ import org.openide.windows.CloneableTopComponent;
 @NbBundle.Messages("CTL_OpenTexture=Edit Texture")
 @ActionID(id = "com.jme3.gde.textureeditor.OpenTexture", category = "Window")
 @ActionReferences({
-    @ActionReference(path = "Loaders/image/png/Actions", position = 0),
-    @ActionReference(path = "Loaders/image/jpeg/Actions", position = 0),
-    @ActionReference(path = "Loaders/image/image/x-jmetexture/Actions",     position = 0),
-    @ActionReference(path = "Loaders/text/plain/Actions",       position = 0),
+    @ActionReference(path = "Loaders/image/x-jmetexture/Actions", position = 0),
 })
 public final class OpenTexture extends OpenSupport implements OpenCookie, CloseCookie {
 

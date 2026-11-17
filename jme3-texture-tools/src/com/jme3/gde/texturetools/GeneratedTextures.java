@@ -264,6 +264,54 @@ public final class GeneratedTextures {
         }
     }
 
+    /**
+     * Checks whether a directory directly contains registered DDS outputs, so a
+     * caller can refuse to rename generated texture folders without depending on
+     * the literal "dds" directory name. Ordinary folders and folders that merely
+     * have generated outputs below them return false. An absent manifest or an
+     * unreadable registry also yields false; callers that must protect the whole
+     * managed tree should additionally check {@link #affects(Path)}.
+     * <pre>
+     * // 第一步：先确认路径处在生成纹理登记表管辖范围内。
+     * GeneratedTextures store = GeneratedTextures.containing(folderPath);
+     * if (store == null) {
+     *     // 普通目录：可以重命名。
+     * }
+     * // 第二步：判断该目录本身是否直接存放已登记的 DDS 输出。
+     * boolean generated = store.isGeneratedOutputDirectory(folderPath);
+     * // 第三步：generated 为 true 时禁止重命名该目录；应重命名源纹理后重新转换。
+     * // 第四步：本方法只读登记表；真正的文件改名仍需在后台线程执行。
+     * </pre>
+     *
+     * @param path directory to test; a file path is treated as its parent
+     * @return true when a registered output lives directly in the directory
+     * @throws IOException if the registry cannot be read
+     */
+    public boolean isGeneratedOutputDirectory(Path path) throws IOException {
+        synchronized (LOCK) {
+            Path target = path.toAbsolutePath().normalize();
+            if (!Files.isDirectory(target)) {
+                target = target.getParent();
+            }
+            if (target == null) {
+                return false;
+            }
+            Properties properties = read();
+            for (String id : ids(properties)) {
+                String relative = properties.getProperty(id + ".output");
+                if (relative == null || relative.isBlank()) {
+                    continue;
+                }
+                // Read-only parent comparison; no realpath/stat work on each output.
+                Path parent = root.resolve(relative).normalize().getParent();
+                if (target.equals(parent)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     /** Whether a mutation touches registered sources, outputs or the registry. */
     public boolean affects(Path path) throws IOException {
         synchronized (LOCK) {

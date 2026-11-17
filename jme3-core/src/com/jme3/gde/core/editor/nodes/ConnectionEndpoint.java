@@ -37,6 +37,8 @@ import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Point;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
+import java.util.List;
 import javax.swing.ImageIcon;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
@@ -56,6 +58,7 @@ public abstract class ConnectionEndpoint extends JPanel implements MouseInputLis
     protected DraggablePanel node;
     protected int index = 1;
     protected Connection connection;
+    private final List<Connection> endpointConnections = new ArrayList<Connection>();
 
     public String getText() {
         return text;
@@ -106,10 +109,9 @@ public abstract class ConnectionEndpoint extends JPanel implements MouseInputLis
 
     @Override
     public void repaint() {
-        if (getNode() != null) {
+        super.repaint();
+        if (getNode() != null && getDiagram() != null) {
             getDiagram().repaint();
-        } else {
-            super.repaint();
         }
     }
 
@@ -145,8 +147,10 @@ public abstract class ConnectionEndpoint extends JPanel implements MouseInputLis
                 diag.notifyMappingCreation(diag.connect(this, diag.draggedTo));
 
             } else {
-                diag.draggedTo.reset();
+                ConnectionEndpoint rejectedTarget = diag.draggedTo;
+                rejectedTarget.reset();
                 this.reset();
+                diag.notifyConnectionRejected(this, rejectedTarget);
             }
             diag.draggedFrom = null;
             diag.draggedTo = null;
@@ -182,27 +186,36 @@ public abstract class ConnectionEndpoint extends JPanel implements MouseInputLis
      * Resets the Icon to be the previous image.
      */
     public void reset() {
-        setIcon(prevImg);
+        setIcon(isConnected() ? Icons.imgGreen : Icons.imgGrey);
     }
 
     /**
      * Changes the Icon to the disconnect state.
      */
     public void disconnect() {
-        setIcon(Icons.imgGrey);
-        
         if (connection != null) {
-            getNode().removeComponentListener(connection);
-            connection = null;
+            disconnect(connection);
+        } else {
+            setIcon(Icons.imgGrey);
         }
+    }
+
+    public void disconnect(Connection disconnectedConnection) {
+        getNode().removeComponentListener(disconnectedConnection);
+        endpointConnections.remove(disconnectedConnection);
+        if (connection == disconnectedConnection) {
+            connection = endpointConnections.isEmpty()
+                    ? null : endpointConnections.get(endpointConnections.size() - 1);
+        }
+        setIcon(isConnected() ? Icons.imgGreen : Icons.imgGrey);
     }
 
     public Connection getConnection() {
         return connection;
     }
-    
+
     public boolean isConnected() {
-        return connection != null;
+        return !endpointConnections.isEmpty();
     }
     
     /**
@@ -234,6 +247,9 @@ public abstract class ConnectionEndpoint extends JPanel implements MouseInputLis
 
     public void connect(Connection connection) {
         getNode().addComponentListener(connection);
+        if (!endpointConnections.contains(connection)) {
+            endpointConnections.add(connection);
+        }
         this.connection = connection;
         setIcon(Icons.imgGreen);
     }

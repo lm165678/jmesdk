@@ -40,6 +40,69 @@ public final class InspectorColumns extends JPanel implements Scrollable {
         panel.add(layout.divider);
     }
 
+    /**
+     * Root container for inspectors embedded in a vertical-only JScrollPane.
+     * Standalone dialogs retain the requested preferred width, while a viewport
+     * always controls the actual width. Long labels, values and diagnostics only
+     * affect height; they cannot request horizontal growth. The preferred
+     * scrollable width is zero so embedding does not widen a Properties dock.
+     * <pre>
+     * // 第一步：用固定对话框宽度创建根面板，字段可放入 InspectorColumns。
+     * JPanel root = new InspectorColumns.WidthTrackedPanel(new BorderLayout(), 360);
+     * // 第二步：嵌入属性页时使用垂直滚动，禁止水平滚动。
+     * JScrollPane scroll = new JScrollPane(root,
+     *         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+     *         JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+     * // 第三步：缩窄或出现垂直滚动条后，根面板自动使用新的 viewport 宽度。
+     * // 独立 JDialog 不使用 JScrollPane，pack() 仍采用创建时的 360 像素宽度。
+     * </pre>
+     */
+    public static final class WidthTrackedPanel extends JPanel implements Scrollable {
+        private final int preferredWidth;
+
+        public WidthTrackedPanel(LayoutManager layout, int preferredWidth) {
+            super(layout);
+            this.preferredWidth = preferredWidth;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            Dimension size = super.getPreferredSize();
+            size.width = preferredWidth;
+            return size;
+        }
+
+        @Override
+        public Dimension getMinimumSize() {
+            return new Dimension(0, 0);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return new Dimension(0, getPreferredSize().height);
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
+            return 30;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
+            return Math.max(30, visible.height - 30);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
     private static final class DividerLayout implements LayoutManager {
         private final JPanel panel;
         private final String key;

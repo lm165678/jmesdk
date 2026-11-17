@@ -124,9 +124,9 @@ public class MatDefMetaData {
             public String run() {
                 String prop = props.getProperty(key);
                 if (prop == null) {
-                    return defaultProps.getProperty(key);
+                    prop = defaultProps.getProperty(key);
                 }
-                return prop;
+                return prop != null ? prop : defaultValue;
             }
         });
     }
