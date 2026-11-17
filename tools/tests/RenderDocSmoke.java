@@ -120,6 +120,12 @@ public final class RenderDocSmoke extends SimpleApplication {
         JToolBar toolbar = new JToolBar();
         SwingUtilities.invokeAndWait(() -> {
             RenderDocOptions options = new RenderDocOptions();
+            var registration = RenderDocOptions.class.getAnnotation(
+                    org.netbeans.spi.options.OptionsPanelController.TopLevelRegistration.class);
+            if (!registration.iconBase().equals("com/jme3/gde/core/renderdoc/renderdoc-48.png")
+                    || RenderDocOptions.class.getResource("/" + registration.iconBase()) == null) {
+                throw new AssertionError("RenderDoc options must use the bundled RenderDoc icon");
+            }
             options.update();
             if (options.isChanged()) {
                 throw new AssertionError("Loaded options must be clean");
@@ -163,6 +169,10 @@ public final class RenderDocSmoke extends SimpleApplication {
         RenderDocSmoke app = new RenderDocSmoke();
         com.jme3.gde.core.scene.SdkNativeLibraries.configure();
         AppSettings settings = new AppSettings(true);
+        settings.setGraphicsDebug(RenderDocSupport.available());
+        if (!settings.isGraphicsDebug()) {
+            throw new AssertionError("RenderDoc verification must enable FrameGraph debug groups");
+        }
         settings.setCustomRenderer(PreviewPanelsContext.class);
         settings.setWidth(400);
         settings.setHeight(300);

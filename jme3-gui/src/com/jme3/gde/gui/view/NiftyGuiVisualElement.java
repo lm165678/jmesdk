@@ -54,6 +54,19 @@ import org.openide.util.lookup.AbstractLookup;
 import org.openide.util.lookup.InstanceContent;
 import org.openide.windows.TopComponent;
 
+/**
+ * Visual Nifty editor bound to the original XML document.
+ * Elements unsupported by the legacy model, such as text and interact, are
+ * preserved on save; text is additionally restored as preview-only content.
+ *
+ * 使用示例：
+ * 第一步：打开或聚焦 Visual 时，编辑器自动显示 Navigator；点击组件即可选中。
+ * 第二步：从 Palette 拖入控件，控件会加入当前选中的 Panel/Layer。
+ * 第三步：在 Properties 中编辑组件；布局、对齐和布尔值使用选项列表。
+ * 尺寸可输入 100、100px、35%、35%w、35%h、*、sum、max 或 default；纯数字自动补 px。
+ * 第四步：保存文件；text、interact、effect 和自定义属性不会因 Visual 保存或 ID 重命名而丢失。
+ * 修改 ID 后 Navigator 立即刷新；属性或撤销/重做失败会恢复预览并报告错误。
+ */
 @MultiViewElement.Registration(
         displayName = "#LBL_NiftyGui_VISUAL",
         iconBase = "com/jme3/gde/gui/multiview/icons/game-monitor.png",
@@ -78,14 +91,16 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     private GUI gui;
     private String synchronizedXml;
     private String serializedXml;
+    private String preservedXml;
     private boolean loading;
     private boolean pending;
     private boolean bindingsPending;
     private boolean closed;
     private final JLabel status = new JLabel();
-     private final InstanceContent content = new InstanceContent();
-     private final Lookup lookup;
-     private final AssetManager assetManager;
+    private final InstanceContent content = new InstanceContent();
+    private final Object palette = com.jme3.gde.gui.palette.NiftyGUIPaletteFactory.createPalette();
+    private final Lookup lookup;
+    private final AssetManager assetManager;
 
     protected class ResourceLocationJmp implements ResourceLocation {
 
@@ -129,6 +144,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
                 if (bindingsPending && gui != null && nifty.getCurrentScreen() != null) {
                     bindingsPending = false;
                     gui.reloadAfterFresh();
+                    restoreUnmodeledTexts();
                 }
             }
         };
@@ -149,7 +165,10 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             if (gui.getCurrentLayer() == null && gui.getTopLayer() != null) {
                 gui.setCurrentLayer(gui.getTopLayer());
             }
-        }, () -> javax.swing.SwingUtilities.invokeLater(this::synchronizeDocument), ex -> {
+        }, () -> {
+            bindingsPending = true;
+            javax.swing.SwingUtilities.invokeLater(this::synchronizeDocument);
+        }, ex -> {
             status.setText("Cannot drop component: " + ex.getMessage());
             logger.log(Level.WARNING, "Cannot drop Nifty component", ex);
             javax.swing.JOptionPane.showMessageDialog(this,
@@ -163,20 +182,30 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             @Override
             public synchronized void undo() {
                 activateGui();
-                super.undo();
-                synchronizeDocument();
+                try {
+                    super.undo();
+                } catch (RuntimeException ex) {
+                    reportEditorError("Cannot undo Nifty edit", ex);
+                } finally {
+                    afterVisualEdit();
+                }
             }
 
             @Override
             public synchronized void redo() {
                 activateGui();
-                super.redo();
-                synchronizeDocument();
+                try {
+                    super.redo();
+                } catch (RuntimeException ex) {
+                    reportEditorError("Cannot redo Nifty edit", ex);
+                } finally {
+                    afterVisualEdit();
+                }
             }
         };
         CommandProcessor.getInstance().setUndoManager(undoSupport);
         this.content.set(Collections.singleton(obj.getNodeDelegate()), null);
-        this.content.add(com.jme3.gde.gui.palette.NiftyGUIPaletteFactory.createPalette());
+        this.content.add(palette);
         lookup = new org.openide.util.lookup.ProxyLookup(new AbstractLookup(content), obj.getLookup());
         toolbar.add(status);
     }
@@ -295,6 +324,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     @Override
     public void componentShowing() {
         loadGui();
+        ensureNavigatorVisible();
     }
 
     @Override
@@ -315,6 +345,17 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     @Override
     public void componentActivated() {
         activateGui();
+        ensureNavigatorVisible();
+    }
+
+    private void ensureNavigatorVisible() {
+        TopComponent navigator = org.openide.windows.WindowManager.getDefault().findTopComponent("navigator");
+        if (navigator != null) {
+            if (!navigator.isOpened()) {
+                navigator.open();
+            }
+            navigator.requestVisible();
+        }
     }
 
     @Override
@@ -349,12 +390,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
         }
         if (event instanceof SelectionChanged) {
             SelectionChanged selection = (SelectionChanged) event;
-            for (GElementNode previous : lookup.lookupAll(GElementNode.class)) {
-                content.remove(previous);
-            }
-            if (!selection.getNewSelection().isEmpty()) {
-                content.add(new GElementNode(selection.getElement()));
-            }
+            publishSelection(selection.getNewSelection().isEmpty() ? null : selection.getElement());
         } else if (source == gui && !pending) {
             bindingsPending = true;
             // Notifications may arrive in the middle of a command.
@@ -363,6 +399,95 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
                 pending = false;
                 synchronizeDocument();
             });
+        }
+    }
+
+    private void afterVisualEdit() {
+        bindingsPending = true;
+        synchronizeDocument();
+        view.repaint();
+    }
+
+    private void reportEditorError(String message, RuntimeException ex) {
+        status.setText(message + ": " + ex.getMessage());
+        logger.log(Level.WARNING, message, ex);
+    }
+
+    private void publishSelection(GElement element) {
+        org.openide.nodes.Node selected = element == null
+                ? obj.getNodeDelegate() : new GElementNode(element, this::afterVisualEdit);
+        java.util.List<Object> items = new java.util.ArrayList<>();
+        items.add(selected);
+        items.add(palette);
+        content.set(items, null);
+        org.openide.nodes.Node[] selectedNodes = new org.openide.nodes.Node[]{selected};
+        try {
+            nodesManager.setSelectedNodes(selectedNodes);
+        } catch (java.beans.PropertyVetoException ex) {
+            logger.log(Level.WARNING, "Cannot publish Nifty selection", ex);
+        }
+        if (callback != null) {
+            callback.getTopComponent().setActivatedNodes(selectedNodes);
+        }
+        if (element != null) {
+            TopComponent properties = org.openide.windows.WindowManager.getDefault().findTopComponent("properties");
+            if (properties != null) {
+                properties.setActivatedNodes(selectedNodes);
+                if (!properties.isOpened()) {
+                    properties.open();
+                }
+                properties.requestVisible();
+            }
+        }
+    }
+
+    private void restoreUnmodeledTexts() {
+        if (preservedXml == null || nifty.getCurrentScreen() == null) {
+            return;
+        }
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            org.w3c.dom.Document document = factory.newDocumentBuilder().parse(
+                    new org.xml.sax.InputSource(new java.io.StringReader(preservedXml)));
+            org.w3c.dom.NodeList texts = document.getElementsByTagNameNS("*", "text");
+            de.lessvoid.nifty.screen.Screen screen = nifty.getCurrentScreen();
+            boolean restored = false;
+            for (int i = 0; i < texts.getLength(); i++) {
+                org.w3c.dom.Element text = (org.w3c.dom.Element) texts.item(i);
+                String id = text.getAttribute("id");
+                if (id.isEmpty() || !(text.getParentNode() instanceof org.w3c.dom.Element)) {
+                    continue;
+                }
+                org.w3c.dom.Element sourceParent = (org.w3c.dom.Element) text.getParentNode();
+                String parentId = sourceParent.getAttribute("id");
+                if (parentId.isEmpty() || screen.findElementById(id) != null) {
+                    continue;
+                }
+                de.lessvoid.nifty.elements.Element parent = screen.findElementById(parentId);
+                if (parent == null) {
+                    continue;
+                }
+                de.lessvoid.nifty.controls.dynamic.TextCreator creator =
+                        new de.lessvoid.nifty.controls.dynamic.TextCreator(text.getAttribute("text"));
+                org.w3c.dom.NamedNodeMap attributes = text.getAttributes();
+                for (int j = 0; j < attributes.getLength(); j++) {
+                    org.w3c.dom.Node attribute = attributes.item(j);
+                    String name = attribute.getNodeName();
+                    if (!"xmlns".equals(name) && !"xmlns".equals(attribute.getPrefix())) {
+                        creator.set(name, attribute.getNodeValue());
+                    }
+                }
+                creator.create(nifty, screen, parent);
+                restored = true;
+            }
+            if (restored && screen.getRootElement() != null) {
+                screen.getRootElement().layoutElements();
+            }
+        } catch (Exception ex) {
+            logger.log(Level.WARNING, "Cannot restore Nifty text preview", ex);
         }
     }
 
@@ -379,7 +504,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
     }
 
     private String serialize() throws Exception {
-        try (InputStream input = new GUIWriter(gui).getDocumentStream()) {
+        try (InputStream input = new GUIWriter(gui, preservedXml).getDocumentStream()) {
             return new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
     }
@@ -403,6 +528,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             }
             child = next;
         }
+        removePreviewOnlyElements(root);
         String[] tags = {"useStyles", "useControls"};
         String[] files = {"nifty-default-styles.xml", "nifty-default-controls.xml"};
         for (int i = 0; i < tags.length; i++) {
@@ -425,6 +551,22 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
                 new javax.xml.transform.dom.DOMSource(document),
                 new javax.xml.transform.stream.StreamResult(output));
         return output.toByteArray();
+    }
+
+    private static void removePreviewOnlyElements(org.w3c.dom.Element parent) {
+        for (org.w3c.dom.Node child = parent.getFirstChild(); child != null;) {
+            org.w3c.dom.Node next = child.getNextSibling();
+            if (child instanceof org.w3c.dom.Element) {
+                org.w3c.dom.Element element = (org.w3c.dom.Element) child;
+                String name = element.getLocalName();
+                if ("text".equals(name) || "interact".equals(name)) {
+                    parent.removeChild(element);
+                } else {
+                    removePreviewOnlyElements(element);
+                }
+            }
+            child = next;
+        }
     }
 
     private void loadGui() {
@@ -457,6 +599,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             gui.addObserver(this);
             layers.setModel(new DefaultComboBoxModel<>(gui.getLayers().toArray(GLayer[]::new)));
             layers.setSelectedItem(gui.getCurrentLayer());
+            preservedXml = xml;
             serializedXml = serialize();
             synchronizedXml = xml;
             scrollArea.setViewportView(view);
@@ -494,6 +637,7 @@ public final class NiftyGuiVisualElement extends JPanel implements MultiViewElem
             });
             serializedXml = xml;
             synchronizedXml = xml;
+            preservedXml = xml;
             status.setText("");
         } catch (Exception ex) {
             status.setText("Cannot synchronize GUI: " + ex.getMessage());

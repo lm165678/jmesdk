@@ -178,10 +178,10 @@ public class ProjectAssetManager extends DesktopAssetManager {
     public ProjectAssetManager(Project prj, String folderName) {
         super(true);
         this.project = prj;
+        addFolderLocator(folderName);
         for (AssetManagerConfigurator di : Lookup.getDefault().lookupAll(AssetManagerConfigurator.class)) {
             di.prepareManager(this);
         }
-        addFolderLocator(folderName);
         updateClassLoader();
         prepAssetEventListeners();
     }
@@ -202,7 +202,9 @@ public class ProjectAssetManager extends DesktopAssetManager {
         }
         String projectRootPath = project.getProjectDirectory().getPath();
         logger.log(Level.FINE, "Add locator: {0}", projectRootPath);
+        unregisterLocator("/", com.jme3.asset.plugins.ClasspathLocator.class);
         registerLocator(projectRootPath, com.jme3.gde.core.assets.RootLockingFileLocator.class);
+        registerLocator("/", com.jme3.asset.plugins.ClasspathLocator.class);
         for (AssetManagerConfigurator di : Lookup.getDefault().lookupAll(AssetManagerConfigurator.class)) {
             di.prepareManager(this);
         }
@@ -508,14 +510,26 @@ public class ProjectAssetManager extends DesktopAssetManager {
     }
 
     /**
-     * Adds a locator to a folder within the main project directory
+     * Adds a locator to a folder within the main project directory.
+     * Project files take precedence over classpath resources with the same asset
+     * key, including SDK test-data models. Classpath-only engine resources remain
+     * available as a fallback. Configure roots before loading assets; already
+     * cached assets must be evicted when changing roots on an existing manager.
+     * <pre>
+     * // 第一步：创建管理器，项目 assets 优先于依赖 JAR 中的同名资源。
+     * ProjectAssetManager assets = new ProjectAssetManager(project, "assets");
+     * // 第二步：加载项目模型；仅当项目没有该资源时才使用 classpath 后备。
+     * Spatial model = assets.loadModel("Models/Sponza/Sponza.j3o");
+     * </pre>
      * @param relativePath
      */
     public void addFolderLocator(String relativePath) {
         String string = project.getProjectDirectory().getPath() + "/" + relativePath + "/";
         logger.log(Level.FINE, "Add locator:{0}", string);
+        unregisterLocator("/", com.jme3.asset.plugins.ClasspathLocator.class);
         registerLocator(string,
                 "com.jme3.asset.plugins.FileLocator");
+        registerLocator("/", com.jme3.asset.plugins.ClasspathLocator.class);
         folderNames.add(relativePath);
     }
 

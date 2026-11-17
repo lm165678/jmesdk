@@ -475,6 +475,9 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             // Driver overrides and AWT presentation can still bound observed FPS.
             newSetting.setVSync(false);
             newSetting.setGammaCorrection(true);
+            // RenderDoc injection does not implicitly enable engine debug markers.
+            // Enable FrameGraph groups only while the configured integration is active.
+            newSetting.setGraphicsDebug(com.jme3.gde.core.renderdoc.RenderDocSupport.available());
             newSetting.setRenderer(com.jme3.gde.core.scene.PreviewPanelsContext.previewRenderer());
             if (!useCanvas) {
                 newSetting.setCustomRenderer(PreviewPanelsContext.class);

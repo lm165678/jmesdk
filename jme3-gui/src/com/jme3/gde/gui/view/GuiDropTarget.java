@@ -111,7 +111,16 @@ final class GuiDropTarget extends DropTarget {
             } else {
                 AddElementCommand command = processor.getCommand(AddElementCommand.class);
                 command.setChild(element);
-                command.setPoint(point);
+                jada.ngeditor.model.GUI currentGui = processor.getGuiEditor().getGui();
+                GElement parent = currentGui.getSelection().getFirst();
+                if (parent == null || parent instanceof jada.ngeditor.model.elements.GScreen) {
+                    parent = currentGui.getCurrentLayer();
+                }
+                if (parent != null) {
+                    command.setParent(parent);
+                } else {
+                    command.setPoint(point);
+                }
                 processor.excuteCommand(command);
             }
             success = true;

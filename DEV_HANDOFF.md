@@ -1,7 +1,35 @@
+## 2026-11-17 user verification and fork handoff
+- User reports the SDK/model preview and performance are now normal after local rebuilding/testing. This is user verification; no new SDK build was run during the commit/push task.
+- Include all pending source fixes and other agents' code_buddy_agents*.md context files. Keep workstation proxy settings and generated engine exports/templates/packaging outputs local. The updated versioned Nifty editor dependency is part of its source integration fix.
+- Earlier entries describing uncommitted changes or unverified Sponza behavior are historical checkpoints; this entry records the subsequent user result. Remaining unrelated roadmap and RenderDoc replay/shutdown caveats are not claimed resolved.
+
+## 2026-11-17 GI preview repeated GPUScene rebuild fix in engine
+- Sponza slowdown was sampled in the running SDK: no renderdoc.dll loaded, SDK dedicated GPU-memory counter around 14 GiB, render thread repeatedly allocating/uploading GPUScene buffers. GiPreview frame-scoped bind/restore advances material revisions even when next-frame draw values are identical.
+- Engine GpuScenePipeline now compares effective parameter snapshots on revision changes before structural invalidation. Keep GiPreview bind/restore: original materials must remain clean for save/undo. Do not replace this with persistent edits to saved materials.
+- Engine unit/eligibility regression passed 11 tests. Native offscreen Tank test on RTX 5060 Ti passed 240 frames: builds stay 1 through repeated bindings, actual material edit raises to 2 and then stabilizes. No full Sponza FPS/VRAM soak test or SDK deployment yet. Export the rebuilt engine and rebuild/restart SDK before verifying. See engine DEV_HANDOFF for commands/logs. No commit/push.
+
+## 2026-11-17 project Sponza shadowed by SDK testdata resource
+- Root cause reproduced: SDK classpath jme3-testdata.jar contains Models/Sponza/Sponza.j3o. Default ClasspathLocator preceded project files. It loads a 9,539,478-byte single-geometry Unshaded model with no texture bindings/bakes instead of TestGame assets' 57,372,472-byte model (103 PBR geometries, 307 texture bindings, SdfVolume and SurfaceBakeData). Direct glTF works because no same-key source exists in the dependency.
+- ProjectAssetManager now registers the primary folder before configurators, moves default ClasspathLocator behind project file locators, and does the same for standalone files. Engine resources remain classpath fallbacks. No game asset was modified or rebaked.
+- Targeted compilation passed. Isolated lookup regression passed for standalone and project constructors (project-service updateClassLoader disabled only in test), verifies disk file size plus engine material fallback. Added tools/tests/ProjectAssetPrioritySmoke.java; run with SDK/NetBeans JARs plus testdata.jar and the asset directory argument. No full SDK build/deployment or native preview verification; rebuild SDK and reopen model. Physics deserialization not validated by this lookup test.
+- Compatible source baseline: engine 2bba6193b, SDK a0ff9c98 plus existing local changes. Not committed/pushed.
+
 ## 2026-11-17 versioned texture encoder archives for offline builds
 - All seven official archives were already present in build/texture-tool-downloads. Their published SHA-256 digests matched; copied the 106881664-byte set into versioned third-party/texture-tools.
 - prepareTextureTools no longer downloads. It verifies and unpacks those repository archives, with URLs retained only as provenance. Extracted module resources remain ignored; buildSdk and both texture verification scripts use the same task. readme now documents clean/offline behavior.
 - Validation passed: gradlew prepareTextureTools --offline --rerun-tasks with the actual jmonkeyengine sdk-engine-repository completed in 4s and checked all seven executable layouts. An initial direct invocation without localEngineRepository failed during configuration because the default sibling JMESources export was absent; unrelated to texture archives. No full SDK build or model conversion run. No push.
+
+## 2026-11-17 RenderDoc icon and FrameGraph capture groups
+- RenderDoc Options no longer reuses opengl-48.gif. Added the official RenderDoc 48px icon derived from qrenderdoc/Resources/icon.ico plus MIT license/source notice. The camera capture toolbar icon is unchanged.
+- Missing capture groups were not caused by SDK in-process injection bypassing FrameGraph. Engine FrameGraph.execute already wraps executed passes with renderer push/popDebugGroup, but GLRenderer suppresses them unless GraphicsDebug=true and Caps.GLDebug exists. SDK SceneApplication previously never enabled GraphicsDebug.
+- SceneApplication now enables GraphicsDebug before preview context creation only when RenderDocSupport is loaded, enabled and valid; ordinary previews keep it off. RenderDocSmoke now checks the Options icon resource and enables GraphicsDebug for its native capture so replay can be inspected for ViewPort/Pass groups.
+- Official icon download/conversion, image inspection, git diff --check and IDE diagnostics completed. No SDK build/compilation/restart, native capture or RenderDoc replay inspection was run. Rebuild core/SDK, restart, capture again and inspect actual Event Browser groups. Engine sources unchanged; no commit/push.
+
+## 2026-11-17 model conversion missing texture tool resources
+- Converting TestGame Models/Chair/SheenChair.gltf failed at TextureToolchain.installed because neither jme3-texture-tools/release nor installed build/cluster texture-tools resources existed. This is missing SDK tooling, not a damaged game model.
+- Added Gradle prepareTextureTools to download the seven official Compressonator 4.6.0/astcenc 5.7.1 platform archives, verify their published SHA-256 digests, unpack the existing release/texture-tools layout and verify all expected executables. buildSdk now depends on it; cleanSdk removes the generated tools. Generated tools and download caches remain unversioned.
+- Texture verification scripts prepare resources before direct Ant builds; readme documents the workflow. Missing-resource IOException now names prepareTextureTools and SDK rebuild. Conversion still aborts rather than silently skipping compression.
+- Static source/diff inspection only. git diff --check and IDE diagnostics passed. No archives were downloaded or unpacked; no Gradle configuration/build, Java compilation, native encoding or live conversion was run. Package layout and end-to-end repair remain unverified. Close SDK, run build-and-run-sdk.bat, then retry conversion. TestGame assets were not changed. No commit/push.
 
 ## 2026-11-17 Sponza texture encoder native crash handling
 - User conversion of Models/glTF/Sponza.gltf failed inside Compressonator with exit-1073741819 (0xC0000005), empty output. Read-only input audit encoded all69 referenced images successfully to ignored build/sponza-encoder-audit using BC3/full mip chains, matching GeneratedTextures. Installed and release encoder SHA256 both9E3B1EF89A57C85B194CF45A86D2C22013FB7A4BA0CF0AA487224E9FAA44AEBC. No deterministic bad texture reproduced; SDK-process environment/crash root cause remains unconfirmed. Original assets/J3O untouched.
@@ -261,3 +289,19 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - Submitting the previously local portable BAT/PowerShell launchers, example JSON, ignore rule and README instructions. This supersedes the earlier uncommitted status of those launcher changes.
 - Both BAT check modes passed after pulling SDK ce898db1 and engine 2bba6193b: detected JDK 25 and sibling jmonkeyengine. Check mode does not compile, download or start SDK. No full build/runtime verification performed for this submission.
 - Generated deployment/applet ZIP changes, nbproject automatic build revision and extracted/generated release assets are excluded and preserved locally. No user/system JDK or UE Android configuration changed.
+
+## 2026-11-17 capture failure feedback
+- RenderDocSupport now reports discarded captures when preview drawing fails. Engine line-width clamping and exception-safe debug groups address the identified gizmo rendering errors; export/rebuild required. Targeted capture-class compilation passed. Isolated native test exited after GL initialization without a saved capture; actual SDK capture/replay/overlay validation remains outstanding. No full SDK build or deployment; concurrent changes preserved.
+
+## 2026-11-17 CodeBuddy Nifty editor repair
+- Used the user-supplied D:/MyDowns/com-jme3-gde-gui.nbm as the functional reference and replaced the bundled Nifty-Editor0.5.7.jar with its more complete legacy model, including effects.
+- GUIWriter now merges the current model with source XML so text, interact, effects and unmodeled attributes survive Visual saves. It filters implicit x/y=-1px and removes unused automatically injected default references. Visual loading filters text/interact only for the legacy model and restores text through TextCreator.
+- Selection now publishes one component node instead of mixing the DataNode with multiple GElementNodes. Palette drops target the selected container and force binding reload. Invalid property edits restore the previous value and preview; undo/redo failures are caught and synchronized instead of escaping into the EDT.
+- Validation: JDK 25 targeted compilation passed for GUIWriter, NiftyGuiVisualElement, GuiDropTarget and GElementNode. NIFTY_XML_ROUNDTRIP_PASS and NIFTY_EDITOR_COMMAND_PASS. The latter used a real J2DNiftyView and verified text preview, width property exposure, selected-parent button insertion, undo/redo and invalid-width recovery.
+- Deployed to jme3-gui/build/classes and build/cluster module/ext JARs. Restart SDK before testing. No full SDK build or manual NetBeans interaction yet; no commit/push.
+
+## 2026-11-17 Nifty navigator, property and ID follow-up
+- Opening/activating Nifty Visual now opens the Navigator window. Visual selection sets activated nodes on both the multiview TopComponent and the global Properties window, so clicking a component no longer requires selecting it again in Navigator.
+- Property sheets expose common size/layout/alignment/visibility attributes. Layout, alignment and boolean values use choice editors; resource fields use the resource chooser. Sizes are validated through Nifty SizeValue and bare numbers become px; colors and malformed values are rejected inside the property panel without escaping to the EDT.
+- GElementNode observes its model and immediately refreshes Navigator labels after ID edits. A source-level EditAttributeCommand override validates IDs against the live GUI tree, fixing undo after rename. GUIWriter falls back to hierarchy-position matching so unknown content survives ID renames.
+- JDK 25 compilation and both smoke tests passed again, including choice editors, unit completion, size undo/redo, ID tree refresh/undo/redo and post-rename XML preservation. Redeployed the module JAR; restart required. Manual NetBeans interaction remains unverified. No commit/push.

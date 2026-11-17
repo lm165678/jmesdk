@@ -13,7 +13,7 @@ import org.openide.util.*;
  * Apply also saves, whereas cancelling Options discards edits not saved by Enter.
  */
 @OptionsPanelController.TopLevelRegistration(categoryName = "RenderDoc",
-        iconBase = "com/jme3/gde/core/options/opengl-48.gif",
+        iconBase = "com/jme3/gde/core/renderdoc/renderdoc-48.png",
         keywords = "RenderDoc capture frame GPU", keywordsCategory = "RenderDoc")
 public final class RenderDocOptions extends OptionsPanelController {
     private final PropertyChangeSupport changes = new PropertyChangeSupport(this);

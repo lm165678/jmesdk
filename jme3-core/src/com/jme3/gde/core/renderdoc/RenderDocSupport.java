@@ -22,9 +22,12 @@ import org.openide.util.*;
  * 第一步：打开 Tools > Options > RenderDoc，保留自动注入勾选。
  * 第二步：选择 qrenderdoc.exe，按回车保存并确认重启 SDK。
  * 第三步：打开场景，点击 3D Viewer 顶部相机按钮；捕获后自动打开 .rdc。
- * 第四步：取消自动注入并应用可隐藏按钮；重启后恢复无注入运行。
+ * 第四步：集成可用时预览自动开启 GraphicsDebug，使 FrameGraph 的 ViewPort/Pass 分组显示在 RenderDoc 中。
+ * 第五步：取消自动注入并应用可隐藏按钮；重启后恢复无注入、无调试分组的运行。
  * </pre>
  * UI belongs to EDT; begin/end belong to the render thread with current HGLRC.
+ * GraphicsDebug is enabled before preview context creation only when this
+ * integration is available; injection alone does not emit engine markers.
  */
 public final class RenderDocSupport {
     private static final Logger LOG = Logger.getLogger(RenderDocSupport.class.getName());
@@ -199,6 +202,7 @@ public final class RenderDocSupport {
         try {
             if (!success) {
                 function(24).invokeInt(new Object[]{device, null});
+                report(new IllegalStateException("Capture discarded because preview rendering failed. Check the first rendering error in the SDK log."));
                 return;
             }
             if (function(21).invokeInt(new Object[]{device, null}) != 1) {
