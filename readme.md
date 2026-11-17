@@ -67,7 +67,7 @@ If you think you've encountered a bug in the SDK, please open an issue to let th
 
 ## 本地引擎与 SDK 联合开发（本 fork）
 
-此 SDK 使用旁边 `../JMESources` 的自定义引擎，而不是官方 beta2 引擎。
+此 SDK 使用相邻 `../jmonkeyengine` 或 `../JMESources` 的自定义引擎，而不是官方 beta2 引擎。
 SDK 的 Gradle Wrapper 是 9.2.1；引擎自己的 Wrapper 是 9.8.0；两者都使用本机 JDK 25。
 不要将两个工程的 Wrapper 版本互相覆盖。
 
@@ -88,11 +88,19 @@ build-local-engine-sdk.bat run
 
 流程是：使用引擎的 Wrapper 增量编译 → 导出本地 Maven 仓库 → SDK 解析新依赖、
 同步库、生成 NetBeans 模块描述 → 编译 SDK。普通的引擎 `build`/IDEA Build 不会自动同步 SDK。
-脚本中的 `JAVA_HOME` 和 `SDK_PROXY_HOST`/`SDK_PROXY_PORT` 可按机器修改；当前代理为 127.0.0.1:7897。
-这些环境设置只在该批处理进程中生效。
+两个 BAT 共用 `tools/build-local-sdk.ps1`，不再硬编码旧电脑路径。
+先运行 `build-local-engine-sdk.bat check` 检查环境，不会编译或下载。
+JDK 25 从 JAVA_HOME、C:/Java、用户 .jdks/.gradle/jdks、Program Files 和 PATH 查找；
+不会把系统或用户 JAVA_HOME/PATH 改成 JDK 25，不影响 UE5 Android 环境。
+引擎目录先找相邻 jmonkeyengine，再找 JMESources；两者都存在时可显式指定。
+特殊目录可复制 `sdk-local.example.json` 为 `sdk-local.json` 后修改 javaHome/engineDir。
+该本机配置已被 Git 忽略，换电脑无需改共享脚本。SDK_JAVA_HOME/SDK_ENGINE_DIR 环境变量优先于 JSON。
+本地 127.0.0.1:7897 端口可连接时自动使用代理，否则直连；可在 JSON 指定 proxyHost/proxyPort，
+或用空字符串 proxyHost 禁用自动代理。已有项目自身的代理设置仍独立生效。
+这些检测与配置只作用于脚本子进程。运行前关闭 SDK 产品窗口，避免已加载库被占用。
 
 引擎库版本固定为 `3.10.0-local-SNAPSHOT`，本地仓库位于：
-`../JMESources/build/sdk-engine-repo`。该仓库不上传到 Maven Central，也不修改全局 Maven 本地库。
+`<检测到的引擎目录>/build/sdk-engine-repo`。该仓库不上传到 Maven Central，也不修改全局 Maven 本地库。
 `gradle/local-engine-export.gradle` 仅用于 SDK 联合开发；通过 `-I` 应用到引擎，
 不要求修改引擎自身的构建脚本。二进制和源码 JAR 都导出；本地迭代不生成 Javadoc HTML。
 导出成功后才生成 `sdk-engine.properties`。SDK 对该仓库的引擎模块使用独占解析，

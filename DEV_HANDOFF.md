@@ -238,3 +238,21 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 
 ## 2026-11-17 paired implementation snapshot
 - Engine implementation: 4ee85daa4; SDK implementation: e38d71c5. These identify the paired source snapshots, not a newly validated binary release. No additional build/runtime checks for this Git request. Earlier test results and unresolved issues remain as documented.
+## 2026-11-16：Windows 构建脚本可迁移配置（本地未提交）
+- 两个 BAT 改为调用 tools/build-local-sdk.ps1，不再硬编码旧用户 JDK 路径。
+- 自动查找 JDK 25、相邻 jmonkeyengine/JMESources；SDK_JAVA_HOME/SDK_ENGINE_DIR 或被 Git 忽略的 sdk-local.json 可覆盖。提交 sdk-local.example.json 作为格式示例，不提交本机配置。
+- 两个 BAT 的 check 模式均验证成功：本机 JDK C:/Java/jdk-25.0.5+8、引擎 ../jmonkeyengine；父进程 JAVA_HOME/PATH 保持不变。
+- 临时目录验证相邻 JMESources（含空格 SDK 路径）自动识别成功，错误的显式 JDK 路径被拒绝。
+- build-local-engine-sdk.bat：导出引擎后构建 SDK；加 run 启动。build-and-run-sdk.bat：使用同一检测出的引擎仓库构建/运行，不重新导出引擎。
+- 代理默认检测 127.0.0.1:7897；JSON proxyHost 为空禁用自动代理。不会修改系统/用户环境或 UE5 JDK。
+- 本轮仅测试环境检测与失败处理，未执行完整引擎导出/SDK 构建，尚未 commit/push。配套实现基线仍见前文。
+
+## 2026-11-16：版本参数拆分修复
+- tools/build-local-sdk.ps1 的 -PjmeVersionName 参数加引号，避免 Windows PowerShell 5.1 将 3.10.0-local-SNAPSHOT 拆开，导致 Gradle 把 .10.0-local-SNAPSHOT 当作任务。SDK 的 useLocalEngine 参数也统一加引号。
+- 保留既有未提交修改；完整导出/构建结果另行验证。
+- 验证通过：Windows PowerShell 5.1 cmd echo 对比复现旧参数拆分，引用后完整保留；真实 Gradle 9.8 help 成功，Build Version 为 3.10.0-local-SNAPSHOT（JDK 25）。未运行完整 SDK 构建或启动。
+
+## 2026-11-17 portable launcher submission
+- Submitting the previously local portable BAT/PowerShell launchers, example JSON, ignore rule and README instructions. This supersedes the earlier uncommitted status of those launcher changes.
+- Both BAT check modes passed after pulling SDK ce898db1 and engine 2bba6193b: detected JDK 25 and sibling jmonkeyengine. Check mode does not compile, download or start SDK. No full build/runtime verification performed for this submission.
+- Generated deployment/applet ZIP changes, nbproject automatic build revision and extracted/generated release assets are excluded and preserved locally. No user/system JDK or UE Android configuration changed.

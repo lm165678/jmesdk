@@ -35,3 +35,6 @@ installers/macos-x64/jdk-x64_macos.tar.gz
 installers/windows-x64/jdk-x64_windows.zip
 installers/macos-aarch64/jdk-aarch64_macos.tar.gz
 installers/linux-aarch64/jdk-aarch64_linux.tar.gz
+
+# Machine-local SDK launcher settings (never commit credentials).
+/sdk-local.json

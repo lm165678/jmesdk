@@ -1,0 +1,6 @@
+{
+    "javaHome": "C:/Java/jdk-25.0.5+8",
+    "engineDir": "../jmonkeyengine",
+    "proxyHost": "127.0.0.1",
+    "proxyPort": 7897
+}
