@@ -52,6 +52,20 @@ public class TexturePanel extends MaterialPropertyWidget implements TextureDropT
      */
     protected TexturePanel() {
         initComponents();
+        setLayout(new java.awt.BorderLayout(6, 0));
+        removeAll();
+        jLabel1.setMinimumSize(new java.awt.Dimension(0, 16));
+        add(jLabel1, java.awt.BorderLayout.CENTER);
+        javax.swing.JPanel controls = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 4));
+        texturePreview.setPreferredSize(new java.awt.Dimension(32, 32));
+        controls.add(texturePreview);
+        controls.add(jCheckBox2);
+        controls.add(jCheckBox1);
+        controls.add(jButton2);
+        add(controls, java.awt.BorderLayout.EAST);
+        setMinimumSize(new java.awt.Dimension(0, 42));
+        setPreferredSize(new java.awt.Dimension(360, 42));
+
     }
     
     /**
@@ -61,8 +75,23 @@ public class TexturePanel extends MaterialPropertyWidget implements TextureDropT
         this.manager = manager;
         editor = new TexturePropertyEditor(manager);
         initComponents();
+        setLayout(new java.awt.BorderLayout(6, 0));
+        removeAll();
+        jLabel1.setMinimumSize(new java.awt.Dimension(0, 16));
+        add(jLabel1, java.awt.BorderLayout.CENTER);
+        javax.swing.JPanel controls = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 4));
+        texturePreview.setPreferredSize(new java.awt.Dimension(32, 32));
+        controls.add(texturePreview);
+        controls.add(jCheckBox2);
+        controls.add(jCheckBox1);
+        controls.add(jButton2);
+        add(controls, java.awt.BorderLayout.EAST);
+        setMinimumSize(new java.awt.Dimension(0, 42));
+        setPreferredSize(new java.awt.Dimension(360, 42));
+
         
         setDropTarget(new DropTarget(this, new TextureDropTargetListener(this)));
+        texturePreview.setDropTarget(new DropTarget(texturePreview, new TextureDropTargetListener(this)));
     }
     
     private void displayPreview() {
@@ -340,6 +369,13 @@ public class TexturePanel extends MaterialPropertyWidget implements TextureDropT
     private javax.swing.JSeparator jSeparator1;
     private javax.swing.JLabel texturePreview;
     // End of variables declaration//GEN-END:variables
+
+    /** 第一步：从当前项目资产面板拖动纹理；第二步：放到缩略图槽位，沿用保存/预览流程。 */
+    @Override
+    public boolean acceptsTexture(com.jme3.gde.core.dnd.AssetNameHolder texture) {
+        return manager != null && texture.getAssetFile() != null
+                && texture.getAssetFile().equals(manager.getAssetFolder().getFileObject(texture.getAssetName()));
+    }
 
     @Override
     public void setTexture(String name) {

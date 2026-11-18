@@ -57,10 +57,16 @@ public class TextureDropTargetListener implements DropTargetListener {
 
     @Override
     public void dragEnter(DropTargetDragEvent dtde) {
+        dragOver(dtde);
     }
 
     @Override
     public void dragOver(DropTargetDragEvent dtde) {
+        if (!dtde.isDataFlavorSupported(TextureDataFlavor.instance)) {
+            dtde.rejectDrag();
+            return;
+        }
+        dtde.acceptDrag(java.awt.dnd.DnDConstants.ACTION_COPY);
         if (!this.rootPanel.getCursor().equals(droppableCursor)) {
             this.rootPanel.setCursor(droppableCursor);
         }
@@ -79,6 +85,11 @@ public class TextureDropTargetListener implements DropTargetListener {
     public void drop(DropTargetDropEvent dtde) {
         this.rootPanel.setCursor(Cursor.getDefaultCursor());
 
+        if (!dtde.isDataFlavorSupported(TextureDataFlavor.instance)) {
+            dtde.rejectDrop();
+            return;
+        }
+        dtde.acceptDrop(java.awt.dnd.DnDConstants.ACTION_COPY);
         Object transferableObj = null;
         try {
 
@@ -92,14 +103,19 @@ public class TextureDropTargetListener implements DropTargetListener {
             ex.printStackTrace();
         }
 
-        if (transferableObj == null) {
+        if (!(transferableObj instanceof AssetNameHolder holder) || !rootPanel.acceptsTexture(holder)) {
+            dtde.dropComplete(false);
             return;
         }
 
         rootPanel.setTexture("\"" + ((AssetNameHolder) transferableObj).getAssetName() + "\"");
+        dtde.dropComplete(true);
     }
 
     public interface TextureDropTarget {
+
+        /** Reject foreign-project paths instead of resolving them against the wrong asset root. */
+        boolean acceptsTexture(AssetNameHolder texture);
 
         void setTexture(String texture);
 

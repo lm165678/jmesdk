@@ -1789,7 +1789,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         private float radius = 4;
         private float yaw;
         private float pitch = 0.15f;
-        private com.jme3.light.LightProbe studioProbe;
+        private com.jme3.light.SkyLight studioProbe;
         volatile String stateName = "";
         volatile String message = text("Animation.Preview_ready");
 
@@ -1802,7 +1802,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             rootNode.addLight(sun);
             // Reuse the SDK studio environment so metallic GLTF materials remain visible.
             Spatial environment = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
-            studioProbe = (com.jme3.light.LightProbe) environment.getLocalLightList().get(0).clone();
+            studioProbe = com.jme3.light.SkyLight.fromEnvironment((com.jme3.light.LightProbe) environment.getLocalLightList().get(0));
             rootNode.addLight(studioProbe);
             viewPort.setBackgroundColor(new ColorRGBA(0.12f, 0.14f, 0.18f, 1));
             setDisplayStatView(false);
@@ -1849,12 +1849,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     radius = Math.max(0.2f, Math.max(box.getXExtent(), Math.max(box.getYExtent(), box.getZExtent()))) * 3.5f;
                 }
             }
-            studioProbe.setPosition(center);
             targetOverlay = new AnimationTargetOverlay(assetManager, model, composer, radius * 0.006f);
             rootNode.attachChild(targetOverlay.geometry);
             targetOverlay.show(targetsVisible);
             rootNode.updateGeometricState();
-            studioProbe.getArea().setRadius(Math.max(100, radius * 10));
             orbit(0, 0, 1);
         }
 

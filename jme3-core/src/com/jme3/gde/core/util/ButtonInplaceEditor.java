@@ -63,13 +63,13 @@ public class ButtonInplaceEditor extends JButton implements InplaceEditor {
 
     public Object getValue() {
         repaint();
-        updateUI();
+        // Reading/committing a value must not reinstall the Swing UI delegate.
         return "";
     }
 
     public void setValue(Object o) {
         repaint();
-        updateUI();
+        // Reading/committing a value must not reinstall the Swing UI delegate.
     }
 
     public boolean supportsTextEntry() {
@@ -97,6 +97,6 @@ public class ButtonInplaceEditor extends JButton implements InplaceEditor {
     }
 
     public boolean isKnownComponent(Component cmpnt) {
-        return false;
+        return cmpnt == this || javax.swing.SwingUtilities.isDescendingFrom(cmpnt, this);
     }
 }

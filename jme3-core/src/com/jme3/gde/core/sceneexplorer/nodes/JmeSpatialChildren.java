@@ -218,6 +218,9 @@ public class JmeSpatialChildren extends Children.Keys<Object> {
             if (pair.getLight() instanceof AmbientLight) {
                 return new Node[]{new JmeAmbientLight(pair.getSpatial(), (AmbientLight) pair.getLight()).setReadOnly(readOnly)};
             }
+            if (pair.getLight() instanceof com.jme3.light.SkyLight) {
+                return new Node[]{new JmeSkyLight(pair.getSpatial(), (com.jme3.light.SkyLight) pair.getLight()).setReadOnly(readOnly)};
+            }
             if (pair.getLight() instanceof LightProbe) {
                 return new Node[]{new JmeLightProbe(pair.getSpatial(), (LightProbe) pair.getLight()).setReadOnly(readOnly)};
             }

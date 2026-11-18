@@ -68,6 +68,46 @@ public class ScenePreviewProcessor implements SceneProcessor {
     private final ConcurrentLinkedQueue<PreviewRequest> previewQueue = new ConcurrentLinkedQueue<PreviewRequest>();
     private PreviewRequest currentPreviewRequest;    
     private PointLight light;
+    private final com.jme3.light.DirectionalLight materialLight = new com.jme3.light.DirectionalLight();
+    private com.jme3.light.SkyLight materialEnvironment;
+    private final java.util.List<com.jme3.light.Light> savedPreviewLights = new java.util.ArrayList<>();
+
+    private void applyMaterialLighting(PreviewRequest request) {
+        if (request.materialLightDirection == null) {
+            return;
+        }
+        for (com.jme3.light.Light existing : previewNode.getLocalLightList()) {
+            savedPreviewLights.add(existing);
+        }
+        previewNode.getLocalLightList().clear();
+        materialLight.setDirection(request.materialLightDirection);
+        previewNode.addLight(materialLight);
+        if (request.materialEnvironment) {
+            if (materialEnvironment == null) {
+                try {
+                    com.jme3.scene.Spatial environment = SceneApplication.getApplication().getAssetManager()
+                            .loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
+                    materialEnvironment = com.jme3.light.SkyLight.fromEnvironment((com.jme3.light.LightProbe) environment.getLocalLightList().get(0));
+                } catch (RuntimeException error) {
+                    java.util.logging.Logger.getLogger(getClass().getName()).log(
+                            java.util.logging.Level.WARNING, "Preview environment unavailable; using direct light", error);
+                }
+            }
+            if (materialEnvironment != null) {
+                previewNode.addLight(materialEnvironment);
+            }
+        }
+    }
+
+    private void restorePreviewLighting() {
+        if (currentPreviewRequest.materialLightDirection != null) {
+            previewNode.getLocalLightList().clear();
+            for (com.jme3.light.Light saved : savedPreviewLights) {
+                previewNode.addLight(saved);
+            }
+            savedPreviewLights.clear();
+        }
+    }
 
     public void addRequest(PreviewRequest request) {
         previewQueue.add(request);
@@ -155,6 +195,7 @@ public class ScenePreviewProcessor implements SceneProcessor {
             if (reInit) {
                 setupPreviewView();
             }
+            applyMaterialLighting(currentPreviewRequest);
             previewNode.attachChild(currentPreviewRequest.getSpatial());
             if (currentPreviewRequest.getCameraRequest().location != null) {
                 offCamera.setLocation(currentPreviewRequest.getCameraRequest().location);
@@ -206,6 +247,7 @@ public class ScenePreviewProcessor implements SceneProcessor {
 
             currentPreviewRequest.setImage(image);
             previewNode.detachAllChildren();
+            restorePreviewLighting();
             SceneApplication.getApplication().notifyPreview(currentPreviewRequest);
             currentPreviewRequest = null;
         }

@@ -57,11 +57,8 @@ public class LightProbeGizmo extends NodeCallback {
     }
     
     protected float getRadius() {
-        if (lightProbe.isReady()) {
-            return ((BoundingSphere)lightProbe.getBounds()).getRadius();
-        } else {
-            return 0f;
-        }
+        // Influence bounds exist before the first bake, too.
+        return lightProbe.getArea().getRadius();
     }
 
     /**

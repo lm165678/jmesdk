@@ -58,12 +58,16 @@ public class LightProbeUpdate extends AbstractControl {
         Geometry probeGeom = (Geometry) ((Node) getSpatial()).getChild(0);
         Material m = probeGeom.getMaterial();
         
-        if (jmeProbe.getLightProbe().isReady()) {            
+        if (jmeProbe.getLightProbe().isReady()) {
+            if (m.getMaterialDef().getMaterialParam("CubeMap") == null) {
+                m = new Material(m.getMaterialDef().getAssetManager(), "Common/MatDefs/Misc/reflect.j3md");
+                probeGeom.setMaterial(m);
+            }
             m.setTexture("CubeMap", jmeProbe.getLightProbe().getPrefilteredEnvMap());            
         }
         
         Geometry probeRadius = (Geometry) ((Node) getSpatial()).getChild(1);
-        probeRadius.setLocalScale(((BoundingSphere) jmeProbe.getLightProbe().getBounds()).getRadius());
+        probeRadius.setLocalScale(jmeProbe.getLightProbe().getArea().getRadius());
     }
 
     @Override

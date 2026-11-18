@@ -48,7 +48,7 @@ import org.openide.windows.TopComponent;
  * <pre>
  * 第一步：选择 Assets 子目录，右键 New File 使用项目的 JME3 资产模板。
  * 新建文件夹：右键目录或空白处选择 New Folder；目录树右键复制/删除作用于该目录。
- * 重命名文件夹：右键目录选择 Rename；生成纹理的 dds 目录受登记表保护而禁用，
+ * 重命名资源：右键文件或目录选择 Rename（保留扩展名）；生成纹理的 dds 目录受登记表保护而禁用，
  * 需重命名源纹理并重新转换，避免 J3O 中的逻辑纹理 key 与物理输出失配。
  * 第二步：选择资产，Ctrl+C / Ctrl+V 复制粘贴，Delete 使用标准删除确认。
  * 第三步：双击资产打开编辑器，拖动模型或材质到当前项目的 3D Viewer。
@@ -588,7 +588,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         String name = input.getInputText().trim();
         if (name.isEmpty() || name.equals(".") || name.equals("..")
                 || name.indexOf('/') >= 0 || name.indexOf((char) 92) >= 0) {
-            report(new java.io.IOException("Enter a single folder name."));
+            report(new java.io.IOException("Enter a single asset name."));
             return;
         }
         io.post(() -> {
@@ -605,8 +605,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         });
     }
 
-    /** True when a folder directly holds registered DDS outputs owned by the texture registry. */
-    private boolean isGeneratedDdsFolder(FileObject folder) {
+    /** True for registered DDS outputs and their containing folders; ordinary DDS files remain renameable. */
+    private boolean isGeneratedRenameTarget(FileObject folder) {
         File local = FileUtil.toFile(folder);
         if (local == null) {
             return false;
@@ -616,7 +616,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             return false;
         }
         try {
-            return store.isGeneratedOutputDirectory(local.toPath());
+            return store.containsGenerated(local.toPath());
         } catch (java.io.IOException error) {
             DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
                     text("RenameFailed") + ": " + error.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
@@ -625,8 +625,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
     }
 
-    /** Resolves the folder a rename command acts on; the asset root is never a target. */
-    private FileObject renameFolderTarget() {
+    /** Resolves the asset a rename command acts on; the asset root is never a target. */
+    private FileObject renameAssetTarget() {
         FileObject target = folderMenuTarget;
         if (target == null) {
             java.util.List<Entry> selected = grid.getSelectedValuesList();
@@ -635,29 +635,30 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             }
             target = selected.get(0).file();
         }
-        if (target == null || !target.isValid() || !target.isFolder()
+        if (target == null || !target.isValid()
                 || manager == null || target.equals(manager.getAssetFolder())) {
             return null;
         }
         return target;
     }
 
-    /** Renames one folder only; asset contents and referenced paths are left untouched. */
-    private void renameFolder(FileObject folder) {
-        if (isGeneratedDdsFolder(folder)) {
+    /** Renames one asset through its DataObject, preserving its extension and sidecars. Referenced paths are not rewritten. */
+    private void renameAsset(FileObject folder) {
+        if (isGeneratedRenameTarget(folder)) {
             DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
                     text("RenameGenerated"), NotifyDescriptor.INFORMATION_MESSAGE));
             return;
         }
         NotifyDescriptor.InputLine input = new NotifyDescriptor.InputLine(
-                folder.getName(), text("RenameFolder"));
+                "Name (without extension)", text("Rename"));
+        input.setInputText(folder.getName());
         if (!NotifyDescriptor.OK_OPTION.equals(DialogDisplayer.getDefault().notify(input))) {
             return;
         }
         String name = input.getInputText().trim();
         if (name.isEmpty() || name.equals(".") || name.equals("..")
                 || name.indexOf('/') >= 0 || name.indexOf((char) 92) >= 0) {
-            report(new java.io.IOException("Enter a single folder name."));
+            report(new java.io.IOException("Enter a single asset name."));
             return;
         }
         if (name.equals(folder.getName())) {
@@ -673,12 +674,12 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                 if (parent == null || !parent.isValid()) {
                     throw new java.io.IOException("The folder has no writable parent.");
                 }
-                if (parent.getFileObject(name) != null) {
+                String extension = folder.isFolder() ? "" : folder.getExt();
+                String fullName = extension.isEmpty() ? name : name + "." + extension;
+                if (parent.getFileObject(fullName) != null) {
                     throw new java.io.IOException("A file or folder with this name already exists.");
                 }
-                try (var lock = folder.lock()) {
-                    folder.rename(lock, name, "");
-                }
+                org.openide.loaders.DataObject.find(folder).rename(name);
                 SwingUtilities.invokeLater(() -> {
                     folderMenuTarget = null;
                     if (currentIsInside) {
@@ -808,7 +809,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             @Override public int getSourceActions(JComponent component) { return COPY; }
             @Override protected java.awt.datatransfer.Transferable createTransferable(JComponent component) {
                 Entry entry = grid.getSelectedValue();
-                if (entry == null || (entry.kind() != AssetKind.MODEL && entry.kind() != AssetKind.MATERIAL)) {
+                if (entry == null || (entry.kind() != AssetKind.MODEL && entry.kind() != AssetKind.MATERIAL && entry.kind() != AssetKind.TEXTURE)) {
                     return null;
                 }
                 var holder = new com.jme3.gde.core.dnd.AssetNameHolder() {
@@ -817,6 +818,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                 };
                 return new com.jme3.gde.core.dnd.AssetTransferable<>(holder,
                         entry.kind() == AssetKind.MODEL ? com.jme3.gde.core.dnd.SpatialDataFlavor.instance
+                                : entry.kind() == AssetKind.TEXTURE ? com.jme3.gde.core.dnd.TextureDataFlavor.instance
                                 : com.jme3.gde.core.dnd.MaterialDataFlavor.instance);
             }
         });
@@ -866,20 +868,21 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             create = aware.createContextAwareInstance(org.openide.util.lookup.Lookups.fixed(context.toArray()));
         }
         JPopupMenu menu = new JPopupMenu();
-        menu.add(create);
+        JMenuItem createItem = menu.add(create);
+        org.openide.awt.Mnemonics.setLocalizedText(createItem, createItem.getText());
         JMenuItem newFolder = new JMenuItem("New Folder");
         newFolder.setEnabled(folder.canWrite());
         newFolder.addActionListener(event -> createFolder(folder));
         menu.add(newFolder);
-        FileObject renameTarget = renameFolderTarget();
+        FileObject renameTarget = renameAssetTarget();
         if (renameTarget != null) {
-            boolean generated = isGeneratedDdsFolder(renameTarget);
+            boolean generated = isGeneratedRenameTarget(renameTarget);
             JMenuItem rename = new JMenuItem(text("Rename"));
             rename.setEnabled(!generated && renameTarget.canWrite());
             if (generated) {
                 rename.setToolTipText(text("RenameGeneratedTip"));
             }
-            rename.addActionListener(event -> renameFolder(renameTarget));
+            rename.addActionListener(event -> renameAsset(renameTarget));
             menu.add(rename);
         }
         menu.addSeparator();

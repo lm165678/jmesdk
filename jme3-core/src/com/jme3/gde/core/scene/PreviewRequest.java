@@ -44,6 +44,21 @@ import java.awt.image.BufferedImage;
  */
 public class PreviewRequest {
 
+    // Null retains legacy preview lighting for other requesters.
+    Vector3f materialLightDirection;
+    boolean materialEnvironment;
+
+    /** Configure isolated material lighting before queuing this request.
+     * Defaults to legacy lighting unless called; the direction is copied.
+     * 第一步：创建 PreviewRequest；第二步：调用 setMaterialLighting(direction, true)。
+     * 第三步：createPreview(request)；后续请求可传 false 关闭环境贴图。
+     * Configure before submission; the render thread applies and restores lights.
+     */
+    public void setMaterialLighting(Vector3f direction, boolean environment) {
+        materialLightDirection = direction.normalize();
+        materialEnvironment = environment;
+    }
+
     private Object requester;
     private Spatial spatial;
     private BufferedImage image;

@@ -1,22 +1,22 @@
 /*
  *  Copyright (c) 2009-2026 jMonkeyEngine
  *  All rights reserved.
- * 
+ *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions are
  *  met:
- * 
+ *
  *  * Redistributions of source code must retain the above copyright
  *    notice, this list of conditions and the following disclaimer.
- * 
+ *
  *  * Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  *  * Neither the name of 'jMonkeyEngine' nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  *  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  *  TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -76,7 +76,42 @@ public class MaterialPreviewRenderer implements SceneListener {
     private boolean init = false;
     private final JLabel label;
     private final ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(5);
-    private boolean previewRequested;
+    private volatile boolean previewRequested;
+    private boolean refreshPending;
+    private volatile boolean disposed;
+    private volatile float orbitYaw, orbitPitch, lightYaw = -0.5f, lightPitch = 0.7f;
+    private volatile boolean environmentEnabled = true;
+
+    /** EDT interaction: orbit the camera or the isolated preview key light.
+     * 第一步：左键拖动预览旋转观察角度；第二步：按住 L 拖动调整方向光。
+     * Defaults to environment lighting on; this never edits the material or scene.
+     */
+    public void dragPreview(float dx, float dy, boolean lighting) {
+        if (lighting) {
+            lightYaw += dx * 0.01f;
+            lightPitch = Math.max(-1.5f, Math.min(1.5f, lightPitch + dy * 0.01f));
+        } else {
+            orbitYaw -= dx * 0.01f;
+            orbitPitch = Math.max(-1.5f, Math.min(1.5f, orbitPitch + dy * 0.01f));
+        }
+        refreshOnly();
+    }
+
+    /** Toggle only this preview's baked environment; next request restores other previews. */
+    public void setEnvironmentEnabled(boolean enabled) {
+        environmentEnabled = enabled;
+        refreshOnly();
+    }
+
+    private void configurePreview(PreviewRequest request) {
+        float cp = FastMath.cos(orbitPitch);
+        request.getCameraRequest().setLocation(new Vector3f(
+                7 * FastMath.sin(orbitYaw) * cp, 7 * FastMath.sin(orbitPitch), 7 * FastMath.cos(orbitYaw) * cp));
+        request.getCameraRequest().setLookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+        float lp = FastMath.cos(lightPitch);
+        request.setMaterialLighting(new Vector3f(-FastMath.sin(lightYaw) * lp,
+                -FastMath.sin(lightPitch), -FastMath.cos(lightYaw) * lp), environmentEnabled);
+    }
 
     public enum DisplayType {
 
@@ -110,7 +145,7 @@ public class MaterialPreviewRenderer implements SceneListener {
         quad = new Geometry("previewQuad", quadMesh);
         quad.setLocalTranslation(new Vector3f(-2.25f, -2.25f, 0));
         MikktspaceTangentGenerator.generate(quad);
-        
+
         teapot = ((Node)SceneApplication.getApplication().getAssetManager()
                 .loadModel("Models/Teapot/teapot.j3o"));
         teapot.scale(0.75f);
@@ -161,7 +196,7 @@ public class MaterialPreviewRenderer implements SceneListener {
                     try {
                         if (currentMaterial != null) {
                             PreviewRequest request = new PreviewRequest(MaterialPreviewRenderer.this, currentSpatial, label.getWidth(), label.getHeight());
-                            request.getCameraRequest().setLocation(new Vector3f(0, 0, 7));
+                            configurePreview(request);
                             request.getCameraRequest().setLookAt(new Vector3f(0, 0, 0), Vector3f.UNIT_Y);
                             SceneApplication.getApplication().createPreview(request);
                         }
@@ -255,12 +290,17 @@ public class MaterialPreviewRenderer implements SceneListener {
             final ImageIcon icon = new ImageIcon(request.getImage());
             java.awt.EventQueue.invokeLater(() -> {
                 label.setIcon(icon);
+                previewRequested = false;
+                if (refreshPending) {
+                    refreshPending = false;
+                    refreshOnly();
+                }
             });
-            previewRequested = false;
         }
     }
 
     public void cleanUp() {
+        disposed = true;
         SceneApplication.getApplication().removeSceneListener(this);
         exec.shutdownNow();
     }
@@ -274,19 +314,28 @@ public class MaterialPreviewRenderer implements SceneListener {
      * material
      */
     public void refreshOnly() {
-        if(previewRequested) {
+        if (disposed) {
             return;
         }
+        if (previewRequested) {
+            refreshPending = true;
+            return;
+        }
+        if (currentMaterial == null || label.getWidth() <= 0 || label.getHeight() <= 0) {
+            return;
+        }
+        final int width = label.getWidth();
+        final int height = label.getHeight();
+        previewRequested = true;
         SceneApplication.getApplication().enqueue((Callable<Object>) () -> {
             if (currentMaterial != null) {
-                PreviewRequest request = new PreviewRequest(MaterialPreviewRenderer.this, currentSpatial, label.getWidth(), label.getHeight());
-                request.getCameraRequest().setLocation(new Vector3f(0, 0, 7));
+                PreviewRequest request = new PreviewRequest(MaterialPreviewRenderer.this, currentSpatial, width, height);
+                configurePreview(request);
                 request.getCameraRequest().setLookAt(new Vector3f(0, 0, 0), Vector3f.UNIT_Y);
                 SceneApplication.getApplication().createPreview(request);
             }
             return null;
         });
-        previewRequested = true;
     }
 
 }

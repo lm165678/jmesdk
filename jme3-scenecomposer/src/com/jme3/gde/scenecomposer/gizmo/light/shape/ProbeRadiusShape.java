@@ -148,17 +148,19 @@ public class ProbeRadiusShape extends Mesh {
      * @return the bounding sphere debug geometry.
      */
     public static Geometry createShape(AssetManager assetManager) {
-        ProbeRadiusShape b = new ProbeRadiusShape();
+        com.jme3.scene.debug.WireSphere b = new com.jme3.scene.debug.WireSphere(1f);
         Geometry geom = new Geometry("BoundingDebug", b);
 
-        Material mat = new Material(assetManager, "com/jme3/gde/scenecomposer/gizmo/light/mat/dashed/dashed.j3md");        
+        Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
         mat.getAdditionalRenderState().setWireframe(true);
         mat.getAdditionalRenderState().setBlendMode(RenderState.BlendMode.Alpha);
         mat.getAdditionalRenderState().setDepthWrite(false);
         mat.getAdditionalRenderState().setDepthTest(false);  
-        mat.setFloat("DashSize", 0.5f);
+        mat.setColor("Color", ColorRGBA.Orange);
+        mat.getAdditionalRenderState().setLineWidth(2f);
         geom.setQueueBucket(RenderQueue.Bucket.Transparent);
-        geom.addControl(new BillboardControl());
+        // Keep the real influence radius; only line thickness is screen-sized.
+        geom.setCullHint(com.jme3.scene.Spatial.CullHint.Never);
         
         
         geom.setMaterial(mat);

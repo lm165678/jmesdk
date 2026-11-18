@@ -78,8 +78,87 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
 
     }
 
+
+    /** Compact tabs share the available width; scroll increments are in pixels.
+     * 第一步：选择 Options / Textures & Colors / Additional RenderState 标签。
+     * 第二步：滚轮滚动；窄窗口中参数名称省略显示，悬停查看完整名称。
+     */
+    private void configureCompactLayout() {
+        String textureTitle = texturesAndColorsPane.getTitleAt(0);
+        String stateTitle = additionalRenderStatePane.getTitleAt(0);
+        optionsPane.addTab(textureTitle, jScrollPane3);
+        optionsPane.addTab(stateTitle, jScrollPane10);
+        optionsPane.setMinimumSize(new java.awt.Dimension(0, 0));
+        optionsPane.setTabLayoutPolicy(javax.swing.JTabbedPane.SCROLL_TAB_LAYOUT);
+        for (javax.swing.JScrollPane scroll : new javax.swing.JScrollPane[]{jScrollPane2, jScrollPane3, jScrollPane10}) {
+            java.awt.Component content = scroll.getViewport().getView();
+            scroll.setViewportView(new WidthPanel(content));
+            scroll.setMinimumSize(new java.awt.Dimension(0, 0));
+            scroll.setHorizontalScrollBarPolicy(javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+            scroll.getVerticalScrollBar().setUnitIncrement(32);
+            scroll.getVerticalScrollBar().setBlockIncrement(160);
+        }
+        javax.swing.JPanel fields = new javax.swing.JPanel(new java.awt.GridBagLayout());
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        c.insets = new java.awt.Insets(3, 6, 3, 6);
+        c.gridx = 0;
+        c.gridy = 0;
+        fields.add(new javax.swing.JLabel("Name"), c);
+        c.gridy = 1;
+        fields.add(new javax.swing.JLabel("Material definition"), c);
+        c.gridx = 1;
+        c.gridy = 0;
+        c.weightx = 1;
+        jTextField1.setMinimumSize(new java.awt.Dimension(0, 24));
+        fields.add(jTextField1, c);
+        c.gridy = 1;
+        jComboBox1.setMinimumSize(new java.awt.Dimension(0, 24));
+        fields.add(jComboBox1, c);
+        javax.swing.JPanel toggles = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+        toggles.add(jCheckBox1);
+        toggles.add(animationCheckBox);
+        c.gridx = 0;
+        c.gridy = 2;
+        c.gridwidth = 2;
+        fields.add(toggles, c);
+        javax.swing.JPanel header = new javax.swing.JPanel(new java.awt.BorderLayout(8, 0));
+        header.add(materialPreviewWidget1, java.awt.BorderLayout.WEST);
+        javax.swing.JPanel details = new javax.swing.JPanel(new java.awt.BorderLayout());
+        details.add(fields, java.awt.BorderLayout.NORTH);
+        header.add(details, java.awt.BorderLayout.CENTER);
+        editorPanel.removeAll();
+        editorPanel.setLayout(new java.awt.BorderLayout(0, 6));
+        editorPanel.add(header, java.awt.BorderLayout.NORTH);
+        editorPanel.add(optionsPane, java.awt.BorderLayout.CENTER);
+        jTabbedPane1.setComponentAt(0, editorPanel);
+    }
+
+    private static final class WidthPanel extends javax.swing.JPanel implements javax.swing.Scrollable {
+        WidthPanel(java.awt.Component content) {
+            super(new java.awt.BorderLayout());
+            add(content, java.awt.BorderLayout.NORTH);
+        }
+        public java.awt.Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+        public int getScrollableUnitIncrement(java.awt.Rectangle r, int orientation, int direction) {
+            return 32;
+        }
+        public int getScrollableBlockIncrement(java.awt.Rectangle r, int orientation, int direction) {
+            return Math.max(32, r.height - 32);
+        }
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
+    }
+
     private void initWindow() {
         initComponents();
+        configureCompactLayout();
         optionsPane.addComponentListener(new ComponentListener() {
             @Override
             public void componentResized(ComponentEvent e) {
@@ -610,6 +689,19 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
         materialFile = prop;
     }
 
+    private static void allowLabelShrink(java.awt.Container container) {
+        for (java.awt.Component child : container.getComponents()) {
+            if (child instanceof javax.swing.JLabel label) {
+                label.setMinimumSize(new java.awt.Dimension(0, label.getPreferredSize().height));
+                if (label.getText() != null && !label.getText().isEmpty()) {
+                    label.setToolTipText(label.getText());
+                }
+            } else if (child instanceof java.awt.Container nested) {
+                allowLabelShrink(nested);
+            }
+        }
+    }
+
     private void updateProperties() {
         for (Component component : optionsPanel.getComponents()) {
             if (component instanceof MaterialPropertyWidget materialPropertyWidget) {
@@ -664,6 +756,9 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
         for (Component component : otherList) {
             optionsPanel.add(component);
         }
+        allowLabelShrink(optionsPanel);
+        allowLabelShrink(texturePanel);
+        allowLabelShrink(statesPanel);
         jScrollPane2.repaint();
         jScrollPane3.repaint();
         setDisplayName(materialFile.getName() + " - " + materialFile.getMaterialPath());

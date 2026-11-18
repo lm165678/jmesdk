@@ -103,6 +103,7 @@ public class TexturePanelSquare extends MaterialPropertyWidget implements Textur
             }
         });
         setDropTarget(new DropTarget(this, new TextureDropTargetListener(this)));
+        texturePreview.setDropTarget(new DropTarget(texturePreview, new TextureDropTargetListener(this)));
     }
 
     private void displayPreview() {
@@ -309,6 +310,13 @@ public class TexturePanelSquare extends MaterialPropertyWidget implements Textur
     private javax.swing.JPanel jPanel1;
     private javax.swing.JLabel texturePreview;
     // End of variables declaration//GEN-END:variables
+
+    /** 第一步：从当前项目资产面板拖动纹理；第二步：放到缩略图槽位，沿用保存/预览流程。 */
+    @Override
+    public boolean acceptsTexture(com.jme3.gde.core.dnd.AssetNameHolder texture) {
+        return manager != null && texture.getAssetFile() != null
+                && texture.getAssetFile().equals(manager.getAssetFolder().getFileObject(texture.getAssetName()));
+    }
 
     @Override
     public void setTexture(String name) {

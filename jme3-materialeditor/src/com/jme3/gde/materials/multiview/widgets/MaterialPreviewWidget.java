@@ -50,13 +50,106 @@ import javax.swing.Timer;
  */
 public class MaterialPreviewWidget extends javax.swing.JPanel {
 
+
+    private boolean lightDrag;
+    private final java.awt.KeyEventDispatcher lightKeyDispatcher = event -> {
+        if (event.getKeyCode() == java.awt.event.KeyEvent.VK_L && isShowing()
+                && !(java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner()
+                instanceof javax.swing.text.JTextComponent)) {
+            lightDrag = event.getID() == java.awt.event.KeyEvent.KEY_PRESSED;
+        }
+        return false;
+    };
+
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(lightKeyDispatcher);
+    }
+
+    @Override
+    public void removeNotify() {
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(lightKeyDispatcher);
+        lightDrag = false;
+        super.removeNotify();
+    }
+
+    /** Compact Feather MIT icons match the editor's outlined toolbar style.
+     * 第一步：选择预览网格；第二步：左键拖动旋转观察；按住 L 拖动调整方向光。
+     * 第三步：太阳按钮切换环境贴图，默认开启；这些操作不修改场景或材质文件。
+     */
+    private void configurePreviewUi() {
+        removeAll();
+        setLayout(new java.awt.BorderLayout(4, 0));
+        setMinimumSize(new java.awt.Dimension(160, 160));
+        setPreferredSize(new java.awt.Dimension(228, 200));
+        jToolBar1.setFloatable(false);
+        jToolBar1.setPreferredSize(new java.awt.Dimension(28, 200));
+        jToolBar1.setMinimumSize(new java.awt.Dimension(28, 0));
+        javax.swing.JToggleButton[] buttons = {cubeButton, planeButton, sphereButton, teapotButton, togglePbrEnvButton};
+        String[] names = {"box", "square", "globe", "coffee", "sun"};
+        for (int i = 0; i < buttons.length; i++) {
+            javax.swing.JToggleButton button = buttons[i];
+            button.setText("");
+            button.setIcon(org.openide.util.ImageUtilities.loadImageIcon(Icons.ICONS_PATH + "preview-" + names[i] + ".svg", false));
+            button.setSelectedIcon(org.openide.util.ImageUtilities.loadImageIcon(Icons.ICONS_PATH + "preview-" + names[i] + "-selected.svg", false));
+            button.setPressedIcon(button.getSelectedIcon());
+            button.setMargin(new java.awt.Insets(3, 3, 3, 3));
+            button.setPreferredSize(new java.awt.Dimension(28, 28));
+            button.setMinimumSize(new java.awt.Dimension(28, 28));
+            button.setMaximumSize(new java.awt.Dimension(28, 28));
+        }
+        togglePbrEnvButton.setSelected(true);
+        togglePbrEnvButton.setToolTipText("Environment lighting (default on)");
+        previewLabel.setMinimumSize(new java.awt.Dimension(0, 0));
+        previewLabel.setFocusable(true);
+        previewLabel.setToolTipText("Drag: orbit model | Hold L + drag: light direction");
+        add(previewLabel, java.awt.BorderLayout.CENTER);
+        add(jToolBar1, java.awt.BorderLayout.EAST);
+        java.awt.event.MouseAdapter mouse = new java.awt.event.MouseAdapter() {
+            private int x, y;
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                previewLabel.requestFocusInWindow();
+                x = e.getX();
+                y = e.getY();
+            }
+            public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (matRenderer != null && javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    matRenderer.dragPreview(e.getX() - x, e.getY() - y, lightDrag);
+                }
+                x = e.getX();
+                y = e.getY();
+            }
+        };
+        previewLabel.addMouseListener(mouse);
+        previewLabel.addMouseMotionListener(mouse);
+        previewLabel.addKeyListener(new java.awt.event.KeyAdapter() {
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_L) {
+                    lightDrag = true;
+                }
+            }
+            public void keyReleased(java.awt.event.KeyEvent e) {
+                if (e.getKeyCode() == java.awt.event.KeyEvent.VK_L) {
+                    lightDrag = false;
+                }
+            }
+        });
+        previewLabel.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                lightDrag = false;
+            }
+        });
+    }
+
     private boolean init=false;
     private MaterialPreviewRenderer matRenderer;
     private boolean animationEnabled = false;
     
     /** Creates new form MaterialPreviewWidget */
     public MaterialPreviewWidget() {
-        initComponents();        
+        initComponents();
+        configurePreviewUi();
     }
     
     private final Timer animationTimer = new Timer(20, (ActionEvent e) -> {
@@ -91,7 +184,9 @@ public class MaterialPreviewWidget extends javax.swing.JPanel {
 
     public void cleanUp(){
          animationTimer.stop();
-         matRenderer.cleanUp();
+         if (matRenderer != null) {
+             matRenderer.cleanUp();
+         }
     }
     
     /**
@@ -279,7 +374,7 @@ private void planeButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-F
 }//GEN-LAST:event_planeButtonActionPerformed
 
     private void togglePbrEnvButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_togglePbrEnvButtonActionPerformed
-        SceneApplication.getApplication().enablePreviewLighting(togglePbrEnvButton.isSelected());
+        matRenderer.setEnvironmentEnabled(togglePbrEnvButton.isSelected());
         matRenderer.refreshOnly();
     }//GEN-LAST:event_togglePbrEnvButtonActionPerformed
 

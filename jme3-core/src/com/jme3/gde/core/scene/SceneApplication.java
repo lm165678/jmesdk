@@ -137,7 +137,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private Thread thread;
     private NodeSyncAppState nodeSync;
     private FakeApplication fakeApp;
-    private LightProbe pbrLightProbe;
+    private com.jme3.light.SkyLight pbrLightProbe;
     private Spatial pbrSky;
 
     private volatile boolean gBufferVisible;
@@ -976,7 +976,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             @Override
             public void run() {
                 Spatial s = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
-                pbrLightProbe = (LightProbe)s.getLocalLightList().get(0);
+                pbrLightProbe = com.jme3.light.SkyLight.fromEnvironment((LightProbe) s.getLocalLightList().get(0));
                 s.getLocalLightList().clear();
 
                 enqueue(() -> {

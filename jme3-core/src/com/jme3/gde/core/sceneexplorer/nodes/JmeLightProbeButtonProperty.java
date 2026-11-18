@@ -36,7 +36,9 @@ public class JmeLightProbeButtonProperty extends PropertyEditorSupport implement
     @Override
     public void attachEnv(PropertyEnv env) {
         this.env = env;
-        env.registerInplaceEditorFactory(this);
+        if (env != null) {
+            env.registerInplaceEditorFactory(this);
+        }
     }
     private ButtonInplaceEditor ed = null;
 
@@ -50,14 +52,6 @@ public class JmeLightProbeButtonProperty extends PropertyEditorSupport implement
                     SceneApplication.getApplication().enqueue(new Callable<Object>() {
                         @Override
                         public Object call() throws Exception {
-                            if (probe.getLightProbe() instanceof com.jme3.light.SkyLight) {
-                                var control = probe.findSkyControl();
-                                if (control != null) {
-                                    control.requestRebake();
-                                    probe.setModified();
-                                }
-                                return null;
-                            }
                             EnvironmentCamera envCam = SceneApplication.getApplication().getStateManager().getState(EnvironmentCamera.class);
                             envCam.setPosition(probe.getLightProbe().getPosition());
                             LightProbeFactory.updateProbe(probe.getLightProbe(),
@@ -93,6 +87,6 @@ public class JmeLightProbeButtonProperty extends PropertyEditorSupport implement
         ed.setOpaque(false);
         ed.paint(g);
         g.dispose();
-        probe.refresh(false);
+        // Painting must not trigger property-tree refreshes.
     }
 }

@@ -157,6 +157,12 @@ public class JmeLight extends AbstractSceneExplorerNode {
         return true;
     }
 
+    /**
+     * Deletes this light and its owning sky, if present, on the render thread.
+     * 第一步：使用 SkyFactory 创建天空并挂到场景中，保留自动生成的 SkyLightControl。
+     * 第二步：删除 Sky 或它对应的 SkyLight；按 control.getLight() 的对象身份关联，
+     * 不按名称匹配。J3O 保存重载保持此关联；无关联的独立灯光仅删除自身。
+     */
     @Override
     public void destroy() throws IOException {
         try {
@@ -164,6 +170,19 @@ public class JmeLight extends AbstractSceneExplorerNode {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
                 public Void call() throws Exception {
+                    // SkyFactory's control owns this exact light, including after J3O reload.
+                    // Delete the associated sky on the render thread; unrelated lights stay intact.
+                    java.util.List<Spatial> skies = new java.util.ArrayList<>();
+                    spatial.depthFirstTraversal(child -> {
+                        com.jme3.environment.SkyLightControl sky = child.getControl(
+                                com.jme3.environment.SkyLightControl.class);
+                        if (sky != null && sky.getLight() == light) {
+                            skies.add(child);
+                        }
+                    });
+                    for (Spatial sky : skies) {
+                        sky.removeFromParent();
+                    }
                     spatial.removeLight(light);
                     return null;
                 }

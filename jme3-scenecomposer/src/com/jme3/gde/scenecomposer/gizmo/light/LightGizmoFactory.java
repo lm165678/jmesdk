@@ -95,6 +95,7 @@ public class LightGizmoFactory {
         
         Geometry arrow = new Geometry("direction arrow", new Arrow(new Vector3f(0, 5, 0)));
         arrow.setMaterial(mat);
+        arrow.addControl(new ScreenSizeControl(64f, 5f));
         arrow.addControl(new LightColorUpdate(light, arrow.getMaterial(), "Color"));
         
         gizmo.attachChild(arrow);
@@ -123,6 +124,7 @@ public class LightGizmoFactory {
         
         Geometry arrow = new Geometry("direction arrow", new Arrow(Vector3f.UNIT_Y.mult(1f)));
         arrow.setMaterial(mat);
+        arrow.addControl(new ScreenSizeControl(64f, 1f));
         arrow.addControl(new LightColorUpdate(light, arrow.getMaterial(), "Color"));
         gizmo.attachChild(arrow);
         
@@ -159,8 +161,10 @@ public class LightGizmoFactory {
         
         Sphere s = new Sphere(16, 16, 0.5f);
         Geometry debugGeom = new Geometry(probe.getLightProbe().getName(), s);
-        Material debugMaterial = new Material(assetManager, "Common/MatDefs/Misc/reflect.j3md");
+        Material debugMaterial = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
+        debugMaterial.setColor("Color", ColorRGBA.Orange);
         debugGeom.setMaterial(debugMaterial);
+        debugGeom.addControl(new ScreenSizeControl(24f, 1f));
         Spatial debugBounds = ProbeRadiusShape.createShape(assetManager);
         
         gizmo.attachChild(debugGeom);
@@ -179,6 +183,9 @@ public class LightGizmoFactory {
         mat.setTexture("ColorMap", tex);
         mat.getAdditionalRenderState().setBlendMode(RenderState.BlendMode.Alpha);
         lightBulb.setMaterial(mat);
+        lightBulb.addControl(new ScreenSizeControl(24f, 0.5f));
+        mat.getAdditionalRenderState().setDepthTest(false);
+        mat.getAdditionalRenderState().setDepthWrite(false);
         lightBulb.setQueueBucket(RenderQueue.Bucket.Transparent);
         
         return lightBulb;
