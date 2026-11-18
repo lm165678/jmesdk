@@ -46,6 +46,10 @@ import org.openide.util.lookup.ServiceProvider;
  * 烘焙时间和临时内存增加，结果保存到原 GI 数据格式；取消保留旧结果。
  * 面板重新打开时次数恢复为 1；选择 1 并重新烘焙可恢复单次反射。
  * 多次反射暂不支持 Adaptive local refinement；体积应覆盖需要接收反射的表面。
+ * 第七步：Separate sky visibility 默认关闭，烘焙包含天空的完整漫反射。
+ * 体积内替代天空漫反射，体积外或关闭 GI 后回退天光；天空反射独立保留。
+ * 勾选后恢复反弹光与天空可见度分离模式；两种模式切换均需重新烘焙并保存。
+ * 现有数据不因面板开关而改变，取消烘焙保留原模式。
  * </pre>
  */
 @ServiceProvider(service = ToolAction.class)
@@ -174,6 +178,10 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         }
         JSpinner capture = spinner(fields, "Capture size", 64, 4, 2048);
         JSpinner samples = spinner(fields, "Radiance samples", 1024, 32, 65536);
+        JCheckBox separateSky = new JCheckBox("Separate sky visibility", false);
+        separateSky.setToolTipText("Default off: bake total sky + bounced diffuse; replace sky diffuse inside the volume. On: store bounced diffuse and sky visibility separately. Switching requires rebaking; sky reflections stay enabled.");
+        fields.add(separateSky);
+        fields.add(new JLabel("Off: bake total diffuse"));
         JSpinner bounces = spinner(fields, "Diffuse bounce passes", 1, 1, 8);
         bounces.setToolTipText("Default 1. More passes propagate diffuse indirect light; increases bake time, not runtime probe count. Cancel preserves old data.");
         JSpinner visibility = spinner(fields, "Visibility resolution", 16, 2, 64);
@@ -341,6 +349,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.captureSize = (Integer) capture.getValue();
             quality.radianceSamples = (Integer) samples.getValue();
             quality.bounceCount = (Integer) bounces.getValue();
+            quality.separateSky = separateSky.isSelected();
             if (quality.bounceCount > 1 && adaptive.isSelected() && !surfaceLayout.isSelected()) {
                 status.setText("Multiple bounce passes require Adaptive local refinement to be off.");
                 return;

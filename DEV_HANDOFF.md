@@ -1,3 +1,8 @@
+## 2026-11-19 GI sky bake mode selector
+- BakeGiProbeVolumeAction exposes Separate sky visibility, default unchecked. Off requests total diffuse including sky; on preserves separated bounce/sky-visibility data. Choice is copied at bake start; changing the control alone never relabels existing data. Rebake and save scene/GI files to switch. Source usage and tooltip explain outside/disabled-GI fallback and independent sky reflections.
+- Paired engine change defaults GiSceneBaker.Settings.separateSky=false and corrects total-mode bounce composition/sky-pixel intensity. Targeted SDK action javac passed via engine build/sdk-bounces-check.args. Engine native tests cover both formats, all four paths and Lighting/PBR; TestScene3 fixed-view outputs identical. Full NetBeans UI, SDK build/deployment/restart were not run.
+- Sky intensity/exposure are not modified by this UI change. Original project scenes untouched; comparison candidates/logs remain under the engine build directory. Distance-field sky occlusion remains pending; this changes composition, not that feature. Preserve concurrent post-processing and WorldSettings work.
+
 ## 2026-11-18 paired source revisions
 
 - Engine: `caa5af33978f9818516485d86134aa49a6db5461` on `dev_fix_lightprobe_issue`.
