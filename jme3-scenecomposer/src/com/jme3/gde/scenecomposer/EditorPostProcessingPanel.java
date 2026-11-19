@@ -5,8 +5,11 @@ import com.jme3.gde.core.util.EditorMessages;
 import com.jme3.gde.core.util.InspectorColumns;
 import javax.swing.*;
 
-/** Compact preview controls; listeners enqueue rendering changes and never edit assets. */
-final class EditorPostProcessingPanel extends JPanel {
+/** Scene settings controls; updates are serialized with the scene root WorldSettings. */
+final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.core.scene.SceneListener {
+    private final java.util.Map<String, JComponent> inputs = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, Double> defaults = new java.util.LinkedHashMap<>();
+    private boolean refreshing;
     EditorPostProcessingPanel() {
         super(new java.awt.BorderLayout());
         JPanel stack = new JPanel();
@@ -17,6 +20,14 @@ final class EditorPostProcessingPanel extends JPanel {
         stack.add(global);
         JPanel exposure = section(stack, "Exposure");
         toggle(exposure, "AutomaticExposure", true);
+        toggle(exposure, "UE4Exposure", false);
+        number(exposure, "MinBrightness", .03, .00001, 65504, .01);
+        number(exposure, "MaxBrightness", 2, .00001, 65504, .1);
+        number(exposure, "HistogramMin", -8, -16, 23, .25);
+        number(exposure, "HistogramMax", 4, -15.99, 24, .25);
+        number(exposure, "LowPercent", .1, 0, .98, .01);
+        number(exposure, "HighPercent", .9, .01, 1, .01);
+        number(exposure, "TransitionDistance", 1.5, .1, 10, .1);
         JButton resetExposure = new JButton(EditorMessages.text("PostResetExposure"));
         resetExposure.addActionListener(event -> send("ResetExposure", 1));
         row(exposure, "ResetExposure", resetExposure);
@@ -34,6 +45,24 @@ final class EditorPostProcessingPanel extends JPanel {
         JPanel tonemap = section(stack, "ToneMap");
         toggle(tonemap, "ToneMap", true);
         toggle(tonemap, "FilmicCurve", false);
+        toggle(tonemap, "UE4Tonemap", false);
+        number(tonemap, "FilmSlope", .88, .05, 1, .01);
+        number(tonemap, "FilmToe", .55, 0, .95, .01);
+        number(tonemap, "FilmShoulder", .26, 0, .95, .01);
+        number(tonemap, "FilmBlackClip", 0, 0, .2, .01);
+        number(tonemap, "FilmWhiteClip", .04, 0, .2, .01);
+        number(tonemap, "Temperature", 6500, 2000, 15000, 100);
+        number(tonemap, "Tint", 0, -1, 1, .01);
+        number(tonemap, "BlueCorrection", .6, 0, 1, .05);
+        number(tonemap, "ExpandGamut", 1, 0, 1, .05);
+        JPanel grading = section(stack, "CombineLUTs");
+        for (String channel : new String[]{"Red", "Green", "Blue"}) {
+            number(grading, "GradingGamma" + channel, 1, .1, 4, .05);
+            number(grading, "GradingOffset" + channel, 0, -1, 1, .01);
+            number(grading, "ShadowGain" + channel, 1, 0, 4, .05);
+            number(grading, "MidtoneGain" + channel, 1, 0, 4, .05);
+            number(grading, "HighlightGain" + channel, 1, 0, 4, .05);
+        }
         number(tonemap, "WhitePoint", 11.2, 1, 100, 0.1);
         number(tonemap, "Saturation", 1, 0, 2, 0.05);
         number(tonemap, "Contrast", 1, 0.25, 2, 0.05);
@@ -67,6 +96,7 @@ final class EditorPostProcessingPanel extends JPanel {
         number(depthoffield, "DofBlurThreshold", 0.2, 0, 1, 0.01);
         toggle(depthoffield, "DofDebug", false);
         add(stack, java.awt.BorderLayout.NORTH);
+        updateModeControls();
     }
 
     private JPanel section(JPanel stack, String key) {
@@ -103,6 +133,8 @@ final class EditorPostProcessingPanel extends JPanel {
     private void toggle(JPanel rows, String key, boolean initial) {
         JCheckBox input = new JCheckBox();
         input.setSelected(initial);
+        inputs.put(key, input);
+        defaults.put(key, initial ? 1d : 0d);
         input.addActionListener(event -> send(key, input.isSelected() ? 1 : 0));
         row(rows, key, input);
         if (java.util.Set.of("Bloom", "ToneMap", "FXAA", "SSAO", "Fog", "DepthOfField").contains(key)) {
@@ -112,6 +144,8 @@ final class EditorPostProcessingPanel extends JPanel {
 
     private void number(JPanel rows, String key, double initial, double min, double max, double step) {
         JSpinner input = new JSpinner(new SpinnerNumberModel(initial, min, max, step));
+        inputs.put(key, input);
+        defaults.put(key, initial);
         input.addChangeListener(event -> send(key, ((Number) input.getValue()).doubleValue()));
         row(rows, key, input);
     }
@@ -127,7 +161,78 @@ final class EditorPostProcessingPanel extends JPanel {
         rows.add(input);
     }
 
+    private void updateModeControls() {
+        if (!inputs.containsKey("UE4Tonemap")) {
+            return;
+        }
+        boolean exposure = ((JCheckBox) inputs.get("UE4Exposure")).isSelected();
+        boolean film = ((JCheckBox) inputs.get("UE4Tonemap")).isSelected();
+        for (var entry : inputs.entrySet()) {
+            String key = entry.getKey();
+            if (java.util.Set.of("MinBrightness", "MaxBrightness", "HistogramMin", "HistogramMax", "TransitionDistance").contains(key)) {
+                entry.getValue().setEnabled(exposure);
+            } else if (key.equals("ExposureMin") || key.equals("ExposureMax")) {
+                entry.getValue().setEnabled(!exposure);
+            } else if (key.equals("FilmicCurve") || key.equals("WhitePoint")) {
+                entry.getValue().setEnabled(!film);
+            } else if (key.startsWith("Film") || key.equals("Temperature") || key.equals("Tint") || key.equals("BlueCorrection") || key.equals("ExpandGamut")
+                    || key.startsWith("Grading") || key.startsWith("ShadowGain") || key.startsWith("MidtoneGain") || key.startsWith("HighlightGain")) {
+                entry.getValue().setEnabled(film);
+            }
+        }
+    }
+
     private void send(String key, double value) {
-        SceneApplication.getApplication().configureEditorPostProcessing(key, value);
+        if (!refreshing) {
+            SceneApplication.getApplication().configureEditorPostProcessing(key, value);
+            updateModeControls();
+        }
+    }
+    private void refreshSettings() {
+        SceneApplication.getApplication().readEditorPostProcessing(values -> {
+            if (!isDisplayable()) {
+                return;
+            }
+            refreshing = true;
+            try {
+                inputs.forEach((key, input) -> {
+                    double value = values.getOrDefault(key, defaults.get(key));
+                    if (input instanceof JCheckBox box) {
+                        box.setSelected(value != 0);
+                    } else if (input instanceof JSpinner spinner) {
+                        spinner.setValue(value);
+                    }
+                });
+                updateModeControls();
+            } finally {
+                refreshing = false;
+            }
+        });
+    }
+
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        SceneApplication.getApplication().addSceneListener(this);
+        refreshSettings();
+    }
+
+    @Override
+    public void removeNotify() {
+        SceneApplication.getApplication().removeSceneListener(this);
+        super.removeNotify();
+    }
+
+    @Override
+    public void sceneOpened(com.jme3.gde.core.scene.SceneRequest request) {
+        refreshSettings();
+    }
+
+    @Override
+    public void sceneClosed(com.jme3.gde.core.scene.SceneRequest request) {
+    }
+
+    @Override
+    public void previewCreated(com.jme3.gde.core.scene.PreviewRequest request) {
     }
 }

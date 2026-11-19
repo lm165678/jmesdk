@@ -11,11 +11,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Preview-only HDR chain, owned and mutated by the render thread. Tone mapping
+ * Scene-owned HDR configuration with render-thread-only preview GPU state. Tone mapping
  * and FXAA start enabled; optional effects start disabled. A scene-owned FPP
  * or non-Lit diagnostic view bypasses this chain to avoid processing twice.
  * RGBA16F is preferred, RGBA32F is the fallback; unsupported GPUs bypass it.
- * This processor never attaches to GI capture viewports or modifies scene assets.
+ * This processor never attaches to GI capture viewports. Explicit edits snapshot
+ * configuration into the active root WorldSettings for normal J3O serialization.
  * Modern preview defaults to histogram automatic exposure, multi-scale Bloom,
  * Neutral tone mapping and FXAA; AO stays optional. LegacyPipeline shows the old
  * fixed ToneMap+FXAA reference preset; modern controls keep their settings.
@@ -29,11 +30,17 @@ import java.util.Map;
  * 第六步：AO 的 Show Only 输出不经过后续曝光、Bloom、调色；取消后自动恢复。
  * 第七步：勾选 Legacy reference 查看旧的固定 ToneMap+FXAA；取消恢复新链及参数。
  * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由输出帧缓冲编码一次。
- * 所有操作仅影响预览，不写入 J3O，不用于 GI 烘焙。
+ * 第八步：保存场景将 WorldSettings 写入 J3O；游戏加载并挂到 rootNode 后自动恢复。
+ * 第九步：Exposure 勾选 UE4 histogram adaptation，ToneMap 勾选 UE4 Film / combined LUT。
+ * 新模式使用亮度上下限和 Film 参数；Combine LUTs 分组调节 Gamma、Offset 和分区增益。
+ * 取消这两个开关恢复旧模式；旧场景不会自动迁移。外部 LUT 纹理由 Java API 设置。
+ * 切换场景会恢复各自设置和曝光历史；旧场景未编辑时使用默认预览，不用于 GI 烘焙。
  * </pre>
  */
 final class EditorPostProcessing {
     private final SceneApplication app;
+    private final Map<String, Double> options = new LinkedHashMap<>();
+    private SceneRequest owner;
     private final Map<String, Filter> filters = new LinkedHashMap<>();
     private FilterPostProcessor processor;
     private FilterPostProcessor legacyProcessor;
@@ -77,10 +84,36 @@ final class EditorPostProcessing {
     }
 
     void configure(String option, double value) {
+        if (!option.equals("Lit") && !option.equals("ResetExposure")) {
+            options.put(option, value);
+        }
         if (processor == null && supported) {
             create();
         }
-        if (option.equals("LegacyPipeline")) {
+        if (processor != null && option.equals("UE4Exposure")) {
+            ((AutoExposureFilter) filters.get("Exposure")).setMode(value != 0
+                    ? AutoExposureFilter.Mode.UE4Histogram : AutoExposureFilter.Mode.Legacy);
+        } else if (processor != null && java.util.Set.of("MinBrightness", "MaxBrightness", "HistogramMin", "HistogramMax", "TransitionDistance", "LowPercent", "HighPercent").contains(option)) {
+            AutoExposureFilter exposure = (AutoExposureFilter) filters.get("Exposure");
+            double min = options.getOrDefault("MinBrightness", .03d);
+            double max = Math.max(min, options.getOrDefault("MaxBrightness", 2d));
+            options.put("MaxBrightness", max);
+            exposure.setBrightnessRange((float) min, (float) max);
+            min = options.getOrDefault("HistogramMin", -8d);
+            max = Math.max(min + .01, options.getOrDefault("HistogramMax", 4d));
+            options.put("HistogramMax", max);
+            exposure.setHistogramRange((float) min, (float) max);
+            exposure.setTransitionDistance(options.getOrDefault("TransitionDistance", 1.5d).floatValue());
+            double low = options.getOrDefault("LowPercent", .1d);
+            double high = Math.max(low + .01, options.getOrDefault("HighPercent", .9d));
+            options.put("HighPercent", high);
+            exposure.setPercentiles((float) low, (float) high);
+        } else if (processor != null && (option.equals("UE4Tonemap") || option.startsWith("Film")
+                || option.equals("Temperature") || option.equals("Tint") || option.equals("BlueCorrection") || option.equals("ExpandGamut")
+                || option.startsWith("GradingGamma") || option.startsWith("GradingOffset")
+                || option.startsWith("ShadowGain") || option.startsWith("MidtoneGain") || option.startsWith("HighlightGain"))) {
+            configureGrading();
+        } else if (option.equals("LegacyPipeline")) {
             legacy = value != 0;
         } else if (option.equals("Enabled")) {
             enabled = value != 0;
@@ -104,9 +137,11 @@ final class EditorPostProcessing {
             ((AutoExposureFilter) filters.get("Exposure")).setAutomatic(value != 0);
         } else if (processor != null && option.equals("ExposureMin")) {
             minEV = Math.min((float) value, maxEV);
+            options.put(option, (double) minEV);
             ((AutoExposureFilter) filters.get("Exposure")).setExposureRange(minEV, maxEV);
         } else if (processor != null && option.equals("ExposureMax")) {
             maxEV = Math.max((float) value, minEV);
+            options.put(option, (double) maxEV);
             ((AutoExposureFilter) filters.get("Exposure")).setExposureRange(minEV, maxEV);
         } else if (processor != null && option.equals("ExposureSpeedUp")) {
             speedUp = (float) value;
@@ -176,7 +211,110 @@ final class EditorPostProcessing {
         }
     }
 
+    private Vector3f optionVector(String prefix, double fallback) {
+        return new Vector3f(options.getOrDefault(prefix + "Red", fallback).floatValue(),
+                options.getOrDefault(prefix + "Green", fallback).floatValue(),
+                options.getOrDefault(prefix + "Blue", fallback).floatValue());
+    }
+
+    private void configureGrading() {
+        ColorGradingFilter grade = (ColorGradingFilter) filters.get("ToneMap");
+        grade.setCurve(options.getOrDefault("UE4Tonemap", 0d) != 0 ? ColorGradingFilter.Curve.UE4
+                : options.getOrDefault("FilmicCurve", 0d) != 0 ? ColorGradingFilter.Curve.Filmic
+                : ColorGradingFilter.Curve.Neutral);
+        grade.setFilm(options.getOrDefault("FilmSlope", .88d).floatValue(),
+                options.getOrDefault("FilmToe", .55d).floatValue(),
+                options.getOrDefault("FilmShoulder", .26d).floatValue(),
+                options.getOrDefault("FilmBlackClip", 0d).floatValue(),
+                options.getOrDefault("FilmWhiteClip", .04d).floatValue());
+        grade.setWhiteBalance(options.getOrDefault("Temperature", 6500d).floatValue(),
+                options.getOrDefault("Tint", 0d).floatValue());
+        grade.setExpandGamut(options.getOrDefault("ExpandGamut", 1d).floatValue());
+        grade.setBlueCorrection(options.getOrDefault("BlueCorrection", .6d).floatValue());
+        grade.setGamma(optionVector("GradingGamma", 1d));
+        grade.setOffset(optionVector("GradingOffset", 0d));
+        grade.setTonalGains(optionVector("ShadowGain", 1d), optionVector("MidtoneGain", 1d),
+                optionVector("HighlightGain", 1d));
+    }
+
+    private void ensureLegacy() {
+        if (legacy && legacyProcessor == null && supported) {
+            legacyProcessor = new FilterPostProcessor(app.getAssetManager());
+            legacyProcessor.setFrameBufferFormat(app.getRenderer().getCaps().contains(Caps.HalfFloatColorBufferRGBA)
+                    ? Image.Format.RGBA16F : Image.Format.RGBA32F);
+            legacyProcessor.addFilter(new ToneMapFilter());
+            legacyProcessor.addFilter(new FXAAFilter());
+        }
+    }
+
+    void open(SceneRequest request) {
+        close();
+        owner = request;
+        enabled = true;
+        legacy = false;
+        minEV = -8;
+        maxEV = 8;
+        speedUp = 3;
+        speedDown = 1;
+        gain = new Vector3f(1, 1, 1);
+        supported = true;
+        create();
+        if (request.getRootNode() != null) {
+            var settings = request.getRootNode().getControl(com.jme3.post.WorldSettings.class);
+            if (settings != null) {
+                // Restore the pair before replaying either endpoint, so map insertion
+                // order cannot clamp a previously valid exposure range.
+                minEV = settings.getEditorOptions().getOrDefault("ExposureMin", -8d).floatValue();
+                maxEV = settings.getEditorOptions().getOrDefault("ExposureMax", 8d).floatValue();
+                options.putAll(settings.getEditorOptions());
+                for (var entry : settings.getEditorOptions().entrySet()) {
+                    configure(entry.getKey(), entry.getValue());
+                }
+                enabled = settings.isEnabled();
+                options.put("Enabled", enabled ? 1d : 0d);
+            }
+        }
+    }
+
+    Map<String, Double> options() {
+        return new LinkedHashMap<>(options);
+    }
+
+    void saveSettings(SceneRequest request) throws java.io.IOException {
+        if (owner != request || request.getRootNode() == null || processor == null) {
+            return;
+        }
+        ensureLegacy();
+        var root = request.getRootNode();
+        var settings = root.getControl(com.jme3.post.WorldSettings.class);
+        boolean added = settings == null;
+        if (added) {
+            settings = new com.jme3.post.WorldSettings();
+        }
+        settings.setPostProcessing(legacy ? legacyProcessor : processor, options);
+        settings.setEnabled(enabled);
+        if (added) {
+            root.addControl(settings);
+        }
+    }
+
+    void close() {
+        for (FilterPostProcessor chain : new FilterPostProcessor[]{processor, legacyProcessor}) {
+            if (chain != null && app.getViewPort().getProcessors().contains(chain)) {
+                app.getViewPort().removeProcessor(chain);
+            }
+        }
+        processor = null;
+        legacyProcessor = null;
+        filters.clear();
+        options.clear();
+        owner = null;
+    }
+
     void sync() {
+        if (owner == null) {
+            return;
+        }
         if (processor == null && supported) {
             create();
         }
@@ -184,19 +322,12 @@ final class EditorPostProcessing {
             return;
         }
         var view = app.getViewPort();
-        if (legacy && legacyProcessor == null) {
-            // Reference preset only: controls above retain the modern settings.
-            legacyProcessor = new FilterPostProcessor(app.getAssetManager());
-            legacyProcessor.setFrameBufferFormat(app.getRenderer().getCaps().contains(Caps.HalfFloatColorBufferRGBA)
-                    ? Image.Format.RGBA16F : Image.Format.RGBA32F);
-            legacyProcessor.addFilter(new ToneMapFilter());
-            legacyProcessor.addFilter(new FXAAFilter());
-        }
+        ensureLegacy();
         FilterPostProcessor selected = legacy ? legacyProcessor : processor;
         FilterPostProcessor inactive = legacy ? processor : legacyProcessor;
         if (inactive != null && view.getProcessors().contains(inactive)) {
             view.removeProcessor(inactive);
-            inactive.cleanup();
+
         }
         boolean other = false;
         for (var candidate : view.getProcessors()) {
@@ -208,7 +339,7 @@ final class EditorPostProcessing {
         boolean wanted = enabled && lit && !other;
         if (attached && !wanted) {
             view.removeProcessor(selected);
-            selected.cleanup();
+
         } else if (!attached && wanted) {
             ((AutoExposureFilter) filters.get("Exposure")).resetHistory();
             view.addProcessor(selected);

@@ -40,6 +40,12 @@ final class UnityYaml {
      * Object bodies remain ordinary YAML, including flow-style fileID references.
      */
     static List<Document> parse(String text) throws IOException {
+        if (text.indexOf('\0') >= 0) {
+            throw new IOException("Binary Unity serialization is not supported. Import the package into Unity, "
+                    + "set Asset Serialization to Force Text, then reserialize the scenes, prefabs and materials. "
+                    + "Copy the resulting assets together with their .meta files and retry conversion. "
+                    + "Changing the setting alone does not rewrite existing binary assets.");
+        }
         List<Document> result = new ArrayList<>();
         String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
         int classId = -1;
@@ -64,7 +70,7 @@ final class UnityYaml {
             result.add(document(classId, fileId, stripped, body.toString()));
         }
         if (result.isEmpty()) {
-            throw new IOException("No Unity YAML documents found; binary assets are unsupported");
+            throw new IOException("No Unity YAML document headers found. Expected a text-serialized .unity/.prefab asset.");
         }
         return result;
     }

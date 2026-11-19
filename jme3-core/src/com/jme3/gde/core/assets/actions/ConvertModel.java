@@ -82,6 +82,13 @@ public final class ConvertModel implements ActionListener {
                         try {
                             progressHandle.progress("Inspecting " + spatialAssetDataObject.getName());
                             var model = spatialAssetDataObject.loadAsset();
+                            // loadAsset reports the original loader failure and returns null.
+                            // Do not obscure that diagnostic with a second analysis exception.
+                            if (model == null) {
+                                logger.log(Level.WARNING, "Skipping conversion after load failure: {0}",
+                                        spatialAssetDataObject.getPrimaryFile().getPath());
+                                continue;
+                            }
                             var analysis = com.jme3.gde.core.assets.ModelConversionAnalysis.inspect(model);
                             var choice = new java.util.concurrent.atomic.AtomicReference<com.jme3.gde.core.assets.ModelConversionOptions>();
                             javax.swing.SwingUtilities.invokeAndWait(() -> choice.set(

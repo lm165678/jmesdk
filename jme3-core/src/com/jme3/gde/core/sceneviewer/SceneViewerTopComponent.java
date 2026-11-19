@@ -634,6 +634,15 @@ public final class SceneViewerTopComponent extends TopComponent {
         showGi.setToolTipText(ui("GiVolumeTip"));
         showGi.addActionListener(event -> app.setGiVolumesVisible(showGi.isSelected()));
         giMenu.add(showGi);
+        for (com.jme3.light.Light.Type type : new com.jme3.light.Light.Type[]{
+                com.jme3.light.Light.Type.Probe, com.jme3.light.Light.Type.Directional,
+                com.jme3.light.Light.Type.Point, com.jme3.light.Light.Type.Spot}) {
+            javax.swing.JCheckBoxMenuItem marker = new javax.swing.JCheckBoxMenuItem(
+                    ui("Gizmos" + type.name()), app.isLightGizmosVisible(type));
+            marker.addActionListener(event -> app.setLightGizmosVisible(type, marker.isSelected()));
+            giMenu.add(marker);
+        }
+        giMenu.addSeparator();
         javax.swing.JCheckBoxMenuItem applyGi = new javax.swing.JCheckBoxMenuItem(ui("GiApply"), app.isGiPreviewEnabled());
         applyGi.setToolTipText(ui("GiApplyTip"));
         applyGi.addActionListener(event -> app.setGiPreviewEnabled(applyGi.isSelected()));
@@ -914,6 +923,12 @@ public final class SceneViewerTopComponent extends TopComponent {
             enableStats.setSelected(false);
             SceneApplication.getApplication().closeScene(req);
         }
+    }
+
+    /** Resets editor-only lighting toggles on the EDT when the scene changes. */
+    public void resetSceneLightingButtons() {
+        enableCamLight.setSelected(false);
+        enablePBRSky.setSelected(false);
     }
 
     void writeProperties(java.util.Properties p) {

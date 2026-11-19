@@ -94,6 +94,21 @@ public class SceneComposerToolController extends SceneToolController {
         SceneApplication.getApplication().enqueue(new Callable<Object>() {
 
             public Object call() throws Exception {
+                nonSpatialMarkersNode.addControl(new com.jme3.scene.control.AbstractControl() {
+                    private int appliedMask = -1;
+                    @Override
+                    protected void controlUpdate(float tpf) {
+                        int mask = SceneApplication.getApplication().getHiddenLightGizmos();
+                        if (mask != appliedMask) {
+                            refreshMarkerVisibility();
+                            appliedMask = mask;
+                        }
+                    }
+                    @Override
+                    protected void controlRender(com.jme3.renderer.RenderManager rm,
+                            com.jme3.renderer.ViewPort vp) {
+                    }
+                });
                 toolsNode.attachChild(nonSpatialMarkersNode);
                 return null;
             }
@@ -474,13 +489,33 @@ public class SceneComposerToolController extends SceneToolController {
                         Spatial s = GizmoFactory.createGizmo(manager, n);
                         if (s != null) {
                             nonSpatialMarkers.put(n, s);
-                            nonSpatialMarkersNode.attachChild(s);
+                            applyMarkerVisibility(n, s);
                         }
                     }
                 }
                 return null;
             }
         });
+    }
+
+    private void refreshMarkerVisibility() {
+        for (var entry : nonSpatialMarkers.entrySet()) {
+            applyMarkerVisibility(entry.getKey(), entry.getValue());
+        }
+    }
+
+    private void applyMarkerVisibility(AbstractSceneExplorerNode node, Spatial marker) {
+        com.jme3.light.Light light = node.getLookup().lookup(com.jme3.light.Light.class);
+        boolean visible = light == null
+                || SceneApplication.getApplication().isLightGizmosVisible(light.getType());
+        if (visible) {
+            if (marker.getParent() != nonSpatialMarkersNode) {
+                nonSpatialMarkersNode.attachChild(marker);
+            }
+        } else {
+            // Detach also excludes hidden editor geometry from mouse picking.
+            marker.removeFromParent();
+        }
     }
 
     public Spatial getMarker(AbstractSceneExplorerNode node) {

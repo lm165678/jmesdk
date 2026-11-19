@@ -120,7 +120,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     protected StatsView statsView;
     protected FlyByCamera flyCam;
     protected boolean showSettings = true;
-    private SceneRequest currentSceneRequest;
+    private volatile SceneRequest currentSceneRequest;
     private ConcurrentLinkedQueue<SceneListener> listeners = new ConcurrentLinkedQueue<>();
     private ScenePreviewProcessor previewProcessor;
     private ApplicationLogHandler logHandler = new ApplicationLogHandler();
@@ -139,6 +139,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private FakeApplication fakeApp;
     private com.jme3.light.SkyLight pbrLightProbe;
     private Spatial pbrSky;
+    private com.jme3.light.SkyLight thumbnailLightProbe;
 
     private volatile boolean gBufferVisible;
     private com.jme3.gde.core.scene.processors.GBufferPreview gBufferPreview;
@@ -291,10 +292,52 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     private final EditorPostProcessing editorPostProcessing = new EditorPostProcessing(this);
 
-    /** Queues preview-only HDR options on the render thread; see EditorPostProcessing. */
+    /** Queues scene-owned settings; transient diagnostic options are never saved. */
     public void configureEditorPostProcessing(String option, double value) {
+        final SceneRequest owner = currentSceneRequest;
+        if (owner != null && owner.getDataObject() != null
+                && !option.equals("Lit") && !option.equals("ResetExposure")) {
+            // Mark before the render queue runs so an immediate close asks to save.
+            if (java.awt.EventQueue.isDispatchThread()) {
+                owner.getDataObject().setModified(true);
+            } else {
+                java.awt.EventQueue.invokeLater(() -> owner.getDataObject().setModified(true));
+            }
+        }
         enqueue(() -> {
+            if (owner != currentSceneRequest || owner == null) {
+                return null;
+            }
             editorPostProcessing.configure(option, value);
+            if (!option.equals("Lit") && !option.equals("ResetExposure")) {
+                try {
+                    editorPostProcessing.saveSettings(owner);
+                    java.awt.EventQueue.invokeLater(() -> {
+                        if (owner.getDataObject() != null) {
+                            owner.getDataObject().setModified(true);
+                        }
+                    });
+                } catch (java.io.IOException exception) {
+                    org.openide.util.Exceptions.printStackTrace(exception);
+                }
+            }
+            return null;
+        });
+    }
+
+    /** Delivers a scene-scoped UI snapshot on EDT; stale requests are discarded. */
+    public void readEditorPostProcessing(java.util.function.Consumer<java.util.Map<String, Double>> receive) {
+        final SceneRequest owner = currentSceneRequest;
+        enqueue(() -> {
+            if (owner != currentSceneRequest) {
+                return null;
+            }
+            var values = editorPostProcessing.options();
+            java.awt.EventQueue.invokeLater(() -> {
+                if (owner == currentSceneRequest) {
+                    receive.accept(values);
+                }
+            });
             return null;
         });
     }
@@ -454,6 +497,31 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
 
+    private volatile int hiddenLightGizmos;
+
+    /** Editor-only, session-wide visibility; actual lights and saved scenes are unchanged.
+     * Defaults to visible for every type. Safe to call from EDT.
+     * <pre>{@code
+     * // 第一步：在 Visualize 中关闭点光源组件，不关闭实际照明。
+     * app.setLightGizmosVisible(com.jme3.light.Light.Type.Point, false);
+     * // 第二步：恢复显示；场景切换保留本次会话的选择。
+     * app.setLightGizmosVisible(com.jme3.light.Light.Type.Point, true);
+     * }</pre>
+     */
+    public synchronized void setLightGizmosVisible(com.jme3.light.Light.Type type, boolean visible) {
+        int bit = 1 << type.ordinal();
+        hiddenLightGizmos = visible ? hiddenLightGizmos & ~bit : hiddenLightGizmos | bit;
+    }
+
+    public boolean isLightGizmosVisible(com.jme3.light.Light.Type type) {
+        return (hiddenLightGizmos & (1 << type.ordinal())) == 0;
+    }
+
+    /** Snapshot used to avoid traversing editor markers when nothing changed. */
+    public int getHiddenLightGizmos() {
+        return hiddenLightGizmos;
+    }
+
     public int getPreviewFrameLimit() {
         return previewFrameLimit;
     }
@@ -463,6 +531,15 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     }
 
     public SceneApplication() {
+        // Initialize Java desktop DPI handling before SDL creates its native window.
+        // Keep the OS per-monitor scale; never force a fixed 100% or 125% override.
+        java.awt.Toolkit.getDefaultToolkit();
+        if (!java.awt.GraphicsEnvironment.isHeadless()) {
+            var configuration = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+                    .getDefaultScreenDevice().getDefaultConfiguration();
+            logger.log(Level.INFO, "AWT desktop transform before renderer startup: {0}",
+                    configuration.getDefaultTransform());
+        }
         com.jme3.gde.core.renderdoc.RenderDocSupport.initializeBeforeGraphics();
         Logger.getLogger("com.jme3").addHandler(logHandler);
         useCanvas = "true".equals(NbPreferences.forModule(Installer.class).get("use_lwjgl_canvas", "false"));
@@ -796,9 +873,11 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                 if (request.getToolNode() != null) {
                     toolsNode.attachChild(request.getToolNode());
                 }
+                editorPostProcessing.open(request);
                 request.setDisplayed(true);
                 return null;
             });
+            com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance().resetSceneLightingButtons();
             notifyOpen(request);
         });
     }
@@ -859,6 +938,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             if (fakeApp != null) {
                 fakeApp.cleanupFakeApp();
             }
+            editorPostProcessing.close();
+            clearScenePreviewEnvironment();
             giPreview.close();
             sdfPreviewSelection = null;
             previewLodTarget = null;
@@ -971,86 +1052,75 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
     
-    private void createPbrLightProbe(final Node activeNode) {
-        new Thread() {
-            @Override
-            public void run() {
-                Spatial s = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
-                pbrLightProbe = com.jme3.light.SkyLight.fromEnvironment((LightProbe) s.getLocalLightList().get(0));
-                s.getLocalLightList().clear();
-
-                enqueue(() -> {
-                    activeNode.addLight(pbrLightProbe);
-                    return null;
-                });
-            }
-
-        }.start();
+    // All preview environment state belongs to the render thread. A disabled
+    // request never loads or creates lighting. Thumbnail and scene lights are
+    // separate instances; queued clicks cannot affect a replacement scene.
+    private com.jme3.light.SkyLight loadPreviewEnvironment() {
+        Spatial environment = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
+        return com.jme3.light.SkyLight.fromEnvironment(
+                (LightProbe) environment.getLocalLightList().get(0));
     }
-    
-    private void togglePbrProbe(final boolean enabled, final Node activeNode) {
-        if (pbrLightProbe == null) {
-            createPbrLightProbe(activeNode);
-        } else {
-            enqueue(() -> {
-                if (enabled) {
-                    activeNode.addLight(pbrLightProbe);
-                } else {
-                    activeNode.removeLight(pbrLightProbe);
-                }
-                return null;
-            });
-        }
-    }
-    
 
     public void enablePBRProbe(final boolean selected) {
-        if (pbrLightProbe == null) {
-            createPbrLightProbe(rootNode);
-        } else {
-            togglePbrProbe(selected, rootNode);
-        }
-    }
-    
-    private void createPbrSkyBox(final Node activeNode) {
-        new Thread() {
-                @Override
-                public void run() {
-                    pbrSky = SkyFactory.createSky(assetManager, "Textures/Sky/Path.hdr", SkyFactory.EnvMapType.EquirectMap);
-
-                    enqueue(() -> {
-                        activeNode.attachChild(pbrSky);
-                        return null;
-                    });
-                }
-
-            }.start();
-    }
-    
-    private void togglePbrSkybox(final boolean selected, final Node activeNode) {
+        final SceneRequest owner = currentSceneRequest;
         enqueue(() -> {
-            if (selected) {
-                activeNode.attachChild(pbrSky);
-            } else {
-                pbrSky.removeFromParent();
+            if (owner != currentSceneRequest || owner == null) {
+                return null;
+            }
+            if (selected && pbrLightProbe == null) {
+                pbrLightProbe = loadPreviewEnvironment();
+            }
+            if (pbrLightProbe != null) {
+                rootNode.removeLight(pbrLightProbe);
+                if (selected) {
+                    rootNode.addLight(pbrLightProbe);
+                }
             }
             return null;
         });
     }
 
     public void enablePBRSkybox(final boolean selected) {
-        if (pbrSky == null) {
-            createPbrSkyBox(rootNode);
-        } else {
-            togglePbrSkybox(selected, rootNode);
-        }
+        final SceneRequest owner = currentSceneRequest;
+        enqueue(() -> {
+            if (owner != currentSceneRequest || owner == null) {
+                return null;
+            }
+            if (selected && pbrSky == null) {
+                pbrSky = SkyFactory.createSky(assetManager, "Textures/Sky/Path.hdr",
+                        SkyFactory.EnvMapType.EquirectMap);
+            }
+            if (pbrSky != null) {
+                pbrSky.removeFromParent();
+                if (selected) {
+                    rootNode.attachChild(pbrSky);
+                }
+            }
+            return null;
+        });
     }
-    
+
     public void enablePreviewLighting(final boolean selected) {
-        if (pbrLightProbe == null) {
-            createPbrLightProbe(previewProcessor.previewNode);
-        } else {
-            togglePbrProbe(selected, previewProcessor.previewNode);
+        enqueue(() -> {
+            if (selected && thumbnailLightProbe == null) {
+                thumbnailLightProbe = loadPreviewEnvironment();
+            }
+            if (thumbnailLightProbe != null) {
+                previewProcessor.previewNode.removeLight(thumbnailLightProbe);
+                if (selected) {
+                    previewProcessor.previewNode.addLight(thumbnailLightProbe);
+                }
+            }
+            return null;
+        });
+    }
+
+    private void clearScenePreviewEnvironment() {
+        if (pbrLightProbe != null) {
+            rootNode.removeLight(pbrLightProbe);
+        }
+        if (pbrSky != null) {
+            pbrSky.removeFromParent();
         }
     }
 
