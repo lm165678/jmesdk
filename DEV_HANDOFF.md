@@ -1,3 +1,8 @@
+## 2026-11-19 compatible implementation revisions for GI/performance publication
+
+- Engine implementation: 45b41e76afab9172c0932cf45518f7d8ac16587b on dev_fix_lightprobe_issue; SDK implementation: 89566b32 on master. Documentation-only commits follow this pair. Export this engine before rebuilding SDK; no full SDK deployment was performed.
+- Focused engine publication tests passed 69/69. Expanded baseline failures and performance limits remain in the engine handoff. These implementation revisions supersede earlier working-tree pairing notes for this publication.
+
 ## 2026-11-19 GI opt-in and engine performance publication checkpoint
 - Publish GiPreview/JmeGiProbeVolume integration for Curved receiver correction, default Off. Requires the paired engine changes; see the existing validation and unavailable TestScene3 limitations below.
 - Paired engine also includes exact-declaration FrameGraph compilation reuse, material-watch/sort-ID CPU optimizations and zero-duration animation fixes. Graph declarations remain dynamic each frame. CPU microbenchmarks improve, but three controlled Sponza pairs fluctuate substantially; no stable whole-frame FPS gain claimed. See engine handoff for test failures reproduced on baseline and performance figures.
