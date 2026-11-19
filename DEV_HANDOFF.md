@@ -1,3 +1,7 @@
+## 2026-11-19 GI opt-in and engine performance publication checkpoint
+- Publish GiPreview/JmeGiProbeVolume integration for Curved receiver correction, default Off. Requires the paired engine changes; see the existing validation and unavailable TestScene3 limitations below.
+- Paired engine also includes exact-declaration FrameGraph compilation reuse, material-watch/sort-ID CPU optimizations and zero-duration animation fixes. Graph declarations remain dynamic each frame. CPU microbenchmarks improve, but three controlled Sponza pairs fluctuate substantially; no stable whole-frame FPS gain claimed. See engine handoff for test failures reproduced on baseline and performance figures.
+- No full SDK build/deployment in this publication. Generated ZIPs, exported engine/test-data libraries, extracted templates and local nbm.revision updates are retained locally and excluded from commits. Lemur/dual-GUI/Agent and neutral physics backend plans remain pending, not implemented. Compatible implementation revisions will follow in a documentation commit.
 ## 2026-11-19 compatible publication revisions
 - Engine implementation: fbc68bd0d on dev_fix_lightprobe_issue; SDK implementation: dc5d1ec2 on master. Use this pair for WorldSettings, UE4-style post-processing and preceding sky composition changes. Documentation-only commits follow. Validation limits below remain applicable; no full SDK build for publication.
 
@@ -495,3 +499,11 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - ConvertModel now skips analysis/save when loadAsset returns null after logging its loader failure, avoiding the misleading secondary Cannot inspect a model that failed to load exception. UnityYaml reports binary serialization explicitly with text-reserialization instructions; headerless text receives a separate diagnostic.
 - Binary Unity deserialization is NOT implemented. To convert this package, reserialize source scenes/prefabs/materials as text in Unity and retain .meta files. Merely selecting Force Text does not rewrite existing assets. External assets untouched.
 - Source inspection only, no build/compile/runtime checks per existing preference. Rebuild/restart required. No engine changes, commit or push.
+
+## 2026-11-19 compact GI curved receiver source fix
+- Engine working tree after1bce1b485 limits receiver-plane depth extrapolation using unperturbed mesh-normal variation; no SDK code/API change. Export matching engine shader resources and rebuild SDK to adopt; running SDK was not replaced. No scene rebake needed.
+- Candidate four-path Lighting/PBR compact visibility, confidence/cell continuity and wide reference GPU checks passed. Actual TestScene2 arch stripe removed, planar-wall ROI max delta1/255. TestScene3 unavailable here and remains unverified. No full SDK build/deployment/push; see engine handoff for exact scope, measurements and limits.
+
+## 2026-11-19 curved receiver opt-in switch (supersedes previous note)
+- GI Volume > Curved receiver correction defaults Off, including old scenes. On enables curved projection limiting; Off restores the previous plane algorithm. Scene save retains the flag; no rebake required. GiPreview forwards it through the updated engine streaming API. Requires paired engine export/SDK rebuild; no running SDK replacement.
+- Engine defaults/persistence/page toggle tests5/5 passed. Actual TestScene2 off/on/off captures confirm Off matches pre-fix baseline byte-for-byte; On removes the arch strip. Two SDK classes compiled against updated engine. TestScene3 remains unavailable, per user. No full SDK build/deployment, commit/push.

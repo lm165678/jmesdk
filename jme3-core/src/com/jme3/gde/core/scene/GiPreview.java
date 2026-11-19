@@ -94,7 +94,7 @@ final class GiPreview implements AutoCloseable {
                         }
                         sources.put(volume, new Source(id, data, external, offset.clone()));
                     }
-                    stream.setAppearance(sources.get(volume).id(), volume.getIntensity(), volume.getFadeDistance(), volume.isStabilizedBlending(), volume.isSmoothBlending(), volume.isWideProbeSampling());
+                    stream.setAppearance(sources.get(volume).id(), volume.getIntensity(), volume.getFadeDistance(), volume.isStabilizedBlending(), volume.isSmoothBlending(), volume.isWideProbeSampling(), volume.isCurvedReceiverCorrection());
                 }
                 if (spatial instanceof Geometry geometry && geometry.getMaterial() != null) {
                     materials.add(geometry.getMaterial());

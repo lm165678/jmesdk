@@ -100,6 +100,13 @@ public final class JmeGiProbeVolume extends JmeNode {
 
             properties.put(wide);
 
+            // 第一步：默认关闭以兼容旧 GI；第二步：曲面出现分面亮条时开启。
+            // 第三步：关闭恢复旧平面修正；保存场景保留选项，无需重烘焙。
+            org.openide.nodes.Node.Property<?> curved = makeProperty(volume, boolean.class,
+                    "isCurvedReceiverCorrection", "setCurvedReceiverCorrection", "Curved receiver correction");
+            curved.setShortDescription("Off by default: preserve the original receiver-plane projection. Enable to reduce smooth curved-surface GI seams. Eight-probe grids only; no rebake needed. Disable to restore old lighting.");
+            properties.put(curved);
+
             org.openide.nodes.Node.Property<?> layout = makeProperty(volume, boolean.class,
 
                     "isSurfaceLayout", "setSurfaceLayout", "Surface probe layout");
