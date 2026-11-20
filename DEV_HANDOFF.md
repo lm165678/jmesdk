@@ -1,3 +1,8 @@
+## 2026-11-20 compatible shader presentation / FSR publication revisions
+
+- Engine implementation: 85039d25e10b7f5237cf39f084c0e62366483d1f on dev_fix_lightprobe_issue; SDK implementation: 6d2c12e1dcc5154e33f68fac118832cf4ab9052c on master. Documentation-only commits follow. Export/rebuild this pair together; validation limits below remain applicable. No full SDK deployment for publication.
+- Generated SDK archives, extracted/exported libraries/templates and local build revision are excluded and retained locally. Render scale remains bounded to [.25,1]; the user has raised a separate .1-scale question, not modified in this publication.
+
 ## 2026-11-20 default presentation / FSR integration (local source)
 
 - Supersedes the opt-in note below: shader sRGB output defaults On in the engine's LWJGL3 window/application AWT policy and SDK main AWT preview. Explicit stored preview Off remains respected; it is a preview override, not game window configuration. Raw offscreen/explicit targets remain linear. Requires the paired new engine; existing deployed binaries are unchanged.
