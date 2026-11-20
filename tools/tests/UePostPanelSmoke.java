@@ -26,6 +26,35 @@ public final class UePostPanelSmoke {
                         throw new AssertionError("Missing tooltip: "+key);
                     }
                 }
+                Field refreshing = panel.getClass().getDeclaredField("refreshing");
+                refreshing.setAccessible(true);
+                refreshing.setBoolean(panel, true);
+                Field cardsField = panel.getClass().getDeclaredField("aaCards");
+                cardsField.setAccessible(true);
+                JPanel cards = (JPanel) cardsField.get(panel);
+                JComboBox<?> mode = (JComboBox<?>) inputs.get("AntiAliasing");
+                if (mode.getSelectedIndex() != 1) {
+                    throw new AssertionError("Default AA changed");
+                }
+                for (int selected : new int[]{2, 1, 0, 2}) {
+                    mode.setSelectedIndex(selected);
+                    update.invoke(panel);
+                    for (int index = 0; index < 3; index++) {
+                        if (cards.getComponent(index).isVisible() != (index == selected)) {
+                            throw new AssertionError("Wrong AA parameter panel");
+                        }
+                    }
+                }
+                ((JCheckBox) inputs.get("LegacyPipeline")).setSelected(true);
+                update.invoke(panel);
+                if (mode.isEnabled() || !cards.getComponent(0).isVisible()) {
+                    throw new AssertionError("Legacy mode shows inactive AA controls");
+                }
+                ((JCheckBox) inputs.get("LegacyPipeline")).setSelected(false);
+                update.invoke(panel);
+                if (!mode.isEnabled() || mode.getSelectedIndex() != 2 || !cards.getComponent(2).isVisible()) {
+                    throw new AssertionError("AA mode was lost after legacy comparison");
+                }
                 System.out.println("UE4_POST_PANEL_PASS");
             } catch (Exception e) {
                 throw new RuntimeException(e);

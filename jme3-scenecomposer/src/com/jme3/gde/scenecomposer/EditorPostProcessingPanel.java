@@ -10,6 +10,17 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
     private final java.util.Map<String, JComponent> inputs = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Double> defaults = new java.util.LinkedHashMap<>();
     private boolean refreshing;
+    private final JPanel aaCards = new JPanel(new java.awt.CardLayout()) {
+        @Override
+        public java.awt.Dimension getPreferredSize() {
+            for (java.awt.Component child : getComponents()) {
+                if (child.isVisible()) {
+                    return child.getPreferredSize();
+                }
+            }
+            return new java.awt.Dimension();
+        }
+    };
     EditorPostProcessingPanel() {
         super(new java.awt.BorderLayout());
         JPanel stack = new JPanel();
@@ -69,8 +80,31 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         number(tonemap, "GainRed", 1, 0, 4, 0.05);
         number(tonemap, "GainGreen", 1, 0, 4, 0.05);
         number(tonemap, "GainBlue", 1, 0, 4, 0.05);
-        JPanel fxaa = section(stack, "FXAA");
-        toggle(fxaa, "FXAA", true);
+        JPanel aa = section(stack, "AntiAliasing");
+        JComboBox<String> mode = new JComboBox<>(new String[]{
+            EditorMessages.text("PostAAOff"), "FXAA", "TAA"});
+        mode.setSelectedIndex(1);
+        inputs.put("AntiAliasing", mode);
+        defaults.put("AntiAliasing", 1d);
+        row(aa, "AntiAliasing", mode);
+        mode.addActionListener(event -> send("AntiAliasing", mode.getSelectedIndex()));
+        JPanel aaBody = new JPanel(new java.awt.BorderLayout());
+        JPanel group = (JPanel) aa.getParent();
+        group.remove(aa);
+        aaBody.add(aa, java.awt.BorderLayout.NORTH);
+        aaBody.add(aaCards, java.awt.BorderLayout.CENTER);
+        aaBody.setVisible(aa.isVisible());
+        aa.putClientProperty("sectionBody", aaBody);
+        group.add(aaBody, java.awt.BorderLayout.CENTER);
+        aaCards.add(new JPanel(), "0");
+        JPanel fxaa = new InspectorColumns("scene.postprocessing.FXAA");
+        aaCards.add(fxaa, "1");
+        JPanel taa = new InspectorColumns("scene.postprocessing.TAA");
+        aaCards.add(taa, "2");
+        number(taa, "TAACurrentWeight", .1, .01, 1, .01);
+        toggle(taa, "TAABaseVelocity", true);
+        toggle(taa, "TAATransparentVelocity", true);
+        number(taa, "TAAAlphaThreshold", .5, 0, 1, .05);
         number(fxaa, "FXAASubPixelShift", 0.25, 0, 1, 0.01);
         number(fxaa, "FXAASpanMax", 8, 1, 32, 1);
         number(fxaa, "FXAAReduceMul", 0.125, 0.001, 1, 0.01);
@@ -114,7 +148,11 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         header.setMargin(new java.awt.Insets(2, 6, 2, 6));
         header.setToolTipText(EditorMessages.text("Post" + key + "Tip"));
         header.addActionListener(event -> {
-            rows.setVisible(header.isSelected());
+            JComponent body = (JComponent) rows.getClientProperty("sectionBody");
+            (body == null ? rows : body).setVisible(header.isSelected());
+            if (body != null) {
+                rows.setVisible(true);
+            }
             header.setText((header.isSelected() ? "▾  " : "▸  ") + title);
             java.awt.Container parent = group;
             while (parent != null && !(parent instanceof JScrollPane)) {
@@ -165,6 +203,17 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         if (!inputs.containsKey("UE4Tonemap")) {
             return;
         }
+        int aaMode = ((JComboBox<?>) inputs.get("AntiAliasing")).getSelectedIndex();
+        boolean legacy = ((JCheckBox) inputs.get("LegacyPipeline")).isSelected();
+        inputs.get("AntiAliasing").setEnabled(!legacy);
+        ((java.awt.CardLayout) aaCards.getLayout()).show(aaCards, Integer.toString(legacy ? 0 : aaMode));
+        java.awt.Container parent = aaCards;
+        while (parent != null && !(parent instanceof JScrollPane)) {
+            parent.setMinimumSize(new java.awt.Dimension(0, parent.getPreferredSize().height));
+            parent.revalidate();
+            parent = parent.getParent();
+        }
+        aaCards.repaint();
         boolean exposure = ((JCheckBox) inputs.get("UE4Exposure")).isSelected();
         boolean film = ((JCheckBox) inputs.get("UE4Tonemap")).isSelected();
         for (var entry : inputs.entrySet()) {
@@ -199,6 +248,9 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
                     double value = values.getOrDefault(key, defaults.get(key));
                     if (input instanceof JCheckBox box) {
                         box.setSelected(value != 0);
+                    } else if (input instanceof JComboBox<?> combo) {
+                        combo.setSelectedIndex((int) values.getOrDefault(key,
+                                values.getOrDefault("FXAA", 1d) != 0 ? 1d : 0d).doubleValue());
                     } else if (input instanceof JSpinner spinner) {
                         spinner.setValue(value);
                     }

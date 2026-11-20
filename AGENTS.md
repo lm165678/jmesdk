@@ -47,3 +47,7 @@
 - Do not commit downloaded native tools, generated engine JARs, extracted test
   assets or local build logs as handoff data. External game projects and models
   need separate transfer; GitHub authentication is configured on each machine.
+
+## Comment style
+
+- Match the surrounding author style. Keep comments concise and focused on purpose, non-obvious reasons and constraints; avoid template-like narration and redundant descriptions.

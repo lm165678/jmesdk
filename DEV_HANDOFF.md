@@ -1,3 +1,14 @@
+## 2026-11-20 global FPP anti-aliasing selector (source only)
+
+- Replaced the FXAA checkbox with Off / FXAA / TAA selection. Only the selected method's parameters are shown; switching preserves values. TAA controls: current-frame weight, base-pass velocity, transparent velocity and alpha threshold. Uses the existing SDK message bundle.
+- EditorPostProcessing creates a single-sample HDR chain with TAA first, before AO/fog/DOF/exposure/Bloom/tone mapping; FXAA remains after tone mapping. Mode selection enables exactly one or neither and resets TAA history. Legacy reference still uses fixed ToneMap+FXAA; modern selector is disabled and retained while comparing legacy.
+- WorldSettings stores the actual filter chain plus editor options through the existing scene-save flow. Old FXAA flags migrate to Off/FXAA; explicit new AntiAliasing takes precedence regardless of map iteration order. Scene switching creates independent filters. Needs paired engine TemporalAAFilter and temporal renderer/shaders (engine baseline 5bdf1e4e8 plus current local TAA changes; SDK baseline 7e32d6a5 plus these changes).
+- Validation: source/diff review only. First isolated javac attempt failed because its classpath lacked NetBeans LookupProvider. A retry with dependencies was rejected by automatic approval review as conflicting with the user's no-SDK-build instruction; no further compilation attempted. UePostPanelSmoke now covers card switching/legacy restoration; PostAntiAliasingSmoke covers filter exclusivity and WorldSettings parameter round-trip, but these new checks have NOT run. Native AWT/GL preview, scene switching, compilation and runtime save/reload remain unverified. No SDK build/deployment, commit or push.
+
+## Pending: code comment style review
+
+- User requested a future review of comments introduced in previous AI-assisted edits. Match the surrounding author style; explain purpose, non-obvious reasons and constraints concisely. Remove template-like narration and redundant commentary without losing API/lifecycle requirements. This is a backlog item, not a completed repository-wide rewrite. Apply this style to new edits now.
+
 ## 2026-11-19 compatible implementation revisions for GI/performance publication
 
 - Engine implementation: 45b41e76afab9172c0932cf45518f7d8ac16587b on dev_fix_lightprobe_issue; SDK implementation: 89566b32 on master. Documentation-only commits follow this pair. Export this engine before rebuilding SDK; no full SDK deployment was performed.

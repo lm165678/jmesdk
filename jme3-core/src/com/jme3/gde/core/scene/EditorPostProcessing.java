@@ -20,6 +20,8 @@ import java.util.Map;
  * Modern preview defaults to histogram automatic exposure, multi-scale Bloom,
  * Neutral tone mapping and FXAA; AO stays optional. LegacyPipeline shows the old
  * fixed ToneMap+FXAA reference preset; modern controls keep their settings.
+ * AntiAliasing: 0=off, 1=FXAA (default), 2=TAA. TAA runs first in single-sample
+ * HDR; FXAA runs after tone mapping. The legacy reference retains fixed FXAA.
  * Removing/switching preview resets adaptation and releases inactive GPU targets.
  * <pre>
  * 第一步：展开 Scene Details 的 Post processing，默认启用 HDR、ToneMap 和 FXAA。
@@ -30,6 +32,7 @@ import java.util.Map;
  * 第六步：AO 的 Show Only 输出不经过后续曝光、Bloom、调色；取消后自动恢复。
  * 第七步：勾选 Legacy reference 查看旧的固定 ToneMap+FXAA；取消恢复新链及参数。
  * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由输出帧缓冲编码一次。
+ * 抗锯齿分组选择 Off / FXAA / TAA；切换保留参数，TAA 从新历史开始。
  * 第八步：保存场景将 WorldSettings 写入 J3O；游戏加载并挂到 rootNode 后自动恢复。
  * 第九步：Exposure 勾选 UE4 histogram adaptation，ToneMap 勾选 UE4 Film / combined LUT。
  * 新模式使用亮度上下限和 Film 参数；Combine LUTs 分组调节 Gamma、Offset 和分区增益。
@@ -68,6 +71,8 @@ final class EditorPostProcessing {
         processor = new FilterPostProcessor(app.getAssetManager());
         processor.setFrameBufferFormat(caps.contains(Caps.HalfFloatColorBufferRGBA)
                 ? Image.Format.RGBA16F : Image.Format.RGBA32F);
+        processor.setNumSamples(1);
+        add("TAA", new TemporalAAFilter(), false);
         add("SSAO", new HorizonAOFilter(), false);
         add("Fog", new FogFilter(), false);
         add("DepthOfField", new DepthOfFieldFilter(), false);
@@ -84,13 +89,32 @@ final class EditorPostProcessing {
     }
 
     void configure(String option, double value) {
+        if (option.equals("FXAA") || option.equals("TAA")) {
+            int mode = option.equals("TAA") ? 2 : 1;
+            if (value != 0 || options.getOrDefault("AntiAliasing", 1d) == mode) {
+                configure("AntiAliasing", value != 0 ? mode : 0);
+            }
+            return;
+        }
         if (!option.equals("Lit") && !option.equals("ResetExposure")) {
             options.put(option, value);
         }
         if (processor == null && supported) {
             create();
         }
-        if (processor != null && option.equals("UE4Exposure")) {
+        if (processor != null && option.equals("AntiAliasing")) {
+            filters.get("TAA").setEnabled(value == 2);
+            filters.get("FXAA").setEnabled(value == 1);
+            ((TemporalAAFilter) filters.get("TAA")).resetHistory();
+        } else if (processor != null && option.equals("TAACurrentWeight")) {
+            ((TemporalAAFilter) filters.get("TAA")).setCurrentFrameWeight((float) value);
+        } else if (processor != null && option.equals("TAABaseVelocity")) {
+            ((TemporalAAFilter) filters.get("TAA")).setBasePassOutputsVelocity(value != 0);
+        } else if (processor != null && option.equals("TAATransparentVelocity")) {
+            ((TemporalAAFilter) filters.get("TAA")).setTranslucentVelocityEnabled(value != 0);
+        } else if (processor != null && option.equals("TAAAlphaThreshold")) {
+            ((TemporalAAFilter) filters.get("TAA")).setTranslucentAlphaThreshold((float) value);
+        } else if (processor != null && option.equals("UE4Exposure")) {
             ((AutoExposureFilter) filters.get("Exposure")).setMode(value != 0
                     ? AutoExposureFilter.Mode.UE4Histogram : AutoExposureFilter.Mode.Legacy);
         } else if (processor != null && java.util.Set.of("MinBrightness", "MaxBrightness", "HistogramMin", "HistogramMax", "TransitionDistance", "LowPercent", "HighPercent").contains(option)) {
@@ -268,8 +292,15 @@ final class EditorPostProcessing {
                 maxEV = settings.getEditorOptions().getOrDefault("ExposureMax", 8d).floatValue();
                 options.putAll(settings.getEditorOptions());
                 for (var entry : settings.getEditorOptions().entrySet()) {
-                    configure(entry.getKey(), entry.getValue());
+                    if (!entry.getKey().equals("FXAA") && !entry.getKey().equals("TAA")) {
+                        configure(entry.getKey(), entry.getValue());
+                    }
                 }
+                configure("AntiAliasing", options.getOrDefault("AntiAliasing",
+                        options.getOrDefault("TAA", 0d) != 0 ? 2d
+                        : options.getOrDefault("FXAA", 1d) != 0 ? 1d : 0d));
+                options.remove("FXAA");
+                options.remove("TAA");
                 enabled = settings.isEnabled();
                 options.put("Enabled", enabled ? 1d : 0d);
             }
