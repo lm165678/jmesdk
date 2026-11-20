@@ -290,6 +290,13 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
 
+    /** Render-thread-only presentation selection for the main editor panel. */
+    void setShaderSrgbPresentation(boolean enabled) {
+        if (panel != null) {
+            panel.setShaderSrgbOutput(enabled ? getAssetManager() : null);
+        }
+    }
+
     private final EditorPostProcessing editorPostProcessing = new EditorPostProcessing(this);
 
     /** Queues scene-owned settings; transient diagnostic options are never saved. */
@@ -333,6 +340,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                 return null;
             }
             var values = editorPostProcessing.options();
+            values.put("UpscalingSupported", getRenderer().getCaps().contains(com.jme3.renderer.Caps.GLSL430) ? 1d : 0d);
             java.awt.EventQueue.invokeLater(() -> {
                 if (owner == currentSceneRequest) {
                     receive.accept(values);

@@ -10,6 +10,7 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
     private final java.util.Map<String, JComponent> inputs = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Double> defaults = new java.util.LinkedHashMap<>();
     private boolean refreshing;
+    private boolean upscalingSupported = true;
     private final JPanel aaCards = new JPanel(new java.awt.CardLayout()) {
         @Override
         public java.awt.Dimension getPreferredSize() {
@@ -28,7 +29,16 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         JPanel global = new InspectorColumns("scene.postprocessing");
         toggle(global, "Enabled", true);
         toggle(global, "LegacyPipeline", false);
+        toggle(global, "ShaderSrgbOutput", true);
         stack.add(global);
+        JPanel upscaling = section(stack, "Upscaling");
+        JComboBox<String> upscaleMode = new JComboBox<>(new String[]{EditorMessages.text("PostAAOff"), "FSR1", "FSR2"});
+        inputs.put("Upscaling", upscaleMode);
+        defaults.put("Upscaling", 0d);
+        row(upscaling, "Upscaling", upscaleMode);
+        upscaleMode.addActionListener(event -> send("Upscaling", upscaleMode.getSelectedIndex()));
+        number(upscaling, "UpscalingScale", 2d / 3d, .25, 1, .01);
+        number(upscaling, "UpscalingSharpness", .2, 0, 1, .05);
         JPanel exposure = section(stack, "Exposure");
         toggle(exposure, "AutomaticExposure", true);
         toggle(exposure, "UE4Exposure", false);
@@ -205,8 +215,13 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         }
         int aaMode = ((JComboBox<?>) inputs.get("AntiAliasing")).getSelectedIndex();
         boolean legacy = ((JCheckBox) inputs.get("LegacyPipeline")).isSelected();
-        inputs.get("AntiAliasing").setEnabled(!legacy);
-        ((java.awt.CardLayout) aaCards.getLayout()).show(aaCards, Integer.toString(legacy ? 0 : aaMode));
+        boolean temporalUpscaling = ((JComboBox<?>) inputs.get("Upscaling")).getSelectedIndex() == 2;
+        boolean anyUpscaling = ((JComboBox<?>) inputs.get("Upscaling")).getSelectedIndex() != 0;
+        inputs.get("Upscaling").setEnabled(!legacy && upscalingSupported);
+        inputs.get("UpscalingScale").setEnabled(!legacy && upscalingSupported && anyUpscaling);
+        inputs.get("UpscalingSharpness").setEnabled(!legacy && upscalingSupported && anyUpscaling);
+        inputs.get("AntiAliasing").setEnabled(!legacy && !temporalUpscaling);
+        ((java.awt.CardLayout) aaCards.getLayout()).show(aaCards, Integer.toString(legacy || temporalUpscaling ? 0 : aaMode));
         java.awt.Container parent = aaCards;
         while (parent != null && !(parent instanceof JScrollPane)) {
             parent.setMinimumSize(new java.awt.Dimension(0, parent.getPreferredSize().height));
@@ -242,24 +257,32 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
             if (!isDisplayable()) {
                 return;
             }
-            refreshing = true;
-            try {
-                inputs.forEach((key, input) -> {
-                    double value = values.getOrDefault(key, defaults.get(key));
-                    if (input instanceof JCheckBox box) {
-                        box.setSelected(value != 0);
-                    } else if (input instanceof JComboBox<?> combo) {
-                        combo.setSelectedIndex((int) values.getOrDefault(key,
-                                values.getOrDefault("FXAA", 1d) != 0 ? 1d : 0d).doubleValue());
-                    } else if (input instanceof JSpinner spinner) {
-                        spinner.setValue(value);
-                    }
-                });
-                updateModeControls();
-            } finally {
-                refreshing = false;
-            }
+            applySettings(values);
         });
+    }
+
+    private void applySettings(java.util.Map<String, Double> values) {
+        upscalingSupported = values.getOrDefault("UpscalingSupported", 1d) != 0;
+        refreshing = true;
+        try {
+            inputs.forEach((key, input) -> {
+                double value = values.getOrDefault(key, defaults.get(key));
+                if (input instanceof JCheckBox box) {
+                    box.setSelected(value != 0);
+                } else if (input instanceof JComboBox<?> combo) {
+                    double fallback = key.equals("AntiAliasing")
+                            ? (values.getOrDefault("TAA", 0d) != 0 ? 2d : values.getOrDefault("FXAA", 1d) != 0 ? 1d : 0d)
+                            : defaults.get(key);
+                    int selected = values.getOrDefault(key, fallback).intValue();
+                    combo.setSelectedIndex(Math.max(0, Math.min(combo.getItemCount() - 1, selected)));
+                } else if (input instanceof JSpinner spinner) {
+                    spinner.setValue(value);
+                }
+            });
+            updateModeControls();
+        } finally {
+            refreshing = false;
+        }
     }
 
     @Override

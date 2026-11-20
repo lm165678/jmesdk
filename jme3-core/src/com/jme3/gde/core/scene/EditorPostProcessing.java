@@ -31,7 +31,14 @@ import java.util.Map;
  * 第五步：Automatic exposure 默认开启，Min/Max 限制曝光乘数的 EV 范围，非 EV100。
  * 第六步：AO 的 Show Only 输出不经过后续曝光、Bloom、调色；取消后自动恢复。
  * 第七步：勾选 Legacy reference 查看旧的固定 ToneMap+FXAA；取消恢复新链及参数。
- * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由输出帧缓冲编码一次。
+ * Shader sRGB output 开关只控制编辑器主 AWT 视口，默认开启；显式关闭可恢复旧输出。
+ * 开启后先在线性浮点目标合成，再由 shader 编码读回；关闭恢复硬件 sRGB 目标。
+ * 该预览选项随编辑器配置保存；游戏需显式建立呈现目标，不由 WorldSettings 改窗口。
+ * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由呈现阶段编码一次。
+ * Upscaling 默认 Off；选择 FSR1/FSR2 并调整 Render resolution scale，GUI 保持输出尺寸。
+ * FSR2 自动旁路普通 TAA/FXAA，关闭后恢复原选择；FSR1 保留前置抗锯齿。
+ * 超分配置随 FPP 写入 WorldSettings，标准游戏挂载场景后恢复；需要配套 LWJGL3 引擎。
+ * 窗口 shader sRGB 默认由 AppSettings 开启，不依赖此处的预览开关。
  * 抗锯齿分组选择 Off / FXAA / TAA；切换保留参数，TAA 从新历史开始。
  * 第八步：保存场景将 WorldSettings 写入 J3O；游戏加载并挂到 rootNode 后自动恢复。
  * 第九步：Exposure 勾选 UE4 histogram adaptation，ToneMap 勾选 UE4 Film / combined LUT。
@@ -80,6 +87,7 @@ final class EditorPostProcessing {
         add("Bloom", new CinematicBloomFilter(), true);
         add("ToneMap", new ColorGradingFilter(), true);
         add("FXAA", new FXAAFilter(), true);
+        add("Upscaling", new UpscalingPass(), false);
     }
 
     private void add(String key, Filter filter, boolean active) {
@@ -102,7 +110,16 @@ final class EditorPostProcessing {
         if (processor == null && supported) {
             create();
         }
-        if (processor != null && option.equals("AntiAliasing")) {
+        if (processor != null && option.equals("Upscaling")) {
+            UpscalingPass upscale = (UpscalingPass) filters.get("Upscaling");
+            upscale.setAlgorithm(value == 2 ? UpscalingPass.Algorithm.FSR2 : UpscalingPass.Algorithm.FSR1);
+            upscale.setEnabled(value != 0);
+            ((TemporalAAFilter) filters.get("TAA")).resetHistory();
+        } else if (processor != null && option.equals("UpscalingScale")) {
+            ((UpscalingPass) filters.get("Upscaling")).setRenderScale((float) value);
+        } else if (processor != null && option.equals("UpscalingSharpness")) {
+            ((UpscalingPass) filters.get("Upscaling")).setSharpness((float) value);
+        } else if (processor != null && option.equals("AntiAliasing")) {
             filters.get("TAA").setEnabled(value == 2);
             filters.get("FXAA").setEnabled(value == 1);
             ((TemporalAAFilter) filters.get("TAA")).resetHistory();
@@ -330,6 +347,7 @@ final class EditorPostProcessing {
     }
 
     void close() {
+        app.setShaderSrgbPresentation(true);
         for (FilterPostProcessor chain : new FilterPostProcessor[]{processor, legacyProcessor}) {
             if (chain != null && app.getViewPort().getProcessors().contains(chain)) {
                 app.getViewPort().removeProcessor(chain);
@@ -343,6 +361,7 @@ final class EditorPostProcessing {
     }
 
     void sync() {
+        app.setShaderSrgbPresentation(options.getOrDefault("ShaderSrgbOutput", 1d) != 0);
         if (owner == null) {
             return;
         }

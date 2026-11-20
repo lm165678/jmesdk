@@ -9,6 +9,11 @@ public final class UePostPanelSmoke {
                 Field field = panel.getClass().getDeclaredField("inputs");
                 field.setAccessible(true);
                 java.util.Map<String,JComponent> inputs = (java.util.Map<String,JComponent>) field.get(panel);
+                JCheckBox shaderOutput = (JCheckBox) inputs.get("ShaderSrgbOutput");
+                if (shaderOutput == null || !shaderOutput.isSelected()
+                        || !shaderOutput.getToolTipText().contains("floating-point")) {
+                    throw new AssertionError("Shader output toggle/default/tooltip mismatch");
+                }
                 if (inputs.get("MinBrightness").isEnabled() || inputs.get("FilmSlope").isEnabled()) {
                     throw new AssertionError("Old scenes should keep old modes");
                 }
@@ -54,6 +59,22 @@ public final class UePostPanelSmoke {
                 update.invoke(panel);
                 if (!mode.isEnabled() || mode.getSelectedIndex() != 2 || !cards.getComponent(2).isVisible()) {
                     throw new AssertionError("AA mode was lost after legacy comparison");
+                }
+                Method apply = panel.getClass().getDeclaredMethod("applySettings", java.util.Map.class);
+                apply.setAccessible(true);
+                apply.invoke(panel, java.util.Map.of("FXAA", 1d));
+                JComboBox<?> upscaling = (JComboBox<?>) inputs.get("Upscaling");
+                if (upscaling.getSelectedIndex() != 0 || !shaderOutput.isSelected()) {
+                    throw new AssertionError("Old scenes must default to no upscaling and shader output");
+                }
+                apply.invoke(panel, java.util.Map.of("Upscaling", 2d, "AntiAliasing", 2d, "UpscalingScale", .5d));
+                if (mode.isEnabled() || mode.getSelectedIndex() != 2
+                        || ((Number) ((JSpinner) inputs.get("UpscalingScale")).getValue()).doubleValue() != .5d) {
+                    throw new AssertionError("FSR2 did not preserve/bypass AA or restore render scale");
+                }
+                apply.invoke(panel, java.util.Map.of("Upscaling", 0d, "AntiAliasing", 2d));
+                if (!mode.isEnabled() || mode.getSelectedIndex() != 2) {
+                    throw new AssertionError("AA preference was lost when upscaling was disabled");
                 }
                 System.out.println("UE4_POST_PANEL_PASS");
             } catch (Exception e) {

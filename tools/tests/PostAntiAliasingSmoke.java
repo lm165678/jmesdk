@@ -23,6 +23,7 @@ public final class PostAntiAliasingSmoke {
         add.setAccessible(true);
         add.invoke(editor, "TAA", new TemporalAAFilter(), false);
         add.invoke(editor, "FXAA", new FXAAFilter(), true);
+        add.invoke(editor, "Upscaling", new com.jme3.post.filters.UpscalingPass(), false);
         Geometry scene = new Geometry("AA settings");
         SceneRequest request = new SceneRequest(editor, scene, null);
         Field owner = EditorPostProcessing.class.getDeclaredField("owner");
@@ -55,6 +56,23 @@ public final class PostAntiAliasingSmoke {
         editor.configure("TAA", 1);
         if (chain.getFilter(FXAAFilter.class).isEnabled()) {
             throw new AssertionError("TAA switch left FXAA enabled");
+        }
+        editor.configure("UpscalingScale", .5);
+        editor.configure("UpscalingSharpness", .4);
+        for (int mode : new int[]{1, 2, 0}) {
+            editor.configure("Upscaling", mode);
+            editor.saveSettings(request);
+            Geometry restored = BinaryExporter.saveAndLoad(assets, scene);
+            WorldSettings settings = restored.getControl(WorldSettings.class);
+            FilterPostProcessor copy = settings.createPostProcessor(assets);
+            com.jme3.post.filters.UpscalingPass upscale = copy.getFilter(com.jme3.post.filters.UpscalingPass.class);
+            if (upscale.isEnabled() != (mode != 0)
+                    || Math.abs(upscale.getRenderScale() - .5f) > .00001f
+                    || Math.abs(upscale.getSharpness() - .4f) > .00001f
+                    || (mode == 2 && !upscale.replacesAntiAliasing())
+                    || !copy.getFilter(TemporalAAFilter.class).isEnabled()) {
+                throw new AssertionError("Upscaling configuration or AA preference failed J3O round-trip");
+            }
         }
         System.out.println("POST_AA_SETTINGS_PASS");
     }
