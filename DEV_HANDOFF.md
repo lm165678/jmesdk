@@ -886,3 +886,9 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - 依次点击多个 Volume 的 Bake 会按提交顺序排队。每次只运行一个任务；已经排队或正在烘焙的 Volume 不会重复提交。可分别取消等待项或捕获中的任务，已开始保存的任务继续提交。场景切换和移除目标仍受原场景和节点归属校验保护。队列任务沿用提交时的配方，并在开始捕获时快照场景。
 - 引擎光照捕获和多次反弹路径无改动。GiBakeJob 首轮捕获关闭已有 GI 的叠加。后续反弹只使用本任务上一轮的完整结果。
 - Windows JDK 25 定向编译通过。RTX 5080 原生 AWT/OpenGL 使用两个 Volume 验证面板隐藏后完成并发布、第二项顺序推进、取消等待项不影响当前任务、重开面板恢复进度和 Cancel、取消保留上次数据。回归入口 tools/tests/GiInspectorBakeCheck.java，输出 GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS。未构建或替换 SDK。配套基线 SDK 3504301c / 引擎 86a9556b4，无引擎源码更改。
+
+## 2026-11-22 普通 GI Probe Volume 粗层与空间细块流送
+
+- 普通网格 Bake 完成后，后台写入独立的细块资产版本目录；预览保留已有引用至发布完成，避免上传供拆分用的完整网格。发布成功后，场景引用粗层和块目录。保存 J3O 时写入这份引用，游戏资产需包含 GI/Streaming。导出失败保留本次内嵌结果，排队任务等到保存回调后才启动下一项。自适应和表面探针继续走原来的导出路径。
+- SceneComposer 的 World Settings / GI streaming 提供预取距离、最大细层驻留探针数和图集 MiB 预算，默认 64、8192、64，0 个细探针使用粗层。Apply 将设置提交给场景并标记待保存；恢复默认或调整运行时预算无需重新烘焙。游戏用配套引擎加载并挂载 J3O 后自动应用。
+- Windows JDK25 定向编译及 RTX 5080 原生 AWT 的 GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS 通过，覆盖 World Settings 面板提交及 J3O 重载，两个重叠 Volume 独立导出并在重载后保留引用，以及排队、恢复进度和取消。用户报告的旧场景重叠问题按要求延后，未复现场景。配套引擎基线 86a9556b4、SDK 基线 aea7fdbe 加本改动。未构建或替换 SDK。

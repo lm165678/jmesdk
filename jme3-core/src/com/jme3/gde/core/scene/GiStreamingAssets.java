@@ -1,6 +1,7 @@
 package com.jme3.gde.core.scene;
 
 import com.jme3.environment.gi.GiProbeData;
+import com.jme3.environment.gi.GiProbeStreamingData;
 import com.jme3.environment.gi.GiProbeVolume;
 import java.nio.file.*;
 import java.util.UUID;
@@ -14,7 +15,15 @@ import org.openide.util.Exceptions;
  * revisions for undo and older scenes. A loader may still be reading them.
  */
 public final class GiStreamingAssets {
+    // Render-thread state. The unsplit result is a worker input during export.
+    private static final java.util.Set<GiProbeVolume> BRICK_WRITES =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
     private GiStreamingAssets() {
+    }
+
+    static boolean isWritingBricks(GiProbeVolume volume) {
+        return BRICK_WRITES.contains(volume);
     }
 
     /**
@@ -47,6 +56,15 @@ public final class GiStreamingAssets {
      */
     public static void save(SceneApplication app, SceneRequest request, GiProbeVolume volume,
             DataObject file, java.util.function.Consumer<String> completion) {
+        save(app, request, volume, file, false, completion);
+    }
+
+    /** Regular Bake exports a coarse layer and independent fine bricks. The
+     * legacy whole-volume export is still used by adaptive and surface bakes.
+     * Calls and completion follow the render-thread/EDT contract of save().
+     */
+    public static void save(SceneApplication app, SceneRequest request, GiProbeVolume volume,
+            DataObject file, boolean bricks, java.util.function.Consumer<String> completion) {
         GiProbeData data = volume.getData();
         var folder = request.getManager().getAssetFolder();
         java.io.File local = folder == null ? null : FileUtil.toFile(folder);
@@ -57,30 +75,46 @@ public final class GiStreamingAssets {
             return;
         }
         Path root = local.toPath().toAbsolutePath().normalize();
-        String key = "GI/Streaming/" + UUID.randomUUID() + ".giprobe";
+        String revision = "GI/Streaming/" + UUID.randomUUID();
+        String key = bricks ? revision : revision + ".giprobe";
         Path destination = root.resolve(key).normalize();
         if (!destination.startsWith(root)) {
             throw new IllegalArgumentException("GI export outside asset root");
+        }
+        if (bricks) {
+            BRICK_WRITES.add(volume);
         }
         RequestProcessor.getDefault().post(() -> {
             Path temporary = null;
             try {
                 Files.createDirectories(destination.getParent());
-                temporary = Files.createTempFile(destination.getParent(), "gi-", ".tmp");
-                try (var output = Files.newOutputStream(temporary)) {
-                    data.saveCompressed(output);
+                final GiProbeStreamingData directory;
+                if (bricks) {
+                    temporary = Files.createTempDirectory(destination.getParent(), "gi-");
+                    Path staging = temporary;
+                    directory = GiProbeStreamingData.build(data, revision + "/brick", assetKey ->
+                            Files.newOutputStream(staging.resolve(Path.of(assetKey).getFileName()), StandardOpenOption.CREATE_NEW));
+                } else {
+                    temporary = Files.createTempFile(destination.getParent(), "gi-", ".tmp");
+                    try (var output = Files.newOutputStream(temporary)) {
+                        data.saveCompressed(output);
+                    }
+                    directory = null;
                 }
                 try {
                     Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE);
                 } catch (AtomicMoveNotSupportedException unsupported) {
                     Files.move(temporary, destination);
                 }
+                temporary = null;
                 FileUtil.refreshFor(destination.toFile());
                 app.enqueue(() -> {
+                    BRICK_WRITES.remove(volume);
                     boolean attached = volume == request.getRootNode()
                             || (request.getRootNode() instanceof com.jme3.scene.Node
                             && volume.hasAncestor((com.jme3.scene.Node) request.getRootNode()));
-                    if (app.getCurrentSceneRequest() == request && attached && volume.useStreamAsset(key, data)) {
+                    if (app.getCurrentSceneRequest() == request && attached
+                            && (directory == null ? volume.useStreamAsset(key, data) : volume.useStreamingData(directory, data))) {
                         java.awt.EventQueue.invokeLater(() -> {
                             file.setModified(true);
                             completion.accept("Bake complete. GI data saved: " + key + ". Save the scene to keep this reference.");
@@ -92,11 +126,22 @@ public final class GiStreamingAssets {
                 });
             } catch (java.io.IOException | RuntimeException error) {
                 Exceptions.printStackTrace(error);
-                complete(completion, "GI export failed: " + error.getMessage()
-                        + ". The in-memory bake remains available; save the scene to retain embedded data.");
+                app.enqueue(() -> {
+                    BRICK_WRITES.remove(volume);
+                    complete(completion, "GI export failed: " + error.getMessage()
+                            + ". The in-memory bake remains available; save the scene to retain embedded data.");
+                    return null;
+                });
             } finally {
                 if (temporary != null) {
                     try {
+                        if (bricks) {
+                            try (DirectoryStream<Path> files = Files.newDirectoryStream(temporary)) {
+                                for (Path brick : files) {
+                                    Files.deleteIfExists(brick);
+                                }
+                            }
+                        }
                         Files.deleteIfExists(temporary);
                     } catch (java.io.IOException ignored) {
                         // Never delete a published revision as temporary cleanup.

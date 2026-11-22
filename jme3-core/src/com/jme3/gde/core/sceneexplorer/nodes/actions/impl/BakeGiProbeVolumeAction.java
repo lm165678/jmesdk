@@ -27,7 +27,8 @@ import org.openide.util.lookup.ServiceProvider;
  * engine's GiProbeSet/Streamer. SDK preview applies the completed result during
  * drawing only, restoring original material bindings before any save. The UI
  * reports completion only after the external file and live reference commit;
- * the user must then save the J3O. During export the preview uses embedded data.
+ * the user must then save the J3O. Ordinary brick export keeps the old preview
+ * until the coarse layer and fine directory are ready.
  *
  * <pre>
  * 第一步：Add Light / GI Light Probe Volume，然后拖动节点或使用移动工具定位。
@@ -44,11 +45,12 @@ import org.openide.util.lookup.ServiceProvider;
  * 默认最多 4 块；每块占用现有流送槽位，整个活动集合仍最多 16 个 Volume。
  * 第五步：切换选中对象时，底部仍显示烘焙进度。点回原 Volume 可查看进度或 Cancel。
  * 依次点击多个 Volume 的 Bake 可排队，每次只捕获一个 Volume；取消某项不停止其他项。
- * 捕获完成后写入 GI 文件，完成后保存场景即可运行时自动流送。
+ * 普通规则网格自动生成一层粗网格和空间细块；等待 GI 文件写入后再保存场景。
+ * SceneComposer / World Settings / GI streaming 可调整细层驻留限制，无需重烘焙。
  * 关闭自适应并重新烘焙可恢复普通网格；仅移除自动生成的加密子节点。
  * 第六步：Diffuse bounce passes 默认 1，可选 2..8 进行多次漫反射烘焙。
  * 每轮只读取上一轮完整结果，旧数据不参与反馈；运行时仍使用原来的八探针设置。
- * 烘焙时间和临时内存增加，结果保存到原 GI 数据格式；取消保留旧结果。
+ * 烘焙时间和临时内存增加；取消保留旧结果。
  * 保存场景后恢复各 Volume 的烘焙选项；选择 1 并重新烘焙可恢复单次反射。
  * 多次反射暂不支持 Adaptive local refinement；体积应覆盖需要接收反射的表面。
  * 第七步：Separate sky visibility 默认关闭，烘焙包含天空的完整漫反射。
@@ -538,7 +540,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                                     new java.util.concurrent.atomic.AtomicInteger(published.size());
                             java.util.List<String> problems = new java.util.ArrayList<>();
                             for (GiProbeVolume baked : published) {
-                                com.jme3.gde.core.scene.GiStreamingAssets.save(app, request, baked, file, message -> {
+                                boolean bricks = layout.maxRefinements == 0 && !baked.isSurfaceLayout();
+                                com.jme3.gde.core.scene.GiStreamingAssets.save(app, request, baked, file, bricks, message -> {
                                     // Completion callbacks run on the EDT, so aggregation is serialized.
                                     if (!message.startsWith("Bake complete. GI data saved:")) {
                                         problems.add(message);

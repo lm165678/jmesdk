@@ -93,6 +93,13 @@ final class GiProbeGizmo {
                 bounds.setMesh(new WireBox(coverage.x * 0.5f, coverage.y * 0.5f, coverage.z * 0.5f));
                 bounds.setLocalTranslation(coverage.mult(0.5f));
                 GiProbeGrid grid = volume.getGrid();
+                if (volume.getStreamingData() != null && data != null) {
+                    GiProbeGrid coarse = data.getGrid();
+                    Vector3f dimensions = coarse.getCounts();
+                    Vector3f scale = volume.getWorldScale();
+                    grid = new GiProbeGrid(coarse.getOrigin().divide(scale), coarse.getSpacing().divide(scale),
+                            (int) dimensions.x, (int) dimensions.y, (int) dimensions.z);
+                }
                 int stride = Math.max(1, (grid.getProbeCount() + 4095) / 4096);
                 int shown = (grid.getProbeCount() + stride - 1) / stride;
                 FloatBuffer positions = BufferUtils.createFloatBuffer(shown * 3);

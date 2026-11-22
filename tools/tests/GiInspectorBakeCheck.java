@@ -94,6 +94,7 @@ public final class GiInspectorBakeCheck {
             current.set(app, request);
             return null;
         }).get(30, TimeUnit.SECONDS);
+        verifyWorldSettingsPanel();
         showVolume(volume);
         waitFor(() -> button(inspector, "Cancel") != null && startButton().isEnabled(), "First inspector initialization");
         var first = startAndHide(volume);
@@ -105,8 +106,26 @@ public final class GiInspectorBakeCheck {
         require(first.message().startsWith("Bake complete. Saved"), first.message());
         waitFor(() -> !queued.isRunning(), "Queued bake did not advance");
         require(queued.message().startsWith("Bake complete. Saved"), queued.message());
-        require(Files.isDirectory(work.resolve("GI/Streaming")), "GI data not published");
-        var previous = app.enqueue(() -> volume.getData()).get(10, TimeUnit.SECONDS);
+        try (var revisions = Files.list(work.resolve("GI/Streaming"))) {
+            require(revisions.filter(Files::isDirectory).count() == 2, "Expected separate fine brick asset revisions");
+        }
+        var previous = app.enqueue(() -> {
+            require(volume.getStreamingData() != null && other.getStreamingData() != null
+                    && volume.getStreamingData() != other.getStreamingData(), "Overlapping volumes lost their distinct bake directories");
+            var bytes = new java.io.ByteArrayOutputStream();
+            new com.jme3.export.binary.BinaryExporter().save(app.getCurrentSceneRequest().getRootNode(), bytes);
+            var importer = new com.jme3.export.binary.BinaryImporter();
+            importer.setAssetManager(app.getAssetManager());
+            var restored = (Node) importer.load(new java.io.ByteArrayInputStream(bytes.toByteArray()));
+            restored.updateGeometricState();
+            require(((GiProbeVolume) restored.getChild("Fixture volume")).getStreamingData() != null
+                    && ((GiProbeVolume) restored.getChild("Queued volume")).getStreamingData() != null,
+                    "Round trip lost an overlapping bake directory");
+            var settings = restored.getControl(com.jme3.post.WorldSettings.class).getGiStreaming();
+            require(settings.getMaxFineProbes() == 2048 && settings.getPreloadDistance() == 32
+                    && settings.getAtlasMiB() == 32, "Round trip lost the SceneComposer settings");
+            return volume.getStreamingData();
+        }).get(10, TimeUnit.SECONDS);
         showVolume(volume);
         waitFor(() -> startButton().isEnabled(), "Reopened inspector initialization");
         var second = startAndHide(volume);
@@ -128,9 +147,39 @@ public final class GiInspectorBakeCheck {
         });
         waitFor(() -> !second.isRunning(), "Cancel on reopened panel");
         require(second.message().startsWith("Cancelled"), second.message());
-        require(app.enqueue(() -> volume.getData() == previous).get(10, TimeUnit.SECONDS), "Cancellation replaced prior bake");
+        require(app.enqueue(() -> volume.getStreamingData() == previous).get(10, TimeUnit.SECONDS),
+                "Cancellation replaced prior bake");
         waitFor(() -> startButton().isEnabled() && !button(inspector, "Cancel").isEnabled(), "Inspector did not reset");
         System.out.println("GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS");
+    }
+
+    private static void verifyWorldSettingsPanel() throws Exception {
+        var constructor = Class.forName("com.jme3.gde.scenecomposer.EditorGiStreamingPanel").getDeclaredConstructor();
+        constructor.setAccessible(true);
+        var view = new java.util.concurrent.atomic.AtomicReference<JPanel>();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                JPanel panel = (JPanel) constructor.newInstance();
+                view.set(panel);
+                holder.removeAll();
+                holder.add(panel);
+                holder.revalidate();
+            } catch (ReflectiveOperationException error) {
+                throw new IllegalStateException(error);
+            }
+        });
+        waitFor(() -> button(view.get(), "Apply").isEnabled(), "SceneComposer World Settings panel did not load");
+        SwingUtilities.invokeAndWait(() -> {
+            var inputs = java.util.Arrays.stream(view.get().getComponents())
+                    .filter(JSpinner.class::isInstance).map(JSpinner.class::cast).toList();
+            inputs.get(0).setValue(32d);
+            inputs.get(1).setValue(2048);
+            inputs.get(2).setValue(32);
+            button(view.get(), "Apply").doClick(0);
+        });
+        require(app.enqueue(() -> app.getCurrentSceneRequest().getRootNode()
+                .getControl(com.jme3.post.WorldSettings.class).getGiStreaming().getMaxFineProbes() == 2048)
+                .get(10, TimeUnit.SECONDS), "World Settings did not reach the scene");
     }
 
     private static void showVolume(GiProbeVolume target) throws Exception {

@@ -3,6 +3,7 @@ package com.jme3.gde.core.scene;
 import com.jme3.environment.gi.*;
 import com.jme3.material.Material;
 import com.jme3.math.Vector3f;
+import com.jme3.post.WorldSettings;
 import com.jme3.renderer.Limits;
 import com.jme3.scene.*;
 import java.util.*;
@@ -16,17 +17,24 @@ import java.util.logging.*;
  * is restricted to drawing so save/undo sees original materials.
  */
 final class GiPreview implements AutoCloseable {
-    private record Source(String id, GiProbeData data, String asset, Vector3f offset) { }
+    private record Source(String id, GiProbeData data, String asset,
+            GiProbeStreamingData bricks, Vector3f offset) { }
     private final Map<GiProbeVolume, Source> sources = new IdentityHashMap<>();
     private GiProbeStreamer stream;
     private ExecutorService io;
     private long nextId;
+    private int atlasMiB;
+    private boolean spatialBricks;
     private volatile String status = "";
 
     GiProbeData getProbeData(GiProbeVolume volume) {
         GiProbeData embedded = volume.getData();
         if (embedded != null) {
             return embedded;
+        }
+        GiProbeStreamingData bricks = volume.getStreamingData();
+        if (bricks != null) {
+            return bricks.getCoarseData();
         }
         Source source = sources.get(volume);
         if (stream == null || source == null || !Objects.equals(source.asset(), volume.getStreamAsset())) {
@@ -50,49 +58,62 @@ final class GiPreview implements AutoCloseable {
         }
         List<Material> bound = new ArrayList<>();
         try {
-            if (stream == null) {
+            WorldSettings world = root.getControl(WorldSettings.class);
+            WorldSettings.GiStreaming settings = world == null ? WorldSettings.GiStreaming.DEFAULTS : world.getGiStreaming();
+            int limit = settings.getAtlasMiB();
+            boolean[] hasBricks = {false};
+            if (!spatialBricks) {
+                root.depthFirstTraversal(spatial -> {
+                    if (spatial instanceof GiProbeVolume volume && volume.getStreamingData() != null) {
+                        hasBricks[0] = true;
+                    }
+                });
+            }
+            if (stream == null || atlasMiB != limit || (hasBricks[0] && !spatialBricks)) {
+                boolean useBricks = spatialBricks || hasBricks[0];
+                close();
                 io = Executors.newFixedThreadPool(2, runnable -> {
                     Thread thread = new Thread(runnable, "SDK GI streaming IO");
                     thread.setDaemon(true);
                     return thread;
                 });
-                stream = new GiProbeStreamer(io, 256L << 20,
-                        app.getRenderer().getLimits().get(Limits.TextureSize), 200, app.getRenderer());
+                long gpu = (long) limit << 20;
+                stream = new GiProbeStreamer(io, Math.max(256L << 20, gpu * 4),
+                        app.getRenderer().getLimits().get(Limits.TextureSize), 200, app.getRenderer(),
+                        useBricks || limit != 64 ? gpu : 0);
+                atlasMiB = limit;
+                spatialBricks = useBricks;
                 stream.setUploadBudget(1L << 20, 2_000_000);
                 stream.setUnloadMultiplier(1.3);
             }
+            stream.setFineStreaming(settings.getPreloadDistance(), settings.getMaxFineProbes());
             Set<GiProbeVolume> seen = Collections.newSetFromMap(new IdentityHashMap<>());
             Set<Material> materials = Collections.newSetFromMap(new IdentityHashMap<>());
             root.depthFirstTraversal(spatial -> {
-                if (spatial instanceof GiProbeVolume volume && (volume.getData() != null || volume.getStreamAsset() != null)) {
-                    seen.add(volume);
+                if (spatial instanceof GiProbeVolume volume) {
+                    Source old = sources.get(volume);
+                    if (GiStreamingAssets.isWritingBricks(volume)) {
+                        if (old != null) {
+                            seen.add(volume);
+                        }
+                        return;
+                    }
                     GiProbeData data = volume.getData();
                     String external = volume.getStreamAsset();
+                    GiProbeStreamingData bricks = volume.getStreamingData();
+                    if (data == null && external == null && bricks == null) {
+                        return;
+                    }
+                    seen.add(volume);
                     Vector3f offset = volume.getWorldTranslation();
-                    Source old = sources.get(volume);
-                    if (old == null || old.data() != data || !Objects.equals(old.asset(), external) || !old.offset().equals(offset)) {
+                    if (old == null || old.data() != data || old.bricks() != bricks
+                            || !Objects.equals(old.asset(), external) || !old.offset().equals(offset)) {
                         if (old != null) {
                             stream.unregister(old.id());
                         }
                         String id = "volume-" + nextId++;
-                        GiProbeGrid grid = data == null ? volume.getBakeGrid() : data.getGrid();
-                        Vector3f size = grid.getCounts().subtract(1, 1, 1).multLocal(grid.getSpacing());
-                        if (external == null) {
-                            stream.register(GiProbeStreamer.Chunk.borrowed(id, offset.x, offset.y, offset.z, size, data));
-                        } else {
-                            var manager = request.getManager();
-                            stream.register(new GiProbeStreamer.Chunk(id, offset.x, offset.y, offset.z, size,
-                                    volume.getStreamBytes(), () -> {
-                                        var info = manager.locateAsset(new com.jme3.asset.AssetKey<>(external));
-                                        if (info == null) {
-                                            throw new java.io.FileNotFoundException(external);
-                                        }
-                                        try (var input = info.openStream()) {
-                                            return GiProbeData.loadCompressed(input);
-                                        }
-                                    }));
-                        }
-                        sources.put(volume, new Source(id, data, external, offset.clone()));
+                        stream.registerVolume(id, volume, request.getManager());
+                        sources.put(volume, new Source(id, data, external, bricks, offset.clone()));
                     }
                     stream.setAppearance(sources.get(volume).id(), volume.getIntensity(), volume.getFadeDistance(), volume.isStabilizedBlending(), volume.isSmoothBlending(), volume.isWideProbeSampling(), volume.isCurvedReceiverCorrection());
                 }
@@ -115,8 +136,9 @@ final class GiPreview implements AutoCloseable {
                     bound.add(material);
                 }
             }
-            status = "GI: " + stream.getPublishedCount() + "/" + sources.size()
-                    + " volumes ready, " + stream.getPendingCount() + " loads, "
+            status = "GI: " + stream.getPublishedCount() + " pages ready, "
+                    + stream.getRequestedFineProbeCount() + " requested fine probes, "
+                    + stream.getPendingCount() + " loads, "
                     + stream.getAtlasBytes() / (1024 * 1024) + " MiB page pool";
             if (!stream.getPageAdmissionFailures().isEmpty()) {
                 status += "; page capacity/width exceeded: " + stream.getPageAdmissionFailures();
@@ -160,6 +182,7 @@ final class GiPreview implements AutoCloseable {
             io = null;
         }
         sources.clear();
+        spatialBricks = false;
         status = "";
     }
 }
