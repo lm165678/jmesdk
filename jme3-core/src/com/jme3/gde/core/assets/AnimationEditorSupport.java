@@ -129,6 +129,10 @@ public final class AnimationEditorSupport {
         return new AbstractAction(preferred ? text("Animation.Open") : text("Animation.Open_in_Animation_Editor")) {
             @Override
             public void actionPerformed(ActionEvent event) {
+                AssetOpenProgress progress = AssetOpenProgress.begin(data);
+                if (progress == null) {
+                    return;
+                }
                 RequestProcessor.getDefault().post(() -> {
                     try {
                         Spatial root = data.loadAsset();
@@ -137,19 +141,28 @@ public final class AnimationEditorSupport {
                         }
                         boolean animation = !preferred || prefersAnimation(root);
                         EventQueue.invokeLater(() -> {
-                            if (animation) {
-                                open(root, root, data);
-                            } else {
-                                Action action = Actions.forID("SceneComposer", "com.jme3.gde.scenecomposer.OpenSceneComposer");
-                                if (action instanceof ContextAwareAction contextual) {
-                                    action = contextual.createContextAwareInstance(Lookups.singleton(data));
+                            try {
+                                if (animation) {
+                                    open(root, root, data);
+                                    progress.close();
+                                } else {
+                                    Action action = Actions.forID("SceneComposer", "com.jme3.gde.scenecomposer.OpenSceneComposer");
+                                    if (action instanceof ContextAwareAction contextual) {
+                                        action = contextual.createContextAwareInstance(Lookups.singleton(data));
+                                    }
+                                    if (action != null) {
+                                        action.actionPerformed(new ActionEvent(progress, ActionEvent.ACTION_PERFORMED, "open"));
+                                    } else {
+                                        progress.close();
+                                    }
                                 }
-                                if (action != null) {
-                                    action.actionPerformed(event);
-                                }
+                            } catch (Exception exception) {
+                                progress.close();
+                                error(exception);
                             }
                         });
                     } catch (Exception exception) {
+                        progress.close();
                         error(exception);
                     }
                 });

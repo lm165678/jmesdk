@@ -33,6 +33,7 @@ package com.jme3.gde.core.assets.actions;
 
 import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.core.assets.SpatialAssetDataObject;
+import com.jme3.gde.core.assets.AssetOpenProgress;
 import com.jme3.gde.core.scene.SceneApplication;
 import com.jme3.gde.core.scene.SceneRequest;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
@@ -41,7 +42,6 @@ import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import org.netbeans.api.progress.ProgressHandle;
 import org.openide.DialogDisplayer;
 import org.openide.NotifyDescriptor;
 
@@ -58,11 +58,13 @@ public final class OpenModel implements ActionListener {
         if (manager == null) {
             return;
         }
+        AssetOpenProgress progress = AssetOpenProgress.begin(context);
+        if (progress == null) {
+            return;
+        }
         Runnable call = new Runnable() {
 
             public void run() {
-                ProgressHandle progressHandle = ProgressHandle.createHandle("Opening Model");
-                progressHandle.start();
                 try {
                     manager.clearCache();
 
@@ -83,12 +85,12 @@ public final class OpenModel implements ActionListener {
                         request.setWindowTitle("OpenGL Window - View Model");
                         app.openScene(request);
                     } else {
+                        progress.close();
                         DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message("Error opening " + context.getPrimaryFile().getNameExt(), NotifyDescriptor.ERROR_MESSAGE));
                     }
                 }catch(Exception e){
+                    progress.close();
                     e.printStackTrace();
-                }finally {
-                    progressHandle.finish();
                 }
             }
         };

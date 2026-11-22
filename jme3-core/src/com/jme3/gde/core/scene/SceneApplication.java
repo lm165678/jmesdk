@@ -896,19 +896,35 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
      * @param request
      */
     public void openScene(final SceneRequest request) {
+        var progress = request == null ? null
+                : com.jme3.gde.core.assets.AssetOpenProgress.current(request.getDataObject());
         if (!started) {
+            if (progress != null) {
+                progress.close();
+            }
             NotifyUtil.show("OpenGL context not started!", "Click here to go to troubleshooting web page.", MessageType.WARNING, lst, 0);
             return;
         }
         java.awt.EventQueue.invokeLater(() -> {
-            if (request == null || !closeSceneOnEdt(currentSceneRequest, request)) {
-                return;
+            try {
+                if (request == null || !closeSceneOnEdt(currentSceneRequest, request)) {
+                    if (progress != null && !savingSceneBeforeClose) {
+                        progress.close();
+                    }
+                    return;
+                }
+                showSceneOnEdt(request);
+            } catch (Exception exception) {
+                if (progress != null) {
+                    progress.close();
+                }
+                Exceptions.printStackTrace(exception);
             }
-            showSceneOnEdt(request);
         });
     }
 
     private void showSceneOnEdt(SceneRequest request) {
+        var opening = com.jme3.gde.core.assets.AssetOpenProgress.current(request.getDataObject());
         currentSceneRequest = request;
         if (request.getDataNode() != null) {
             setCurrentFileNode(request.getDataNode());
@@ -934,7 +950,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         final AssetManager manager = request.getManager();
         request.setFakeApp(fakeApp);
         fakeApp.newAssetManager(manager);
-        enqueue(() -> {
+        var attachment = enqueue(() -> {
             if (manager != null) {
                 assetManager = manager;
             }
@@ -952,6 +968,17 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
         com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance().resetSceneLightingButtons();
         notifyOpen(request);
+        if (opening != null) {
+            org.openide.util.RequestProcessor.getDefault().post(() -> {
+                try {
+                    attachment.get();
+                } catch (Exception exception) {
+                    Exceptions.printStackTrace(exception);
+                } finally {
+                    opening.close();
+                }
+            });
+        }
     }
 
     /**
@@ -1066,8 +1093,26 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                 savingSceneBeforeClose = false;
                 if (saveFailure != null) {
                     Exceptions.printStackTrace(saveFailure);
+                    var opening = next == null ? null
+                            : com.jme3.gde.core.assets.AssetOpenProgress.current(next.getDataObject());
+                    if (opening != null) {
+                        opening.close();
+                    }
                 } else if (currentSceneRequest == request && closeSceneOnEdt(request, next) && next != null) {
-                    showSceneOnEdt(next);
+                    try {
+                        showSceneOnEdt(next);
+                    } catch (Exception exception) {
+                        var opening = com.jme3.gde.core.assets.AssetOpenProgress.current(next.getDataObject());
+                        if (opening != null) {
+                            opening.close();
+                        }
+                        Exceptions.printStackTrace(exception);
+                    }
+                } else if (next != null) {
+                    var opening = com.jme3.gde.core.assets.AssetOpenProgress.current(next.getDataObject());
+                    if (opening != null) {
+                        opening.close();
+                    }
                 }
             });
             return null;
