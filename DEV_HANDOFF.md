@@ -879,3 +879,10 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - 用户的 TestGame 暂存目录有 11 张已完成 DDS 和未完成纹理临时文件，原 SDK 日志在此阶段开始关闭模块，尚无 J3O 发布记录。原始 glTF 有六个使用法线贴图且缺 UV0 的片段，导入仍可继续。4152 张表面卡片在 32px 时约 210.8 MiB，预算 64 MiB 自动降至 16px（约 52.7 MiB）。只补反馈，不更改切线、LOD、表面预算、碰撞或 DDS 算法。
 - Windows JDK25 定向编译、EXTERNAL_ASSET_IMPORT_PASS 通过。实际 AbandonedSpaceship.gltf 的原生 AWT 测试确认窗口先于选项出现，选项期间隐藏，确认后恢复。未构建或替换 SDK，无引擎源码改动。基线 SDK c4b1926d / 引擎 86a9556b4 加当前依赖。
 - SPACESHIP_IMPORT_PASS：RTX 5080 AWT/OpenGL、默认转换选项和已安装 JNI DDS 编码器完成单文件导入，发布 94,319,991 字节 J3O。SPACESHIP_RELOAD_PASS 验证刚体与 24 个外置 DDS 引用。独立测试目录为 build/spaceship-import-check/spaceship-12637236260070702264/assets，用户项目仅只读诊断。
+
+## 2026-11-22 GI Probe Volume 烘焙进度和排队
+
+- GI Volume 的烘焙任务独立于属性面板。选择其他物体、关闭面板或重建面板时继续执行；点回原 Volume 即可查看最新已完成探针轮数或取消。底部 NetBeans 进度条从开始捕获持续到 GI 数据写入及其场景引用提交。完成后仍需保存场景 J3O。
+- 依次点击多个 Volume 的 Bake 会按提交顺序排队。每次只运行一个任务；已经排队或正在烘焙的 Volume 不会重复提交。可分别取消等待项或捕获中的任务，已开始保存的任务继续提交。场景切换和移除目标仍受原场景和节点归属校验保护。队列任务沿用提交时的配方，并在开始捕获时快照场景。
+- 引擎光照捕获和多次反弹路径无改动。GiBakeJob 首轮捕获关闭已有 GI 的叠加。后续反弹只使用本任务上一轮的完整结果。
+- Windows JDK 25 定向编译通过。RTX 5080 原生 AWT/OpenGL 使用两个 Volume 验证面板隐藏后完成并发布、第二项顺序推进、取消等待项不影响当前任务、重开面板恢复进度和 Cancel、取消保留上次数据。回归入口 tools/tests/GiInspectorBakeCheck.java，输出 GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS。未构建或替换 SDK。配套基线 SDK 3504301c / 引擎 86a9556b4，无引擎源码更改。

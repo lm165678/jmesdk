@@ -9,10 +9,12 @@ import com.jme3.gde.core.sceneexplorer.nodes.*;
 import com.jme3.gde.core.sceneexplorer.nodes.actions.ToolAction;
 import com.jme3.scene.Spatial;
 import java.awt.BorderLayout;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.awt.event.ActionEvent;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.WeakHashMap;
+import org.netbeans.api.progress.ProgressHandle;
 import javax.swing.*;
 import org.openide.loaders.DataObject;
 import org.openide.util.lookup.ServiceProvider;
@@ -40,7 +42,9 @@ import org.openide.util.lookup.ServiceProvider;
  * 规则模式可选择 Adaptive local refinement（默认关闭），按几何分布增加局部加密块。
  * 自适应始终执行分类与安全重定位；结束后显示表面采样覆盖数，未覆盖区域保留粗网格。
  * 默认最多 4 块；每块占用现有流送槽位，整个活动集合仍最多 16 个 Volume。
- * 第五步：可随时 Cancel；全部完成才发布新数据，保存场景后运行时自动流送。
+ * 第五步：切换选中对象时，底部仍显示烘焙进度。点回原 Volume 可查看进度或 Cancel。
+ * 依次点击多个 Volume 的 Bake 可排队，每次只捕获一个 Volume；取消某项不停止其他项。
+ * 捕获完成后写入 GI 文件，完成后保存场景即可运行时自动流送。
  * 关闭自适应并重新烘焙可恢复普通网格；仅移除自动生成的加密子节点。
  * 第六步：Diffuse bounce passes 默认 1，可选 2..8 进行多次漫反射烘焙。
  * 每轮只读取上一轮完整结果，旧数据不参与反馈；运行时仍使用原来的八探针设置。
@@ -56,6 +60,10 @@ import org.openide.util.lookup.ServiceProvider;
 @ServiceProvider(service = ToolAction.class)
 public final class BakeGiProbeVolumeAction implements ToolAction {
     private static final String BAKE_OPTION_PREFIX = "jme.sdk.giBake.";
+    // Inspector panels are transient. Only the EDT accesses this volume lookup.
+    private static final Map<GiProbeVolume, BakeSession> BAKES = new WeakHashMap<>();
+    private static final ArrayDeque<PendingBake> QUEUE = new ArrayDeque<>();
+    private static BakeSession activeBake;
 
     @Override
     public Class<?> getNodeClass() {
@@ -86,8 +94,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
     }
 
     /**
-     * Bakes from the inspector on the EDT. Hiding the inspector cancels the
-     * current job and keeps the last bake. The dialog packs at 360 pixels. As a direct JScrollPane view the root
+     * Creates an EDT view of the volume bake. Rebuilding the inspector does not
+     * affect the scene-owned job. As a direct JScrollPane view the root
      * tracks viewport width, including when the vertical scrollbar appears, so
      * asynchronous grid/status text cannot widen the Properties dock or clip labels.
      */
@@ -284,6 +292,33 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JButton cancel = new JButton("Cancel");
         cancel.setEnabled(false);
         start.setEnabled(false);
+        boolean[] settingsReady = {false};
+        Runnable refreshBake = () -> {
+            BakeSession bake = BAKES.get(volume);
+            boolean busy = bake != null && bake.isRunning();
+            if (bake != null) {
+                String message = bake.message();
+                status.setText(message);
+                status.setToolTipText(message);
+            }
+            cancel.setEnabled(bake != null && bake.canCancel());
+            start.setEnabled(settingsReady[0] && !busy);
+            if (!settingsReady[0]) {
+                return;
+            }
+            boolean editable = !busy;
+            bakeOptions.values().forEach(widget -> widget.setEnabled(editable));
+            countX.setEnabled(editable);
+            countY.setEnabled(editable);
+            countZ.setEnabled(editable);
+            surfaceLayout.setEnabled(editable);
+            boolean refining = !surfaceLayout.isSelected() && adaptive.isSelected();
+            adaptive.setEnabled(editable && !surfaceLayout.isSelected());
+            refinements.setEnabled(editable && refining);
+            depth.setEnabled(editable && refining);
+            placement.setEnabled(editable && !refining);
+        };
+        refreshBake.run();
         SceneApplication.getApplication().enqueue(() -> {
             boolean surfaceMode = volume.isSurfaceLayout();
             float strength = volume.getIntensity();
@@ -304,11 +339,6 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                     }
                 });
                 surfaceLayout.setSelected(surfaceMode);
-                boolean refining = !surfaceMode && adaptive.isSelected();
-                adaptive.setEnabled(!surfaceMode);
-                refinements.setEnabled(refining);
-                depth.setEnabled(refining);
-                placement.setEnabled(!refining);
                 intensity.setValue((double) strength);
                 fade.setValue((double) fadeDistance);
                 countX.setValue((int) counts.x);
@@ -317,10 +347,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                 worldCoverage[0] = extent;
                 refreshGrid.run();
                 syncingCounts[0] = false;
-                countX.setEnabled(true);
-                countY.setEnabled(true);
-                countZ.setEnabled(true);
-                start.setEnabled(true);
+                settingsReady[0] = true;
+                refreshBake.run();
             });
             return null;
         });
@@ -329,13 +357,6 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         buttons.add(cancel);
         dialog.add(fields, BorderLayout.NORTH);
         dialog.add(status, BorderLayout.CENTER);
-        dialog.add(buttons, BorderLayout.SOUTH);
-        AtomicBoolean cancelled = new AtomicBoolean();
-        dialog.addHierarchyListener(event -> {
-            if ((event.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !dialog.isShowing()) {
-                cancelled.set(true);
-            }
-        });
         javax.swing.JLabel diagnostics = new javax.swing.JLabel(" ");
         diagnostics.setMinimumSize(new java.awt.Dimension(0, 20));
         diagnostics.setToolTipText("Valid probes and supported preview materials; move/resize requires rebaking.");
@@ -344,6 +365,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         footer.add(diagnostics, BorderLayout.SOUTH);
         dialog.add(footer, BorderLayout.SOUTH);
         javax.swing.Timer diagnosticTimer = new javax.swing.Timer(750, event -> {
+            refreshBake.run();
             String message = SceneApplication.getApplication().getGiPreviewStatus();
             diagnostics.setText(message.isEmpty() ? "GI preview: waiting for a valid bake" : message);
             diagnostics.setToolTipText(diagnostics.getText());
@@ -358,13 +380,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                     // Ignore snapshots queued before a newer local edit. Setting
                     // widgets from Properties must not write back or invalidate data.
                     if (revision == countRevision[0]) {
-                        surfaceLayout.setSelected(surfaceMode);
-                        if (start.isEnabled()) {
-                            adaptive.setEnabled(!surfaceMode);
-                            refinements.setEnabled(!surfaceMode && adaptive.isSelected());
-                            depth.setEnabled(!surfaceMode && adaptive.isSelected());
-                        }
                         syncingCounts[0] = true;
+                        surfaceLayout.setSelected(surfaceMode);
                         intensity.setValue((double) strength);
                         fade.setValue((double) fadeDistance);
                         countX.setValue((int) counts.x);
@@ -374,34 +391,43 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                     }
                     worldCoverage[0] = extent;
                     refreshGrid.run();
+                    refreshBake.run();
                 });
                 return null;
             });
         });
         dialog.addHierarchyListener(event -> {
-            if (dialog.isShowing()) { diagnosticTimer.start(); }
-            else { diagnosticTimer.stop(); }
+            if ((event.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0) {
+                if (dialog.isShowing()) {
+                    refreshBake.run();
+                    diagnosticTimer.start();
+                } else {
+                    diagnosticTimer.stop();
+                }
+            }
         });
-        cancel.addActionListener(event -> cancelled.set(true));
+        cancel.addActionListener(event -> {
+            BakeSession bake = BAKES.get(volume);
+            if (bake != null && bake.cancel()) {
+                if (QUEUE.removeIf(pending -> pending.session() == bake)) {
+                    bake.finish("Queued bake cancelled.");
+                }
+                refreshBake.run();
+            }
+        });
         start.addActionListener(event -> {
+            BakeSession active = BAKES.get(volume);
+            if (active != null && active.isRunning()) {
+                refreshBake.run();
+                return;
+            }
             if ((Integer) bounces.getValue() > 1 && adaptive.isSelected() && !surfaceLayout.isSelected()) {
                 status.setText("Multiple bounce passes require Adaptive local refinement to be off.");
                 return;
             }
-            start.setEnabled(false);
-            cancel.setEnabled(true);
-            cancelled.set(false);
-            for (JSpinner count : new JSpinner[]{countX, countY, countZ}) {
-                count.setEnabled(false);
-            }
             GiAdaptiveProbeLayout.Settings layout = new GiAdaptiveProbeLayout.Settings();
             layout.maxRefinements = !surfaceLayout.isSelected() && adaptive.isSelected() ? (Integer) refinements.getValue() : 0;
             layout.maxDepth = (Integer) depth.getValue();
-            adaptive.setEnabled(false);
-            surfaceLayout.setEnabled(false);
-            refinements.setEnabled(false);
-            depth.setEnabled(false);
-            placement.setEnabled(false);
             GiSceneBaker.Settings quality = new GiSceneBaker.Settings();
             quality.probeClearance = ((Number) clearance.getValue()).floatValue();
             quality.captureSize = (Integer) capture.getValue();
@@ -415,150 +441,249 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.captureShadows = shadows.isSelected();
             quality.shadowMapSize = (Integer) shadowSize.getValue();
             long nanos = ((Integer) budget.getValue()).longValue() * 1_000_000L;
+            var bake = new BakeSession(volume.getName());
+            BAKES.put(volume, bake);
             SceneApplication app = SceneApplication.getApplication();
-            app.enqueue(() -> {
-                SceneRequest request = app.getCurrentSceneRequest();
-                if (request == null || cancelled.get()
-                        || (volume != request.getRootNode()
-                        && !(request.getRootNode() instanceof com.jme3.scene.Node root && volume.hasAncestor(root)))) {
-                    SwingUtilities.invokeLater(() -> {
-                        status.setText("Scene unavailable or bake cancelled.");
-                        start.setEnabled(true);
-                        cancel.setEnabled(false);
-                        countX.setEnabled(true);
-                        countY.setEnabled(true);
-                        countZ.setEnabled(true);
-                        surfaceLayout.setEnabled(true);
-                        adaptive.setEnabled(!surfaceLayout.isSelected());
-                        refinements.setEnabled(!surfaceLayout.isSelected() && adaptive.isSelected());
-                        depth.setEnabled(!surfaceLayout.isSelected() && adaptive.isSelected());
-                        placement.setEnabled(!adaptive.isSelected());
-                    });
-                    return null;
-                }
-                // Earlier panel writes are already queued; Properties and this
-                // panel share the live volume. Never reapply a stale UI snapshot.
-                app.getStateManager().attach(new BaseAppState() {
-                    private GiAdaptiveBakeJob job;
+            SceneRequest request = app.getCurrentSceneRequest();
+            QUEUE.addLast(new PendingBake(bake, () -> startBake(app, request, volume, file, quality, layout, nanos, bake)));
+            startNextBake();
+            refreshBake.run();
+        });
+        return dialog;
+    }
 
-                    @Override
-                    protected void initialize(Application application) {
-                        try {
-                            Spatial scene = request.getRootNode();
-                            Spatial updateRoot = scene;
-                            while (updateRoot.getParent() != null) {
-                                updateRoot = updateRoot.getParent();
-                            }
-                            updateRoot.updateGeometricState();
-                            Spatial snapshot = scene.clone(true);
-                            // Detaching the snapshot must retain its world placement and
-                            // resolved shadow policy inherited from the SDK scene root.
-                            snapshot.setLocalTransform(scene.getWorldTransform());
-                            snapshot.setShadowMode(scene.getShadowMode());
-                            snapshot.depthFirstTraversal(spatial -> {
-                                while (spatial.getNumControls() > 0) {
-                                    spatial.removeControl(spatial.getControl(0));
-                                }
-                            });
-                            snapshot.updateGeometricState();
-                            job = GiAdaptiveBakeJob.start(app.getRenderManager(), snapshot, volume, quality, layout,
-                                    view -> { }, cancelled::get,
-                                    count -> SwingUtilities.invokeLater(() -> status.setText("Completed probe passes: " + count)));
-                        } catch (RuntimeException error) {
-                            finish("Bake failed: " + error.getMessage());
-                        }
-                    }
+    private static void startNextBake() {
+        if (activeBake == null && !QUEUE.isEmpty()) {
+            PendingBake next = QUEUE.removeFirst();
+            activeBake = next.session();
+            activeBake.started();
+            next.start().run();
+        }
+    }
 
-                    @Override
-                    public void update(float tpf) {
-                        if (job == null) {
+    private record PendingBake(BakeSession session, Runnable start) {
+    }
+
+    private static void startBake(SceneApplication app, SceneRequest request, GiProbeVolume volume, DataObject file,
+            GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout, long nanos, BakeSession bake) {
+        app.enqueue(() -> {
+            if (request == null || request != app.getCurrentSceneRequest() || request.getDataObject() != file
+                    || !isInScene(request, volume) || bake.isCancelled()) {
+                bake.finish("Scene unavailable or bake cancelled.");
+                return null;
+            }
+            // Earlier panel writes are already queued; Properties and this
+            // panel share the live volume. Never reapply a stale UI snapshot.
+            app.getStateManager().attach(new BaseAppState() {
+                private GiAdaptiveBakeJob job;
+                private boolean saving;
+
+                @Override
+                protected void initialize(Application application) {
+                    try {
+                        if (bake.isCancelled() || app.getCurrentSceneRequest() != request || !isInScene(request, volume)) {
+                            finish("Scene unavailable or bake cancelled.");
                             return;
                         }
-                        if (app.getCurrentSceneRequest() != request
-                                || (volume != request.getRootNode() && volume.getParent() == null)) {
-                            cancelled.set(true);
+                        Spatial scene = request.getRootNode();
+                        Spatial updateRoot = scene;
+                        while (updateRoot.getParent() != null) {
+                            updateRoot = updateRoot.getParent();
                         }
-                        try {
-                            if (job.step(nanos)) {
-                                // Old data may still be shared by runtime bindings; do not dispose it here.
-                                SwingUtilities.invokeLater(() -> file.setModified(true));
-                                app.setGiPreviewEnabled(true);
-                                SwingUtilities.invokeLater(() -> {
-                                    status.setText("Bake captured. Saving GI data; preview is already updated...");
-                                    status.setToolTipText(status.getText());
-                                    cancel.setEnabled(false);
-                                });
-                                // Release capture resources now, but keep Start disabled
-                                // until the file and scene reference have both committed.
-                                app.getStateManager().detach(this);
-                                java.util.List<GiProbeVolume> published = job.getPublishedVolumes();
-                                GiAdaptiveProbeLayout.Plan plan = job.getLayoutPlan();
-                                String coverageReport = plan.getSurfaceTargets() == 0 ? ""
-                                        : " Refined surface samples: " + plan.getCoveredTargets() + "/"
-                                        + plan.getSurfaceTargets() + ". Uncovered samples retain coarse GI.";
-                                SwingUtilities.invokeLater(() -> request.getJmeNode().refresh(true));
-                                java.util.concurrent.atomic.AtomicInteger remaining =
-                                        new java.util.concurrent.atomic.AtomicInteger(published.size());
-                                java.util.List<String> problems = new java.util.ArrayList<>();
-                                for (GiProbeVolume baked : published) {
-                                    com.jme3.gde.core.scene.GiStreamingAssets.save(app, request, baked, file, message -> {
-                                        // Completion callbacks run on the EDT, so aggregation is serialized.
-                                        if (!message.startsWith("Bake complete. GI data saved:")) {
-                                            problems.add(message);
-                                        }
-                                        if (remaining.decrementAndGet() == 0) {
-                                            finish(problems.isEmpty()
-                                                    ? "Bake complete. Saved " + published.size()
-                                                            + " GI assets." + coverageReport + " Save the scene to keep their references."
-                                                    : String.join(" | ", problems));
-                                        }
-                                    });
-                                }
+                        updateRoot.updateGeometricState();
+                        Spatial snapshot = scene.clone(true);
+                        // Detaching the snapshot must retain its world placement and
+                        // resolved shadow policy inherited from the SDK scene root.
+                        snapshot.setLocalTransform(scene.getWorldTransform());
+                        snapshot.setShadowMode(scene.getShadowMode());
+                        snapshot.depthFirstTraversal(spatial -> {
+                            while (spatial.getNumControls() > 0) {
+                                spatial.removeControl(spatial.getControl(0));
                             }
-                        } catch (java.util.concurrent.CancellationException error) {
-                            finish("Cancelled. Grid edits remain applied; rebake after changing the grid.");
-                        } catch (RuntimeException error) {
-                            finish("Bake failed: " + error.getMessage());
-                        }
-                    }
-
-                    private void finish(String text) {
-                        SwingUtilities.invokeLater(() -> {
-                            status.setText(text);
-                            status.setToolTipText(text);
-                            start.setEnabled(true);
-                            cancel.setEnabled(false);
-                            countX.setEnabled(true);
-                            countY.setEnabled(true);
-                            countZ.setEnabled(true);
-                            surfaceLayout.setEnabled(true);
-                        adaptive.setEnabled(!surfaceLayout.isSelected());
-                            refinements.setEnabled(!surfaceLayout.isSelected() && adaptive.isSelected());
-                            depth.setEnabled(!surfaceLayout.isSelected() && adaptive.isSelected());
-                            placement.setEnabled(!adaptive.isSelected());
                         });
+                        snapshot.updateGeometricState();
+                        job = GiAdaptiveBakeJob.start(app.getRenderManager(), snapshot, volume, quality, layout,
+                                view -> { }, bake::isCancelled, bake::recordPasses);
+                    } catch (RuntimeException error) {
+                        finish("Bake failed: " + error.getMessage());
+                    }
+                }
+
+                @Override
+                public void update(float tpf) {
+                    if (job == null) {
+                        return;
+                    }
+                    if (app.getCurrentSceneRequest() != request
+                            || !isInScene(request, volume)) {
+                        bake.cancel();
+                    }
+                    try {
+                        if (job.step(nanos)) {
+                            // Old data may still be shared by runtime bindings; do not dispose it here.
+                            SwingUtilities.invokeLater(() -> file.setModified(true));
+                            app.setGiPreviewEnabled(true);
+                            saving = true;
+                            bake.saving();
+                            // Release capture resources now, but keep Start disabled
+                            // until the file and scene reference have both committed.
+                            app.getStateManager().detach(this);
+                            java.util.List<GiProbeVolume> published = job.getPublishedVolumes();
+                            GiAdaptiveProbeLayout.Plan plan = job.getLayoutPlan();
+                            String coverageReport = plan.getSurfaceTargets() == 0 ? ""
+                                    : " Refined surface samples: " + plan.getCoveredTargets() + "/"
+                                    + plan.getSurfaceTargets() + ". Uncovered samples retain coarse GI.";
+                            SwingUtilities.invokeLater(() -> request.getJmeNode().refresh(true));
+                            java.util.concurrent.atomic.AtomicInteger remaining =
+                                    new java.util.concurrent.atomic.AtomicInteger(published.size());
+                            java.util.List<String> problems = new java.util.ArrayList<>();
+                            for (GiProbeVolume baked : published) {
+                                com.jme3.gde.core.scene.GiStreamingAssets.save(app, request, baked, file, message -> {
+                                    // Completion callbacks run on the EDT, so aggregation is serialized.
+                                    if (!message.startsWith("Bake complete. GI data saved:")) {
+                                        problems.add(message);
+                                    }
+                                    if (remaining.decrementAndGet() == 0) {
+                                        finish(problems.isEmpty()
+                                                ? "Bake complete. Saved " + published.size()
+                                                        + " GI assets." + coverageReport + " Save the scene to keep their references."
+                                                : String.join(" | ", problems));
+                                    }
+                                });
+                            }
+                        }
+                    } catch (java.util.concurrent.CancellationException error) {
+                        finish("Cancelled. Grid edits remain applied; rebake after changing the grid.");
+                    } catch (RuntimeException error) {
+                        finish("Bake failed: " + error.getMessage());
+                    }
+                }
+
+                private void finish(String text) {
+                    bake.finish(text);
+                    if (!saving) {
                         app.getStateManager().detach(this);
                     }
+                }
 
-                    @Override
-                    protected void cleanup(Application application) {
+                @Override
+                protected void cleanup(Application application) {
+                    try {
                         if (job != null) {
                             job.close();
                         }
+                    } finally {
+                        if (!saving) {
+                            bake.finish("Bake stopped.");
+                        }
                     }
+                }
 
-                    @Override
-                    protected void onEnable() {
-                    }
+                @Override
+                protected void onEnable() {
+                }
 
-                    @Override
-                    protected void onDisable() {
+                @Override
+                protected void onDisable() {
+                }
+            });
+            return null;
+        });
+    }
+
+    private static boolean isInScene(SceneRequest request, GiProbeVolume volume) {
+        return volume == request.getRootNode()
+                || (request.getRootNode() instanceof com.jme3.scene.Node root && volume.hasAncestor(root));
+    }
+
+    static final class BakeSession {
+        private final ProgressHandle handle;
+        private volatile int completedPasses;
+        private volatile boolean cancelled;
+        private volatile boolean saving;
+        private volatile boolean queued = true;
+        private volatile String result;
+        private long lastProgress;
+
+        BakeSession(String name) {
+            handle = ProgressHandle.createHandle("Bake GI volume" + (name == null ? "" : ": " + name));
+            handle.setInitialDelay(0);
+        }
+
+        synchronized void started() {
+            queued = false;
+            handle.start();
+            handle.progress(message());
+        }
+
+        synchronized boolean cancel() {
+            if (!canCancel()) {
+                return false;
+            }
+            cancelled = true;
+            if (!queued) {
+                handle.progress("Cancelling GI bake...");
+            }
+            return true;
+        }
+
+        boolean isCancelled() {
+            return cancelled;
+        }
+
+        boolean isRunning() {
+            return result == null;
+        }
+
+        boolean canCancel() {
+            return isRunning() && !saving && !cancelled;
+        }
+
+        synchronized void recordPasses(int count) {
+            completedPasses = count;
+            long now = System.nanoTime();
+            if (canCancel() && now - lastProgress >= 200_000_000L) {
+                lastProgress = now;
+                handle.progress(message());
+            }
+        }
+
+        synchronized void saving() {
+            saving = true;
+            handle.progress(message());
+        }
+
+        synchronized void finish(String text) {
+            if (result == null) {
+                result = text;
+                if (!queued) {
+                    handle.finish();
+                }
+                SwingUtilities.invokeLater(() -> {
+                    if (activeBake == this) {
+                        activeBake = null;
+                        startNextBake();
                     }
                 });
-                return null;
-            });
-        });
-        return dialog;
+            }
+        }
+
+        String message() {
+            String finished = result;
+            if (finished != null) {
+                return finished;
+            }
+            if (saving) {
+                return "Bake captured. Saving GI data...";
+            }
+            if (cancelled) {
+                return "Cancelling GI bake...";
+            }
+            if (queued) {
+                return "Waiting for the current GI bake...";
+            }
+            return completedPasses == 0 ? "Preparing GI bake..." : "Completed probe passes: " + completedPasses;
+        }
     }
 
     private static String ui(String key) {
