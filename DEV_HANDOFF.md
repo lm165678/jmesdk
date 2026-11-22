@@ -1,3 +1,9 @@
+## 2026-11-22 Animation toolbar overflow menu
+
+- Both animation-editor toolbar rows now fold trailing action buttons into an ellipsis menu when available width is insufficient. The menu stays at the right edge and restores buttons when widened. Root Motion, links, export and playback/save/history actions use the original button listeners and current enabled state. Composer/Entry/preference remain inline; at extremely narrow widths these fields can clip, but hidden action buttons remain available in the menu.
+- JDK25 targeted compilation and AnimationToolbarSmoke passed repeated narrow/wide layouts, Root Motion invocation through overflow, disabled Undo and restoration. Existing AnimationEditorSmoke passed including graph interaction, history and J3O save/reload. Exact Core candidate passed both checks and was installed into build/cluster/modules with matching SHA-256; restart SDK. Backups/logs are build/toolbar-overflow-check. No 3D rendering behavior changed, full SDK packaging and interactive docking were not tested.
+- Pending animation behavior-state-tree manual chapter remains below; include toolbar overflow usage when that manual is written. No engine change or user asset writes. SDK implementation base 54b1a3a8 plus this change; engine compatibility follows the preceding paired handoff records.
+
 ## 2026-11-22 多动画预览与多骨架分支高亮
 
 - 各动画标签页的 OpenGL 预览独立拥有网格、LOD、纹理和材质定义的 GPU 资源。旧的普通场景克隆复用缓存的着色器及原生资源，在第二个 GL 上下文会把模型渲染成错误的三角片。每个预览继续在自己的渲染线程安装克隆。

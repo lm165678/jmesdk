@@ -166,7 +166,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         setName(text("Animation.Animation") + data.getPrimaryFile().getNameExt());
         setLayout(new BorderLayout(6, 6));
         setActivatedNodes(new org.openide.nodes.Node[]{data.getNodeDelegate()});
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel toolbar = new AnimationToolbar();
         refreshOwnerChoices();
         toolbar.add(new JLabel(text("Animation.Composer")));
         toolbar.add(ownerChoice);
@@ -176,7 +176,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         toolbar.add(new JLabel(text("Animation.Double_click")));
         toolbar.add(preference);
         preference.setRenderer(AnimationEditorMessages.valueRenderer());
-        JPanel playback = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel playback = new AnimationToolbar();
         playback.add(button(text("Animation.Guide"), this::showGuide));
         toolbar.add(button(text("Animation.External_links"), this::showAnimationLinks));
         toolbar.add(button(text("Animation.Export_embedded"), this::exportEmbedded));
