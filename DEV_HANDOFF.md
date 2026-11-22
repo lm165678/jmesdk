@@ -846,3 +846,9 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - The editor-only jme.animationGraph.ports.v1 String persists row-aligned L/R choices alongside the graph on its composer owner. History snapshots include the hidden model column; save conflict detection and failed-save rollback include the new data. Transition From/To and runtime graph format are unchanged. Old files infer sides once from loaded node centers; original port choices cannot be reconstructed if an older file already lost that information. Save J3O retains the inferred/edited sides thereafter.
 - JDK 25 targeted compile and AnimationEditorSmoke passed: bidirectional port dragging, source/target preservation through stacked and reversed layouts, separate route labels, undo/redo, and J3O reopening with a saved left port overriding current layout. Rendered stacked graph inspected in build/animation-port-check/stacked.png. Packaged Core candidate passed ANIMATION_EDITOR_SWING_SAVE_RUNTIME_PASS, then installed into build/cluster/modules/com-jme3-gde-core.jar with identical SHA-256. Backup core-before.jar and logs remain in build/animation-port-check. Restart SDK to load.
 - SDK 7b4f4b1b / engine 44031b02e plus working-tree changes. No engine/runtime transition changes, user model writes, full SDK packaging or push. Graph canvas/Swing and persistence verified; no new 3D preview behavior introduced.
+
+## 2026-11-22 Paired source checkpoint
+
+- Implementation pair: SDK 217d403bc968311e34cb8ab6f5f2bb0ad93c2b7e (master), engine 7b31f949e3bdfb3d1332a6b3abf6034875979869 (dev_fix_lightprobe_issue). Documentation-only commits follow.
+- Current sources/tests and prior validation records are collected; no additional full build or full-suite run for this push. SDK generated templates, native libraries, testdata JAR, generated ZIPs and local build counters remain local.
+- Fork destinations: lm165678/jmesdk and lm165678/jmonkeyengine. Remote success must be verified after pushing.
