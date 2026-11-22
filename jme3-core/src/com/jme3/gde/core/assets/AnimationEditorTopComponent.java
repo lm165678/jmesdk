@@ -3093,6 +3093,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
         }
 
         void install(Spatial model, Spatial selectedOwner, AnimationGraph graph) {
+            // Each animation tab has its own OpenGL context. A scene clone still shares GPU resources.
+            new AnimationPreviewResources().isolate(model);
             if (player != null) {
                 player.close();
                 player = null;

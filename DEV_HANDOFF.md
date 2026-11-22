@@ -1,3 +1,10 @@
+## 2026-11-22 多动画预览与多骨架分支高亮
+
+- 各动画标签页的 OpenGL 预览独立拥有网格、LOD、纹理和材质定义的 GPU 资源。旧的普通场景克隆复用缓存的着色器及原生资源，在第二个 GL 上下文会把模型渲染成错误的三角片。每个预览继续在自己的渲染线程安装克隆。
+- Root Motion 的关节选择在所有显示的 SkinningControl 中按路径查找对应关节，覆盖 ufbx 按身体和配件建立的多个骨架。选中关节、后代和分支内部的骨骼连线用黄色显示，分支之外用深灰色。
+- JDK 25 定向编译通过。开启断言，用 TestGame 实际 Paladin.j3o / Walk.j3o 和两个 RTX 5080 AWT/OpenGL 视口复现并验证两个打开顺序。实测 Hips、LeftArm 的所有匹配骨架实例及黄色顶点。未写入用户资产。配套 SDK e811bbe3 / engine 86a9556b4。
+- 候选 JAR 已验证。本地 Core JAR 已更新并核对 SHA-256，需要重启 SDK。 候选、备份和截图位于引擎的 build/multipreview-check。未执行 SDK 完整发行打包。
+
 ## 2026-11-22 Scene opening feedback and duplicate-click guard
 
 - J3O preferred Open starts a compact modeless activity dialog before background loading/routing, showing the file name and an indeterminate progress bar. A shared per-FileObject token prevents repeated clicks (including a separate explicit SceneComposer/View Model action) from starting another load. Routing to SceneComposer transfers the same token rather than treating the handoff as another click. English/Chinese labels follow the existing SDK UI locale policy.

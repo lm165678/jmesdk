@@ -39,7 +39,7 @@ final class AnimationTargetOverlay extends AbstractControl {
     private final float markerSize;
     private final Overlay mask;
     private final Spatial composerOwner;
-    private Object focus;
+    private final Set<Object> focus = Collections.newSetFromMap(new IdentityHashMap<>());
     int jointCount;
     int selectedJointCount;
     int nodeCount;
@@ -76,17 +76,26 @@ final class AnimationTargetOverlay extends AbstractControl {
     }
 
     void focus(String path, boolean joint) {
-        focus = null;
-        for (Object target : targets) {
-            String candidate = target instanceof Joint bone && joint
-                    ? com.jme3.anim.graph.AnimationGraph.jointPath(bone)
-                    : target instanceof Spatial node && !joint
-                            ? com.jme3.anim.graph.AnimationGraph.nodePath(composerOwner, node) : null;
-            if (path != null && path.equals(candidate)) {
-                focus = target;
-                break;
-            }
+        focus.clear();
+        if (path == null) {
+            return;
         }
+        // FBX can contain separate armatures for the body and each accessory.
+        // Resolve the focus in every displayed rig, including untracked joints.
+        model.depthFirstTraversal(owner -> {
+            if (joint) {
+                SkinningControl skin = owner.getControl(SkinningControl.class);
+                if (skin != null) {
+                    for (Joint bone : skin.getArmature().getJointList()) {
+                        if (path.equals(com.jme3.anim.graph.AnimationGraph.jointPath(bone))) {
+                            focus.add(bone);
+                        }
+                    }
+                }
+            } else if (path.equals(com.jme3.anim.graph.AnimationGraph.nodePath(composerOwner, owner))) {
+                focus.add(owner);
+            }
+        });
     }
 
     void show(boolean visible) {
@@ -98,18 +107,18 @@ final class AnimationTargetOverlay extends AbstractControl {
     }
 
     private boolean focused(Object target) {
-        if (focus == null) {
+        if (focus.isEmpty()) {
             return false;
         }
         if (target instanceof Joint joint) {
             for (Joint current = joint; current != null; current = current.getParent()) {
-                if (current == focus) {
+                if (focus.contains(current)) {
                     return true;
                 }
             }
         } else if (target instanceof Spatial spatial) {
             for (Spatial current = spatial; current != null; current = current.getParent()) {
-                if (current == focus) {
+                if (focus.contains(current)) {
                     return true;
                 }
             }
@@ -141,27 +150,29 @@ final class AnimationTargetOverlay extends AbstractControl {
                     }
                     ColorRGBA color = mask != null && mask.includes(joint)
                             ? ColorRGBA.Green : selected ? ColorRGBA.Orange : ColorRGBA.Cyan;
-                    if (focus != null) {
+                    if (!focus.isEmpty()) {
                         color = focused(joint) || focused(owner) ? ColorRGBA.Yellow : ColorRGBA.DarkGray;
                     }
                     Vector3f point = owner.localToWorld(joint.getModelTransform().getTranslation(), null);
                     marker(positions, colors, point, color);
-                    if (focus == joint) {
+                    if (focus.contains(joint)) {
                         focusMarker(positions, colors, point);
                     }
                     if (joint.getParent() != null) {
                         boneLinkCount++;
                         Vector3f parent = owner.localToWorld(joint.getParent().getModelTransform().getTranslation(), null);
-                        bone(positions, colors, parent, point, color);
+                        ColorRGBA linkColor = !focus.isEmpty() && !(focused(owner) || focused(joint.getParent()))
+                                ? ColorRGBA.DarkGray : color;
+                        bone(positions, colors, parent, point, linkColor);
                     }
                 }
             }
             if (targets.contains(owner) || focused(owner)) {
                 nodeCount++;
-                ColorRGBA nodeColor = focus == null ? ColorRGBA.Magenta
+                ColorRGBA nodeColor = focus.isEmpty() ? ColorRGBA.Magenta
                         : focused(owner) ? ColorRGBA.Yellow : ColorRGBA.DarkGray;
                 marker(positions, colors, owner.getWorldTranslation(), nodeColor);
-                if (focus == owner) {
+                if (focus.contains(owner)) {
                     focusMarker(positions, colors, owner.getWorldTranslation());
                 }
                 if (owner.getParent() != null && members.contains(owner.getParent())) {
