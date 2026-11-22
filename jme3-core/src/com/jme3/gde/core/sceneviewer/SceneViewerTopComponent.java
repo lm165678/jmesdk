@@ -29,6 +29,8 @@ import com.jme3.asset.MaterialKey;
 import com.jme3.collision.CollisionResult;
 import com.jme3.collision.CollisionResults;
 import com.jme3.gde.core.dnd.SceneViewerDropTargetListener;
+import com.jme3.gde.core.sceneexplorer.nodes.actions.SceneSpawnEvent;
+import com.jme3.gde.core.sceneexplorer.nodes.actions.SceneSpawnTransfer;
 import com.jme3.gde.core.filters.FilterExplorerTopComponent;
 import com.jme3.gde.core.icons.IconList;
 import com.jme3.gde.core.scene.SceneApplication;
@@ -129,8 +131,8 @@ public final class SceneViewerTopComponent extends TopComponent {
         addFocusListener(new java.awt.event.FocusAdapter() {
             @Override
             public void focusLost(java.awt.event.FocusEvent event) {
-                // NetBeans may temporarily transfer focus while activating this tab.
-                // Evaluate the settled owner, not the intermediate focusLost event.
+                // NetBeans can briefly move focus when activating this tab.
+                // Check again after focus settles.
                 java.awt.EventQueue.invokeLater(() -> {
                     java.awt.Component owner = java.awt.KeyboardFocusManager
                             .getCurrentKeyboardFocusManager().getFocusOwner();
@@ -170,8 +172,8 @@ public final class SceneViewerTopComponent extends TopComponent {
                 if (handleSceneEditShortcut(evt)) {
                     return;
                 }
-                // A modifier may have been pressed before this view gained focus.
-                // Trust the AWT modifier mask as well as the render-thread key state.
+                // A key pressed before focus arrived may be missing from our key state.
+                // Include the AWT modifier mask.
                 if (evt.isControlDown() || evt.isAltDown() || evt.isMetaDown()) {
                     return;
                 }
@@ -538,7 +540,7 @@ public final class SceneViewerTopComponent extends TopComponent {
         }
         paths.setMaximumSize(new java.awt.Dimension(190, 32));
         modes.setMaximumSize(new java.awt.Dimension(135, 26));
-        // Old toggles conflict with exclusive view modes; keep their generated form intact.
+        // The form still declares the old toggles. Hide them because view modes are exclusive.
         enableWireframe.setVisible(false);
         enableNormalView.setVisible(false);
         // One toolbar row: diagnostics live in the info tooltip, not a second row.
@@ -925,7 +927,7 @@ public final class SceneViewerTopComponent extends TopComponent {
         }
     }
 
-    /** Resets editor-only lighting toggles on the EDT when the scene changes. */
+    /** Clears the lighting preview switches on the EDT when the scene changes. */
     public void resetSceneLightingButtons() {
         enableCamLight.setSelected(false);
         enablePBRSky.setSelected(false);
@@ -959,6 +961,64 @@ public final class SceneViewerTopComponent extends TopComponent {
     @Override
     public UndoRedo getUndoRedo() {
         return Lookup.getDefault().lookup(UndoRedo.class);
+    }
+
+    /**
+     * Queues one placement ray on the render thread after a viewport drop.
+     * <pre>
+     * 第一步：在 SceneComposer 展开 Spawn，从 Spatial 或 Light 拖动按钮到视口。
+     * 第二步：松手时取最近表面交点；空处使用与模型拖放相同的默认深度。
+     * 如有配置对话框，确认后创建。局部对象挂到场景根节点。
+     * 天空盒、NavMesh 和全局灯光保留各自的放置规则。
+     * 第三步：Ctrl+Z 撤销，Ctrl+S 保存。
+     * </pre>
+     */
+    public boolean spawnObject(SceneSpawnTransfer transfer, java.awt.Component target, java.awt.Point drop) {
+        SceneRequest request = transfer.request();
+        if (request != app.getCurrentSceneRequest() || request.getJmeNode() == null
+                || request.getJmeNode().isReadOnly()
+                || !transfer.action().isEnabled() || oglCanvas == null) {
+            return false;
+        }
+        java.awt.Point point = javax.swing.SwingUtilities.convertPoint(target, drop, oglCanvas);
+        if (!oglCanvas.contains(point)) {
+            return false;
+        }
+        float x = point.x / (float) oglCanvas.getWidth();
+        float y = 1f - point.y / (float) oglCanvas.getHeight();
+        app.enqueue(() -> {
+            if (request != app.getCurrentSceneRequest()) {
+                return null;
+            }
+            Camera camera = app.getCamera();
+            Vector2f pixels = new Vector2f(x * camera.getWidth(), y * camera.getHeight());
+            Vector3f world = findDropPosition(camera, request.getRootNode(), pixels, true);
+            java.awt.EventQueue.invokeLater(() -> {
+                if (request == app.getCurrentSceneRequest() && !request.getJmeNode().isReadOnly()) {
+                    transfer.action().actionPerformed(new SceneSpawnEvent(request, world));
+                }
+            });
+            return null;
+        });
+        return true;
+    }
+
+    private static Vector3f findDropPosition(Camera camera, Spatial scene, Vector2f pixels, boolean visibleOnly) {
+        Spatial updateRoot = scene;
+        while (updateRoot.getParent() != null) {
+            updateRoot = updateRoot.getParent();
+        }
+        updateRoot.updateGeometricState();
+        Vector3f origin = camera.getWorldCoordinates(pixels, 0);
+        Vector3f direction = camera.getWorldCoordinates(pixels, 1).subtractLocal(origin).normalizeLocal();
+        CollisionResults hits = new CollisionResults();
+        scene.collideWith(new Ray(origin, direction), hits);
+        for (CollisionResult hit : hits) {
+            if (!visibleOnly || hit.getGeometry().getCullHint() != Spatial.CullHint.Always) {
+                return hit.getContactPoint().clone();
+            }
+        }
+        return camera.getWorldCoordinates(pixels, .95f);
     }
 
     /** Converts top-left AWT drop coordinates into bottom-left framebuffer pixels. */
@@ -1020,6 +1080,14 @@ public final class SceneViewerTopComponent extends TopComponent {
      * </pre>
      */
     public void addModel(String assetName, Vector2f cursorPosition) {
+        addModel(assetName, cursorPosition, false);
+    }
+
+    /** Insert on the render thread; Link persists an external J3O reference.
+     * 第一步：拖入 J3O 后选择 Link 或 AddTo。
+     * 第二步：Link 保存外部引用，AddTo 保存独立副本；两者都支持撤销。
+     */
+    public void addModel(String assetName, Vector2f cursorPosition, boolean linked) {
         Vector2f pixels = dropPixels(cursorPosition);
         SceneRequest request = app.getCurrentSceneRequest();
         if (request == null || request.getManager() == null || request.getJmeNode() == null
@@ -1033,8 +1101,8 @@ public final class SceneViewerTopComponent extends TopComponent {
             if (nodes[0] instanceof com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode n && n.isReadOnly()) {
                 return;
             }
-            // Light/control entries are not scene parents. Walk the explorer
-            // ancestry rather than attaching to their editor-only gizmos.
+            // Walk up from light or control entries to the scene node that owns them.
+            // Their editor gizmos cannot receive dropped spatials.
             org.openide.nodes.Node cursor = nodes[0];
             while (cursor != null) {
                 if (!(cursor instanceof com.jme3.gde.core.sceneexplorer.nodes.JmeLight)) {
@@ -1048,7 +1116,7 @@ public final class SceneViewerTopComponent extends TopComponent {
             }
         }
         final Spatial selection = selected;
-        // Snapshot the parent and drop position before any asynchronous conversion.
+        // Capture the parent and position before the conversion runs on a worker.
         app.enqueue(() -> {
             Spatial scene = request.getRootNode();
             Node parent = selection instanceof Node node ? node : selection == null ? null : selection.getParent();
@@ -1059,17 +1127,7 @@ public final class SceneViewerTopComponent extends TopComponent {
                 reportAssetDrop("Select a Node in an open scene before dropping a model.");
                 return null;
             }
-            Spatial updateRoot = scene;
-            while (updateRoot.getParent() != null) {
-                updateRoot = updateRoot.getParent();
-            }
-            updateRoot.updateGeometricState();
-            Vector3f origin = app.getCamera().getWorldCoordinates(pixels, 0);
-            Vector3f direction = app.getCamera().getWorldCoordinates(pixels, 1).subtractLocal(origin).normalizeLocal();
-            com.jme3.collision.CollisionResults hits = new com.jme3.collision.CollisionResults();
-            scene.collideWith(new Ray(origin, direction), hits);
-            Vector3f world = hits.size() == 0 ? app.getCamera().getWorldCoordinates(pixels, .95f)
-                    : hits.getClosestCollision().getContactPoint().clone();
+            Vector3f world = findDropPosition(app.getCamera(), scene, pixels, false);
             final Node destination = parent;
             org.openide.util.RequestProcessor.getDefault().post(() -> {
                 try {
@@ -1102,18 +1160,32 @@ public final class SceneViewerTopComponent extends TopComponent {
                                 return null;
                             }
                             assets.deleteFromCache(new com.jme3.asset.ModelKey(key));
-                            Spatial spatial = assets.loadModel(key);
+                            Spatial loaded = assets.loadModel(key);
+                            final Spatial spatial;
+                            if (linked) {
+                                com.jme3.scene.AssetLinkNode link = new com.jme3.scene.AssetLinkNode();
+                                link.setName(loaded.getName());
+                                link.attachLinkedChild(loaded, new com.jme3.asset.ModelKey(key));
+                                spatial = link;
+                            } else {
+                                spatial = loaded;
+                            }
                             spatial.setLocalTranslation(destination.worldToLocal(world, null));
-                            // Preload before insertion: shader failures leave the live
-                            // scene unchanged instead of failing again on every frame.
+                            // Compile shaders before attaching the model. A broken shader in the live
+                            // scene would fail every time the model is drawn.
                             spatial.updateGeometricState();
                             app.getRenderManager().preloadScene(spatial);
                             destination.attachChild(spatial);
                             registerDropEdit(request, spatial::removeFromParent, () -> destination.attachChild(spatial));
                             java.awt.EventQueue.invokeLater(() -> {
+                                if (request != app.getCurrentSceneRequest()) {
+                                    return;
+                                }
                                 var node = request.getJmeNode().getChild(destination);
                                 if (node != null) {
                                     node.refresh(true);
+                                    com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                                            .selectAddedObject(node, spatial);
                                 }
                             });
                         } catch (RuntimeException error) {

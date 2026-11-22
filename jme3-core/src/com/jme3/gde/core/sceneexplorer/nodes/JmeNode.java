@@ -120,7 +120,7 @@ public class JmeNode extends JmeSpatial {
             @Override
             public Transferable paste() throws IOException {
                 try {
-                    SceneApplication.getApplication().enqueue(() -> {
+                    Spatial added = SceneApplication.getApplication().enqueue(() -> {
                         Spatial pasted = data.cutSource() == null ? data.createSpatial() : data.cutSource();
                         if (pasted == null) {
                             throw new IOException("Clipboard model could not be loaded.");
@@ -154,9 +154,12 @@ public class JmeNode extends JmeSpatial {
                                 refreshTree();
                             }
                         });
-                        return null;
+                        return pasted;
                     }).get();
                     refreshTree();
+                    java.awt.EventQueue.invokeLater(() ->
+                            com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                                    .selectAddedObject(JmeNode.this, added));
                     return data.cutSource() == null ? transfer : null;
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();

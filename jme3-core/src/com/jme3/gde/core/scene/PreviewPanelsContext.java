@@ -1,7 +1,12 @@
 package com.jme3.gde.core.scene;
 
 import com.jme3.system.AppSettings;
+import com.jme3.system.JmeSystem;
+import com.jme3.system.Platform;
+import com.jme3.system.awt.AwtPanel;
 import com.jme3.system.awt.AwtPanelsContext;
+import com.jme3.system.awt.PaintMode;
+import com.jme3.system.lwjgl.WindowsHdrAwtPanel;
 import java.util.Locale;
 
 /**
@@ -23,6 +28,14 @@ import java.util.Locale;
 public final class PreviewPanelsContext extends AwtPanelsContext {
     public PreviewPanelsContext() {
         mouseInput = new PreviewMouseInput();
+    }
+
+    @Override
+    protected AwtPanel newPanel(PaintMode paintMode, boolean srgb, int bitsPerPixel) {
+        if (JmeSystem.getPlatform().getOs() == Platform.Os.Windows) {
+            return new WindowsHdrAwtPanel(paintMode, srgb, bitsPerPixel);
+        }
+        return super.newPanel(paintMode, srgb, bitsPerPixel);
     }
 
     /** Shared renderer choice for embedded panels and the optional canvas preview. */

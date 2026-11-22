@@ -30,13 +30,14 @@ import javax.imageio.ImageIO;
  * // 第三步：加载前 resolve 查询物理路径；null 表示使用原图。
  * Path selected = store.resolve("Models/Robot/color.png");
  * // 第四步：在 SDK 移动 DDS 或 dds 文件夹时调用 move，同步修改登记表。
- * // 第五步：删除源图会清理所属 DDS；不能单独删除或复制登记的 DDS。
+ * // 第五步：删除源图会清理 DDS；只删除 DDS 时保留映射，重新打开 J3O 可恢复。
  * // 第六步：外部删除 DDS 后重新转换可恢复；不要手工编辑登记表。
  * </pre>
  */
 public final class GeneratedTextures {
     public static final String MANIFEST = ".jme-textures.properties";
     private static final String PROFILE = "compressonator-4.6.0:BC3:mips-full:cpu:v1";
+    private static final String PORTABLE_PROFILE = "jsquish:BC3:mips-full:cpu:v1";
     private static final Object LOCK = new Object();
     private final Path root;
 
@@ -81,11 +82,16 @@ public final class GeneratedTextures {
         if (relative == null || relative.isBlank()) {
             throw new IOException("Missing texture registry path");
         }
-        Path result = root.resolve(relative).normalize();
+        Path result;
+        try {
+            result = root.resolve(relative).normalize();
+        } catch (java.nio.file.InvalidPathException failure) {
+            throw new IOException("Invalid texture path: " + relative, failure);
+        }
         if (!result.startsWith(root) || result.equals(root)) {
             throw new IOException("Texture path escapes asset root: " + relative);
         }
-        // Do not follow symlinks/junctions outside the registered asset root.
+        // Skip links or junctions that lead outside the registered root.
         Path existing = result;
         while (!Files.exists(existing)) {
             existing = existing.getParent();
@@ -119,7 +125,7 @@ public final class GeneratedTextures {
         }
     }
 
-    /** Content revision used for cache invalidation, even when size/time are unchanged. */
+    /** Revision of the contents, even when the file size and timestamp stay the same. */
     public static String contentRevision(Path file) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -140,17 +146,115 @@ public final class GeneratedTextures {
         return contentRevision(file);
     }
 
-    private String find(Properties properties, String key) {
+    private String find(Properties properties, String key) throws IOException {
         for (String id : ids(properties)) {
-            if (key.equals(properties.getProperty(id + ".key")) || key.equals(properties.getProperty(id + ".source"))) {
+            if (key.equals(properties.getProperty(id + ".source"))) {
+                return id;
+            }
+        }
+        if (Files.isRegularFile(checked(key))) {
+            return null;
+        }
+        for (String id : ids(properties)) {
+            if (key.equals(properties.getProperty(id + ".key"))
+                    || properties.getProperty(id + ".aliases", "").lines().anyMatch(key::equals)) {
                 return id;
             }
         }
         return null;
     }
 
-    /** Generates missing/stale DDS from source. Returns null for non-PNG/JPEG inputs. */
+    /** Rebuilds a missing or stale DDS. Returns null for sources other than PNG or JPEG. */
     public Path ensure(String key, TextureToolchain tools) throws IOException, InterruptedException {
+        return ensure(key, PROFILE, false, false, (source, image, temporary, levels) ->
+                tools.dds(source, temporary, "BC3", levels));
+    }
+
+    /** Generates a managed sidecar for a material that keeps the original texture key. */
+    public Path ensureLogicalDds(String key, TextureToolchain tools) throws IOException, InterruptedException {
+        return ensure(key, PROFILE, false, true, (source, image, temporary, levels) ->
+                tools.dds(source, temporary, "BC3", levels));
+    }
+    /** Encoder used when the SDK has no native or CLI texture encoder for the host. */
+    @FunctionalInterface
+    public interface PortableBc3Encoder {
+        /**
+         * Writes a complete BC3 DDS file, including all requested mip levels.
+         *
+         * @param image the decoded source image
+         * @param temporary destination inside the asset root
+         * @param levels mip count including the base image
+         * @throws IOException on encoding or write failure
+         * @throws InterruptedException if the encoding was interrupted
+         */
+        void write(java.awt.image.BufferedImage image, Path temporary, int levels)
+                throws IOException, InterruptedException;
+    }
+
+    /**
+     * Generates the same external DDS dependency with a portable BC3 encoder.
+     * Current outputs from either encoder can be reused safely.
+     * <pre>
+     * // 第一步：准备项目的 PNG/JPEG 资源键。
+     * // 第二步：调用 ensurePortableBc3(key, encoder) 生成完整 BC3 DDS。
+     * // 第三步：通过返回的路径加载 DDS，或用 ensure(key, tools) 恢复工具链默认路径。
+     * </pre>
+     *
+     * @param key logical PNG or JPEG asset key
+     * @param encoder portable BC3 encoder
+     * @return current generated DDS path, or null for other source formats
+     * @throws IOException if the source or destination cannot be processed
+     * @throws InterruptedException if encoding is interrupted
+     */
+    public Path ensurePortableBc3(String key, PortableBc3Encoder encoder)
+            throws IOException, InterruptedException {
+        return ensure(key, PORTABLE_PROFILE, false, false, (source, image, temporary, levels) ->
+                encoder.write(image, temporary, levels));
+    }
+
+    /**
+     * For ordinary J3O saves, generates a BC3 sidecar only when neither the
+     * registered output nor a conventionally named DDS exists. Existing DDS
+     * files stay untouched, including manually created files.
+     */
+    public Path ensureMissingPortableBc3(String key, PortableBc3Encoder encoder)
+            throws IOException, InterruptedException {
+        return ensure(key, PORTABLE_PROFILE, true, true, (source, image, temporary, levels) ->
+                encoder.write(image, temporary, levels));
+    }
+
+    /** Restores a missing DDS named directly in a legacy J3O, if its source is registered. */
+    public void restoreMissingOutput(String key, PortableBc3Encoder encoder)
+            throws IOException, InterruptedException {
+        String source = null;
+        synchronized (LOCK) {
+            if (Files.exists(checked(key))) {
+                return;
+            }
+            Properties properties = read();
+            for (String id : ids(properties)) {
+                if (key.equals(properties.getProperty(id + ".output"))) {
+                    String candidate = properties.getProperty(id + ".source");
+                    if (Files.isRegularFile(checked(candidate))) {
+                        source = candidate;
+                    }
+                    break;
+                }
+            }
+        }
+        if (source != null) {
+            ensurePortableBc3(source, encoder);
+        }
+    }
+
+    @FunctionalInterface
+    private interface Encoder {
+        void write(Path source, java.awt.image.BufferedImage image, Path temporary, int levels)
+                throws IOException, InterruptedException;
+    }
+
+    private Path ensure(String key, String profile, boolean onlyMissing, boolean followSource, Encoder encoder)
+            throws IOException, InterruptedException {
         Properties properties;
         String id;
         String sourceName;
@@ -168,6 +272,12 @@ public final class GeneratedTextures {
                 return null;
             }
             source = checked(sourceName);
+            if (onlyMissing) {
+                Path present = existingOutput(properties, id, source);
+                if (present != null || !Files.isRegularFile(source)) {
+                    return present;
+                }
+            }
             sourceHash = hash(source);
             if (id != null) {
                 Path valid = resolve(properties, id);
@@ -186,8 +296,8 @@ public final class GeneratedTextures {
             }
             relative(output);
         }
-        // Encoding never holds the registry lock: node enablement and filesystem
-        // operations must remain responsive while the subprocess is running.
+        // Release the registry lock while encoding so filesystem operations and
+        // action enablement can proceed.
         Path temporary = Files.createTempFile(root, ".texture-generation-", ".dds");
         try {
             var image = ImageIO.read(source.toFile());
@@ -195,7 +305,7 @@ public final class GeneratedTextures {
                 throw new IOException("Cannot decode texture source: " + source);
             }
             int levels = 32 - Integer.numberOfLeadingZeros(Math.max(image.getWidth(), image.getHeight()));
-            tools.dds(source, temporary, "BC3", levels);
+            encoder.write(source, image, temporary, levels);
             synchronized (LOCK) {
                 if (!properties.equals(read()) || !sourceHash.equals(hash(source))) {
                     throw new IOException("Texture sources or ownership changed during encoding; retry conversion");
@@ -211,7 +321,10 @@ public final class GeneratedTextures {
                 properties.setProperty(id + ".output", relative(output));
                 properties.setProperty(id + ".sourceHash", sourceHash);
                 properties.setProperty(id + ".outputHash", hash(output));
-                properties.setProperty(id + ".profile", PROFILE);
+                properties.setProperty(id + ".profile", profile);
+                if (followSource && !existing) {
+                    properties.setProperty(id + ".followSource", "true");
+                }
                 save(properties);
                 return output;
             }
@@ -220,7 +333,24 @@ public final class GeneratedTextures {
         }
     }
 
-    /** Returns a fresh physical DDS, or null so the caller can load the source. */
+    private Path existingOutput(Properties properties, String id, Path source) throws IOException {
+        if (id != null) {
+            Path registered = checked(properties.getProperty(id + ".output"));
+            if (Files.isRegularFile(registered)) {
+                return registered;
+            }
+        }
+        String name = source.getFileName().toString();
+        for (Path directory : List.of(source.getParent().resolve("dds"), source.getParent())) {
+            Path file = checked(root.relativize(directory.resolve(name + ".dds")).toString());
+            if (Files.isRegularFile(file)) {
+                return file;
+            }
+        }
+        return null;
+    }
+
+    /** Returns a current DDS on disk, or null to let the caller load the source. */
     public Path resolve(String key) throws IOException {
         synchronized (LOCK) {
             Properties properties = read();
@@ -229,7 +359,7 @@ public final class GeneratedTextures {
         }
     }
 
-    /** Resolves the source of a logical alias, including after source-folder moves. */
+    /** Finds the source behind an alias, even after its folder is moved. */
     public Path source(String key) throws IOException {
         synchronized (LOCK) {
             Properties properties = read();
@@ -238,11 +368,15 @@ public final class GeneratedTextures {
         }
     }
 
+    private static boolean isCurrentProfile(String profile) {
+        return PROFILE.equals(profile) || PORTABLE_PROFILE.equals(profile);
+    }
+
     private Path resolve(Properties properties, String id) throws IOException {
         Path source = checked(properties.getProperty(id + ".source"));
         Path output = checked(properties.getProperty(id + ".output"));
         if (Files.isRegularFile(source) && Files.isRegularFile(output)
-                && PROFILE.equals(properties.getProperty(id + ".profile"))
+                && isCurrentProfile(properties.getProperty(id + ".profile"))
                 && hash(source).equals(properties.getProperty(id + ".sourceHash"))
                 && hash(output).equals(properties.getProperty(id + ".outputHash"))) {
             return output;
@@ -250,7 +384,7 @@ public final class GeneratedTextures {
         return null;
     }
 
-    /** Whether a file/subtree contains registered outputs, independent of directory names. */
+    /** Checks registry entries for outputs under this path. Directory names do not imply ownership. */
     public boolean containsGenerated(Path path) throws IOException {
         synchronized (LOCK) {
             Path target = path.toAbsolutePath().normalize();
@@ -302,7 +436,7 @@ public final class GeneratedTextures {
                 if (relative == null || relative.isBlank()) {
                     continue;
                 }
-                // Read-only parent comparison; no realpath/stat work on each output.
+                // Compare the parent paths without touching the disk for each output file.
                 Path parent = root.resolve(relative).normalize().getParent();
                 if (target.equals(parent)) {
                     return true;
@@ -330,19 +464,35 @@ public final class GeneratedTextures {
         }
     }
 
-    /** True when moving the whole registry root; all relative paths remain valid. */
+    /** Returns true if the whole registry root is moving and relative paths stay valid. */
     public boolean isRoot(Path path) {
         return root.equals(path.toAbsolutePath().normalize());
     }
 
-    /** Rejects copying generated resources, including a folder containing them. */
+    /** Prevents copying generated files, including copies of a parent folder. */
     public void checkCopy(Path path) throws IOException {
         if (containsGenerated(path)) {
             throw new IOException("Generated DDS resources cannot be copied. Copy source images and convert again.");
         }
     }
 
-    /** Deletes sources with their generated outputs; refuses orphan-output deletion. */
+    /**
+     * Removes sources with their DDS files. Deleting one DDS retains its mapping.
+     * Call this once for a managed folder before NetBeans recursively deletes its
+     * children, so output-folder protection is checked before any child is removed.
+     * Directory enumeration is closed before deletion; transient filesystem locks
+     * receive bounded retries. A persistent failure is reported and may leave a
+     * partially removed tree; registry records are retained for retry.
+     * <pre>
+     * // 第一步：用户确认后，在后台线程取得目录所属登记表。
+     * GeneratedTextures store = GeneratedTextures.containing(selectedFolder);
+     * // 第二步：整个目录只调用一次，不先逐个删除子文件。
+     * if (store != null) {
+     *     store.delete(selectedFolder);
+     * }
+     * // 第三步：刷新资源树；失败显示具体路径，保留登记以便重试。
+     * </pre>
+     */
     public void delete(Path path) throws IOException {
         synchronized (LOCK) {
             Path target = isRoot(path) ? root : checked(relative(path));
@@ -355,8 +505,12 @@ public final class GeneratedTextures {
             for (String id : ids(properties)) {
                 Path source = checked(properties.getProperty(id + ".source"));
                 Path output = checked(properties.getProperty(id + ".output"));
+                if (output.equals(target)) {
+                    deleteWithRetry(output);
+                    return;
+                }
                 if (output.startsWith(target) && !source.startsWith(target)) {
-                    throw new IOException("Delete the source texture instead of its generated DDS: " + source);
+                    throw new IOException("The generated DDS directory cannot be deleted separately: " + target);
                 }
                 if (source.startsWith(target)) {
                     removed.add(id);
@@ -365,18 +519,20 @@ public final class GeneratedTextures {
                     }
                 }
             }
-            // Paths are normalized and verified inside root before any recursive deletion.
+            // Check each path against the registered root before deleting recursively.
             if (Files.isDirectory(target)) {
+                List<Path> deletionOrder;
                 try (var files = Files.walk(target)) {
-                    for (Path file : files.sorted(Comparator.reverseOrder()).toList()) {
-                        Files.delete(file);
-                    }
+                    deletionOrder = files.sorted(Comparator.reverseOrder()).toList();
+                }
+                for (Path file : deletionOrder) {
+                    deleteWithRetry(file);
                 }
             } else {
-                Files.delete(target);
+                deleteWithRetry(target);
             }
             for (Path output : outputs) {
-                Files.deleteIfExists(output);
+                deleteWithRetry(output);
             }
             for (String id : removed) {
                 properties.keySet().removeIf(key -> key.toString().startsWith(id + "."));
@@ -387,7 +543,26 @@ public final class GeneratedTextures {
         }
     }
 
-    /** Moves a managed source/output subtree and updates physical paths, retaining logical aliases. */
+    private static void deleteWithRetry(Path path) throws IOException {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                Files.deleteIfExists(path);
+                return;
+            } catch (java.nio.file.FileSystemException failure) {
+                if (attempt >= 5) {
+                    throw failure;
+                }
+                try {
+                    Thread.sleep(50L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.InterruptedIOException("Interrupted deleting " + path);
+                }
+            }
+        }
+    }
+
+    /** Moves sources and relocates their logical-key sidecars, keeping old texture keys readable. */
     public void move(Path from, Path to) throws IOException {
         synchronized (LOCK) {
             Path source = checked(relative(from));
@@ -395,19 +570,57 @@ public final class GeneratedTextures {
             if (source.equals(root.resolve(MANIFEST)) || destination.startsWith(source)) {
                 throw new IOException("Invalid managed texture move");
             }
+            if (isGeneratedOutputDirectory(source)) {
+                throw new IOException("Generated DDS files and their directory cannot be moved or renamed");
+            }
             Properties properties = read();
+            var pending = new ArrayList<Relocation>();
             for (String id : ids(properties)) {
-                for (String field : List.of("source", "output")) {
-                    Path value = checked(properties.getProperty(id + "." + field));
-                    if (value.startsWith(source)) {
-                        properties.setProperty(id + "." + field, relative(destination.resolve(source.relativize(value))));
+                Path previousSource = checked(properties.getProperty(id + ".source"));
+                Path previousOutput = checked(properties.getProperty(id + ".output"));
+                Path movedSource = relocate(previousSource, source, destination);
+                Path movedOutput = relocate(previousOutput, source, destination);
+                Path output = movedOutput;
+                if (!movedSource.equals(previousSource)
+                        && Boolean.parseBoolean(properties.getProperty(id + ".followSource"))) {
+                    String name = movedSource.getFileName().toString();
+                    output = movedSource.getParent().resolve("dds").resolve(name + ".dds");
+                    if (!movedOutput.equals(output) && Files.exists(relocate(output, destination, source))) {
+                        output = output.resolveSibling(name + "." + id + ".dds");
+                    }
+                    if (!movedOutput.equals(output) && Files.isRegularFile(previousOutput)) {
+                        pending.add(new Relocation(movedOutput, output));
                     }
                 }
+                if (!movedSource.equals(previousSource)) {
+                    String previousKey = relative(previousSource);
+                    String aliasesKey = id + ".aliases";
+                    String aliases = properties.getProperty(aliasesKey, "");
+                    if (!previousKey.equals(properties.getProperty(id + ".key"))
+                            && aliases.lines().noneMatch(previousKey::equals)) {
+                        properties.setProperty(aliasesKey, aliases + previousKey + "\n");
+                    }
+                    properties.setProperty(id + ".source", relative(movedSource));
+                }
+                properties.setProperty(id + ".output", relative(output));
             }
             Files.move(source, destination);
+            var completed = new ArrayList<Relocation>();
             try {
+                for (Relocation change : pending) {
+                    Files.createDirectories(change.to().getParent());
+                    Files.move(change.from(), change.to());
+                    completed.add(change);
+                }
                 save(properties);
             } catch (IOException failure) {
+                for (Relocation change : completed.reversed()) {
+                    try {
+                        Files.move(change.to(), change.from());
+                    } catch (IOException rollback) {
+                        failure.addSuppressed(rollback);
+                    }
+                }
                 try {
                     Files.move(destination, source);
                 } catch (IOException rollback) {
@@ -416,5 +629,12 @@ public final class GeneratedTextures {
                 throw failure;
             }
         }
+    }
+
+    private static Path relocate(Path path, Path source, Path destination) {
+        return path.startsWith(source) ? destination.resolve(source.relativize(path)) : path;
+    }
+
+    private record Relocation(Path from, Path to) {
     }
 }

@@ -103,10 +103,14 @@ public class NewSpatialPopup extends AbstractAction implements Presenter.Popup {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
                 public Void call() throws Exception {
+                    if (!SceneSpawnEvent.canCreate(e)) {
+                        return null;
+                    }
                     Node newItem = new Node("Node");
+                    SceneSpawnEvent.place(e, node, newItem);
                     node.attachChild(newItem);
                     addSpatialUndo(node, newItem);
-                    setModified();
+                    setModified(newItem);
                     return null;
                 }
             });
@@ -123,6 +127,9 @@ public class NewSpatialPopup extends AbstractAction implements Presenter.Popup {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
                 public Void call() throws Exception {
+                    if (!SceneSpawnEvent.canCreate(e)) {
+                        return null;
+                    }
                     ParticleEmitter emit = new ParticleEmitter("Emitter", ParticleMesh.Type.Triangle, 200);
                     emit.setShape(new EmitterSphereShape(Vector3f.ZERO, 1f));
                     emit.setGravity(new Vector3f(0, 0, 0));
@@ -132,9 +139,10 @@ public class NewSpatialPopup extends AbstractAction implements Presenter.Popup {
                     emit.setImagesX(15);
                     Material mat = new Material(SceneApplication.getApplication().getAssetManager(), "Common/MatDefs/Misc/Particle.j3md");
                     emit.setMaterial(mat);
+                    SceneSpawnEvent.place(e, node, emit);
                     node.attachChild(emit);
                     addSpatialUndo(node, emit);
-                    setModified();
+                    setModified(emit);
                     return null;
                 }
             });
@@ -151,11 +159,15 @@ public class NewSpatialPopup extends AbstractAction implements Presenter.Popup {
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
                 public Void call() throws Exception {
+                    if (!SceneSpawnEvent.canCreate(e)) {
+                        return null;
+                    }
                     AudioNode newItem = new AudioNode();
                     newItem.setName("AudioNode");
+                    SceneSpawnEvent.place(e, node, newItem);
                     node.attachChild(newItem);
                     addSpatialUndo(node, newItem);
-                    setModified();
+                    setModified(newItem);
                     return null;
                 }
             });
@@ -200,13 +212,12 @@ public class NewSpatialPopup extends AbstractAction implements Presenter.Popup {
     /**
      * Sets this (parent) node as modified/dirty/to be saved.
      */
-    private void setModified() {
-        java.awt.EventQueue.invokeLater(new Runnable() {
-
-            public void run() {
-                dataObject.setModified(true);
-                jmeNode.refresh(true);
-            }
+    private void setModified(Spatial added) {
+        java.awt.EventQueue.invokeLater(() -> {
+            dataObject.setModified(true);
+            jmeNode.refresh(true);
+            com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                    .selectAddedObject(jmeNode, added);
         });
     }
 }

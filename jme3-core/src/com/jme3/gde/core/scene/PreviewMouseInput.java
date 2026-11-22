@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 final class PreviewMouseInput extends AwtMouseInput {
     private final ConcurrentLinkedQueue<InputEvent> events = new ConcurrentLinkedQueue<>();
     private RawInputListener sink;
-    // The following state belongs exclusively to the AWT event thread.
+    // Access these fields from the AWT event thread.
     private Component source;
     private Window ownerWindow;
     private final java.awt.event.WindowFocusListener windowFocus = new java.awt.event.WindowAdapter() {
@@ -51,7 +51,7 @@ final class PreviewMouseInput extends AwtMouseInput {
 
         @Override
         public void windowGainedFocus(java.awt.event.WindowEvent event) {
-            // Discard coordinates recorded in another application/window position.
+            // The saved coordinates may belong to a different window position.
             positioned = false;
             warpPending = false;
             lateWarpPossible = false;
@@ -116,7 +116,7 @@ final class PreviewMouseInput extends AwtMouseInput {
 
     @Override
     public void setCursorVisible(boolean visible) {
-        // Do not call the inherited grab implementation: it warps every event.
+        // The inherited grab implementation would warp the cursor on every event.
         EventQueue.invokeLater(() -> {
             if (source == null || captured == !visible) {
                 return;
@@ -132,7 +132,7 @@ final class PreviewMouseInput extends AwtMouseInput {
             } else {
                 source.setCursor(previousCursor);
             }
-            // A queued Robot echo may still arrive after release; retain its filter.
+            // The last Robot warp can still produce an event after release.
         });
     }
 
@@ -141,7 +141,7 @@ final class PreviewMouseInput extends AwtMouseInput {
         if (sink == null) {
             return;
         }
-        // Bound each frame's batch so a busy event thread cannot starve rendering.
+        // Limit the number drained per frame so mouse traffic cannot starve rendering.
         int count = events.size();
         for (int i = 0; i < count; i++) {
             InputEvent event = events.poll();
@@ -186,9 +186,9 @@ final class PreviewMouseInput extends AwtMouseInput {
         if (warpPending) {
             int radius = Math.max(2, Math.min(source.getWidth(), source.getHeight()) / 4);
             if (Math.abs(nextX - centerX) < radius && Math.abs(nextY - centerY) < radius) {
-                // Accept both an exact Robot echo and a coalesced post-warp move.
-                // A coalesced Robot acknowledgement has no reliable physical delta.
-                // Rebase at the observed position instead of turning it into a jump.
+                // A Robot warp can return its own event or be merged with mouse movement.
+                // In the merged case there is no reliable movement delta.
+                // Use the observed cursor position as the new origin so the camera does not jump.
                 x = nextX;
                 y = nextY;
                 warpPending = false;

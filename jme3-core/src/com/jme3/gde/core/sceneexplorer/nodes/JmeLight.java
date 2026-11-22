@@ -116,7 +116,12 @@ public class JmeLight extends AbstractSceneExplorerNode {
         if (obj.getType() == Light.Type.Ambient || obj.getType() == Light.Type.Probe) {
             set.remove("Cast Shadow");
         }
-        //set.put(makeProperty(obj, ColorRGBA.class, "getColor", "setColor", "Color"));
+        set.remove("Intensity");
+        if (obj.getType() != Light.Type.Probe && obj.getType() != Light.Type.Sky) {
+            var intensity = makeProperty(obj, float.class, "getIntensity", "setIntensity", "Intensity");
+            intensity.setShortDescription("Scale the light without changing its color. 1 is the default. 0 emits no light.");
+            set.put(intensity);
+        }
         sheet.put(set);
         if (obj instanceof com.jme3.light.DirectionalLight || obj instanceof com.jme3.light.PointLight
                 || obj instanceof com.jme3.light.SpotLight) {

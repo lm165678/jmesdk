@@ -37,7 +37,7 @@ import com.jme3.gde.core.sceneexplorer.nodes.actions.AbstractToolWizardAction;
 import com.jme3.gde.core.sceneexplorer.nodes.actions.ToolAction;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
-import com.jme3.scene.VertexBuffer;
+import com.jme3.scene.control.LodControl;
 import java.awt.Component;
 import java.text.MessageFormat;
 import java.util.ArrayList;
@@ -61,18 +61,13 @@ public class GenerateLODTool extends AbstractToolWizardAction {
 
     @Override
     protected void doUndoTool(AbstractSceneExplorerNode rootNode, Object undoObject) {
-
-        Geometry geom = rootNode.getLookup().lookup(Geometry.class);
-        Mesh mesh = geom.getMesh();
-        if (mesh != null) {
-            VertexBuffer[] vbs = (VertexBuffer[]) undoObject;
-            if (vbs.length>0){
-                mesh.setLodLevels((VertexBuffer[]) undoObject);
-            }else{
-                mesh.setLodLevels(null);
-            }
+        Geometry geometry = rootNode.getLookup().lookup(Geometry.class);
+        Previous previous = (Previous) undoObject;
+        LodControl control = geometry.getControl(LodControl.class);
+        if (!previous.hadControl() && control != null) {
+            geometry.removeControl(control);
         }
-
+        geometry.setMesh(previous.mesh());
     }
 
     public Class<?> getNodeClass() {
@@ -111,39 +106,27 @@ public class GenerateLODTool extends AbstractToolWizardAction {
 
     @Override
     protected Object doApplyTool(AbstractSceneExplorerNode rootNode, Object settings) {
-        WizardDescriptor wiz = (WizardDescriptor) settings;
-
-        Geometry geom = rootNode.getLookup().lookup(Geometry.class);
-        Mesh mesh = geom.getMesh();
-        if (mesh != null) {
-            //save old lods
-            VertexBuffer[] lods = null;
-            if (geom.getMesh().getNumLodLevels() > 0) {
-                lods = new VertexBuffer[geom.getMesh().getNumLodLevels()];
-                for (int i = 0; i < lods.length; i++) {
-                    lods[i] = geom.getMesh().getLodLevel(i);
-                }
-            }
-
-            
-            if (wiz != null) {
-                float[] values = (float[]) wiz.getProperties().get("reductionValues");
-                if (values != null) {
-                    //generate lods
-                    LodGenerator generator = new LodGenerator(geom);
-                    LodGenerator.TriangleReductionMethod method = (LodGenerator.TriangleReductionMethod) wiz.getProperties().get("reductionMethod");
-                    generator.bakeLods(method, values);
-                }else{
-                    mesh.setLodLevels(null);                    
-                }
-            }
-
-            if(lods == null){
-                return new VertexBuffer[0];
-            }
-            return lods;
+        Geometry geometry = rootNode.getLookup().lookup(Geometry.class);
+        Mesh mesh = geometry.getMesh();
+        if (mesh == null || !(settings instanceof WizardDescriptor wizard)) {
+            return null;
         }
-        return null;
+        boolean hadControl = geometry.getControl(LodControl.class) != null;
+        Mesh copy = mesh.deepClone();
+        float[] values = (float[]) wizard.getProperty("reductionValues");
+        if (values != null) {
+            var method = (LodGenerator.TriangleReductionMethod) wizard.getProperty("reductionMethod");
+            new LodGenerator(copy).bakeLods(method, values);
+        } else {
+            copy.setLodLevels(null);
+        }
+        geometry.setMesh(copy);
+        if (copy.getNumLodLevels() > 1 && !hadControl) {
+            geometry.addControl(new LodControl());
+        }
+        return new Previous(mesh, hadControl);
+    }
 
-    }        
+    private record Previous(Mesh mesh, boolean hadControl) {
+    }
 }

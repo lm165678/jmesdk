@@ -60,6 +60,11 @@ public final class NewNavMeshWizardAction extends AbstractNewSpatialWizardAction
     }
 
     @Override
+    protected boolean usesSpawnPosition() {
+        return false;
+    }
+
+    @Override
     protected Spatial doCreateSpatial(com.jme3.scene.Node rootNode, Object configuration) {
         if (configuration == null) {
             return null;

@@ -1,3 +1,226 @@
+## 2026-11-22 Compact root-motion chooser and branch highlighting
+
+- Root Motion chooser uses a bounded prototype width and short leaf names, with complete track paths in the selected-field and dropdown-row hover tooltips. Long leaf names are truncated. Selecting a joint highlights that joint and all descendant joints/bones in yellow, with a larger cross at the selected root and dimmed unrelated skeleton. Node selections highlight descendant node markers/links and their skeletons. Selection is applied on the preview render thread and does not alter saved model materials or animation definitions.
+- While the dialog is open the overlay is temporarily visible; Apply, Disable, Cancel or window close restores the prior skeleton visibility. Preview replacement retains the temporary focus. This is skeleton/target highlighting, not recoloring skinned mesh vertices.
+- JDK25 targeted compilation, AnimationEditorSmoke (including long-path labels/full hints and existing save/reload tests), and native AWT/OpenGL AnimationPreviewSmoke passed. RTX5080 320x240 framebuffer verified yellow pixels, descendant selection and hidden-overlay restoration (ROOT_MOTION_BRANCH_HIGHLIGHT_PASS). Core candidate passed both Swing and native tests and was installed in build/cluster/modules with matching SHA-256; restart SDK. Backup and logs: build/root-motion-ui-check. Full interactive Paladin dialog/hover was not manually tested; no user asset writes or full SDK distribution build.
+- Paired bases remain SDK 7b4f4b1b / engine 44031b02e plus working trees. No engine code changes. Unrelated changes remain unstaged.
+
+## 待办：编辑器使用手册——动画行为状态树（2026-11-22）
+
+- [ ] 编写编辑器使用手册，将状态图、状态内 1D/2D 混合及 Java 参数驱动列为动画行为状态树章节。
+- [ ] 说明 States / 1D and 2D blend 的 Name 与 State Graph 节点同步改名，并更新连线引用和 Entry；不修改源 Clip 名称，单纯改名不会自动配置混合。
+- [ ] 使用单节点 MoveState 示例：设为 Entry，声明 Float 参数 Speed，配置 Idle=0、Walk=1、Run=3 的 1D 采样点。改变 Speed 在同一状态内混合相邻 Clip，无须 Idle/Walk/Run 状态间连线；解释端点、插值和超出范围时的行为。
+- [ ] 对比 1D 单参数与 2D 双参数（左右/前后）的混合，区别于 MoveState → Attack / Jump 等状态转场；参数变化只有满足已配置的转场条件才会切换状态。
+- [ ] 提供 Save J3O、加载模型、查找 Composer 所在节点、AnimationGraphPlayer.attach、setFloat/setBoolean/trigger 和 restart 的完整 Java 示例；解释参数名称/类型、Entry、默认值及游戏更新线程要求。
+- 用户要求记得提醒：以后继续动画编辑器、动画状态图或编辑器使用手册工作时，主动提醒补充此章节。这是会话交接提醒，不是定时通知；当前无可用自动提醒工具。本次仅登记手册计划，尚未编写完整手册。
+
+## 2026-11-22 Paladin 连续动画关联与转换时复用材质
+
+- 勾选 Show skeleton / targets 后，首次关联或 Apply preview 会在挂接预览模型后提前刷新子树，触发 `Illegal mat param update`，右下实时参数无法启用。骨骼叠加层现在只读世界变换，由预览根按父到子更新场景；应用失败时显示异常。打开已有 J3O 的旧预览取景改进继续使用。
+- Animation Links 可在动画图有未保存修改时继续添加剪辑或库。刷新 Composer 数量，保留草稿，并立刻单独预览新剪辑（优先有运动的剪辑）。需要预览现有图时点 Apply preview。移除链接仍要求先保存图，并在按钮操作时明确提示。剪辑选择框中单剪辑资源显示文件名（如 Idle），有多个剪辑时显示文件名和剪辑名，内部 ID 继续用于绑定与存档。
+- Convert to J3O 与外部拖入的每个转换对话框都可选项目内已有 J3O 作为材质来源，默认空白、继续导入源材质。按网格及材质名匹配，无法唯一匹配时报错；复制现有材质并沿用纹理键，跳过源模型 DDS 和 .j3m 的生成。拖入批处理逐文件询问，复用对象须已存在于项目。目标材质参数后续变化时重新转换可取得新副本。
+- SDK 576ecbe6 / engine db8ab1149 加当前工作树。RTX 5080 AWT/OpenGL 加断言使用实际 Paladin.j3o + Idle.j3o 验证骨骼叠加层开启时立即重建预览，切换 Test 后 Idle 骨骼旋转改变。Swing 保存/重载、草稿保留、按钮启用及剪辑标签通过。使用本地 SDK 当前 ufbx 二进制验证 Idle.fbx、Walk.fbx 复用 Paladin 的 DDS，重载和依次关联两个动作通过，未修改 TestGame 文件。实验用新 ufbx 与现有旧产物混用仍可能遇到严格绑定姿势校验，此次本地 SDK 候选模块不变更 JNI 二进制。
+- 候选模块 `build/skin-preview-check/core-animation-material-candidate.jar` 已验证。尝试更新本地启动模块时 Windows 报 JAR 正由其他进程使用，等待退出 SDK 后更新。
+
+## 2026-11-22 Paladin Idle FBX / J3O 预览取景
+
+- 实测 TestGame 的 `Models/Paladin/Idle.fbx` 与现有 `Idle.j3o` 都包含 `mixamo.com` 剪辑（约 1.95 秒，358 条轨道）。旧 ufbx 导入的静态包围盒高度约 172.5，蒙皮后约 1.7 米，动画编辑器和资产浏览器按静态范围取景会让角色看不清。
+- 两个预览均以首帧蒙皮后的模型范围取景，在预览副本的蒙皮分支上跳过过时的包围盒剔除。新 ufbx 导入将网格顶点与骨架统一转换到米。已有 J3O 可直接预览，之前生成并保存的碰撞体尺寸需要单独重建或重新导出。用户的 FBX、J3O 和纹理未写入。
+- SDK 576ecbe6 / engine db8ab1149 加当前工作树。JDK 25 定向编译及 Windows x64 ufbx JNI 构建通过。RTX 5080 AWT/OpenGL 开启断言验证两个实际文件的动画编辑器取景与资产浏览器播放，像素回读确认显示与动作变化。原始 FBX 还经过纹理处理和 J3O 保存重载，生成两个 DDS，新 J3O 也通过取景和播放检查。未覆盖完整 SceneComposer，临时 DLL 与测试类均在 `build` 下，未替换启动模块或重打 SDK，其他平台 JNI 待重新构建。
+
+## 2026-11-22 默认 HDR 与场景保存
+
+- 用户确认内嵌 3DViewer HDR 效果正常。没有 WorldSettings 的场景默认 HDR (scRGB)；已有场景恢复原有选择。保存和关闭时保存都会写入游戏输出，即使没有手动操作下拉框。显式选择跟随应用也保存控制器，避免下次打开被当成新场景。
+- 引擎新 WorldSettings 默认 Hdr；旧文件缺字段仍跟随应用。SimpleApplication 加载并挂载 J3O 后自动配置，不支持 HDR 时回退 SDR。配对基线 engine db8ab1149 / SDK 576ecbe6 加当前工作树。
+- 本次只检查源码和改动文件的 diff 格式，遵照用户要求未编译引擎或 SDK，未运行新默认值的运行时验证。引擎和 SDK 其他工作树文件已有空白检查问题，未改动。
+## 2026-11-22 StateName 与混合播放时长
+
+- 状态名称列改为 StateName 文本输入，禁止空白和重复名称。改名只更新状态名、入口和转换引用，不替换 Clips；支持撤销。Blend parameter 和 Clips 的选择方式保持不变。Core 模块 jar 构建成功，本地启动模块已更新，AnimationEditorSmoke 通过。
+- 引擎修复最长片段拖慢整个混合的问题：按当前权重计算周期，积累归一化相位，根运动使用同一相位。动画图单测、ROOT_MOTION_J3O_PASS、AWT/OpenGL AnimationPreviewSmoke 通过。新引擎仅编译及测试，需运行 build-local-engine-sdk.bat 更新正式导出和 SDK 引擎库；配对基线 engine db8ab1149 / SDK 576ecbe6 加工作树。
+
+## 2026-11-22 纹理窗口导航
+
+- 压缩纹理窗口和普通纹理编辑器默认 Fit，提供 Fit 按钮；窗口尺寸变化时保持完整显示，手动缩放退出 Fit。滚轮缩放，中键/右键拖动滚动视图；压缩窗口及普通编辑器未启用工具时也可左键拖动。超出视口的图像通过平移查看，视图边界仍受滚动范围约束。
+- 普通编辑器裁剪只响应左键，取色为左键前景色、Shift+左键背景色；右键专用于导航。缩放/平移不修改图像内容。
+- JDK 25 两个模块 jar 构建成功，已更新 build/cluster/modules 的 texturetools 和 textureeditor JAR。texturetools 完整 netbeans 目标的 release 复制被运行中的 JNI DLL 文件锁阻止，随后只用 jar 目标更新 Java 模块，未强制关闭 SDK 或替换 DLL。
+- TextureNavigationSmoke 使用实际模块 JAR 在 Swing EDT 验证默认 Fit、滚轮缩放、右键平移、恢复 Fit 及裁剪模式右键不触发裁剪，TEXTURE_NAVIGATION_PASS。未在完整 SDK 中目视验证，重启后加载新模块。配套基线 SDK 576ecbe6 / engine db8ab1149 加当前工作树。
+
+## 2026-11-22 动画图相向端口确认与本地模块更新
+
+- 用户确认：允许 Walk 左侧拖到 Idle 右侧，禁止 Walk 右侧绕回 Idle 左侧。横向分开的节点只接受相向端口；返回线不再要求先有正向过渡。已有返回过渡也在节点之间绘制，节点上下交错时保留中间空隙的绕线。过渡 From/To、条件及资源保存格式未更改。
+- JDK 25 Swing 回归覆盖外侧连接拒绝、返回优先创建、删除正向边后的返回路由、撤销/重做及保存重载，通过 ANIMATION_EDITOR_SWING_SAVE_RUNTIME_PASS。仅用当前 SDK runtime JAR 依赖定向编译动画编辑器成功，更新 Core JAR 中该编辑器类及中英文提示，并将生成的 JAR 放在测试 classpath 首位重跑通过。
+- 已更新 run-sdk.bat 使用的 build/cluster/modules/com-jme3-gde-core.jar，备份位于 build/warrior-graph-check/core-before-facing-ports.jar；安装文件与测试 JAR SHA-256 一致。运行中的 SDK 需要重启。未构建完整 SDK，也未重建其他 HDR 开发中的代码；未手动操作完整编辑器。兼容基线仍为 SDK 576ecbe6 / engine db8ab1149 加当前工作树。
+
+## 2026-11-22 动画图反向连线与 Minotaur Idle 剪辑
+
+- 相对两侧的蓝点支持双向开始拖动，过渡方向跟随拖动起点，禁止同侧连线。已有正向边时，返回过渡在相向端口之间走下方弧线；节点移位使端口无法相向时仍可按普通路线绕行。扩大鼠标吸附范围。单剪辑状态从 Name 下拉框选择剪辑名时同步 Clips，撤销同时恢复剪辑和引用。混合状态仍单独配置样本。
+- TestGame 的 Minotaur J3O 中 Warrior_Idle 原先绑定 Warrior_Walk。已备份原文件并只修复这一条绑定。原文件重载后的 WARRIOR_BOOL_AND_POSE_PASS 覆盖 ToWalk 的 false → true → false 三段、过渡完成和实际骨骼旋转。Swing AnimationEditorSmoke 通过。已尝试重建本地 Core 模块，当前引擎导出缺少另一项开发中的 WindowsHdrAwtPanel，旧的运行模块尚未更新。
+
+## 2026-11-22 Paladin FBX 硬件蒙皮预览
+
+- 根因是首次预览内存中的 ufbx 网格时，Mesh.prepareForAnim(false) 假设 J3O 加载时创建的 GPU 骨骼缓冲已存在。引擎现在从有效的 CPU 骨骼索引和权重按需构建硬件缓冲。FrameGraph 的 SceneQueue 只是异常传播位置。
+- RTX 5080 的 AWT/OpenGL 动画预览中，用 TestGame 的 Paladin 原始 FBX 及经 SDK DDS 流程保存重载的临时 J3O，验证四个 SkinningControl 都能启用硬件蒙皮。未打开完整 TestScene2，未改动用户资源或重建最终 SDK。配套引擎基线 db8ab1149、SDK 基线 576ecbe6。
+
+## 2026-11-22 3DViewer 原生 HDR 预览
+
+- Windows 上用默认 AWT 3DViewer，选择 Post processing → Game display output → HDR (scRGB) 会即时请求内嵌原生 HDR，同时保留这个场景的游戏输出配置。选择 SDR 或跟随应用设置恢复 SDR 预览。内嵌 HDR 直接呈现共享的 FP16 纹理，Windows HDR 或 GPU 互操作不可用时走现有 AWT 路径。可选的 LWJGL Canvas 路径继续用 SDR。
+- 配套 SDK 576ecbe6 / 引擎 db8ab1149 的当前工作树。独立探针在 RTX 5080 和 125% Windows 缩放下验证 HDR 子窗口可见，系统命中仍落在原 AWT Canvas。遵照用户要求，本轮未构建 SDK 或引擎；集成后的真实鼠标操作、拖靠和 TestScene2 目视效果待确认。
+
+## 2026-11-22 场景游戏输出与 Film LUT 开关
+
+- SceneComposer → Post processing → Game display output 提供跟随应用启动设置、SDR 和 HDR (scRGB) 三项。保存到场景根的 WorldSettings，旧 J3O 默认跟随应用。修改游戏输出不会重建或覆盖场景的 FPP 序列化数据。配套 SimpleApplication 在挂载场景后自动应用，移除后恢复启动设置。内嵌预览行为见后续「3DViewer 原生 HDR 预览」条目。
+- 修复 Film / combined LUT 开关自身被 Film 参数依赖禁用的问题。选中后可编辑 Film 参数，关闭后可以再次启用。
+- SDK 576ecbe6 / 引擎 db8ab1149 加当前工作树配套，定向编译通过；POST_AA_SETTINGS_PASS、POST_DISPLAY_SETTINGS_PASS 验证 Swing EDT 下选择状态、三个输出选项和 Film LUT 的 J3O 往返及原有 FPP 数据保留。RTX 5080 独立游戏窗口通过 WORLD_DISPLAY_OUTPUT_J3O_OK，Film LUT 的原生 OpenGL 回归通过 HISTOGRAM_FILM_POST_GPU_PASS。
+- 本地引擎导出成功，SDK 打包通过本地引擎配套检查后按用户要求停止。最终 SDK 打包由用户执行。
+
+## 2026-11-22 新增灯光的视口选中
+
+- 修复点光和聚光灯用 W 拖动后回弹。平移回调发生在节点应用新位置之前，因此用目标局部坐标经父节点转换后写入灯光的世界位置。已重建本地启动用的 Scene Composer 模块。开启 `-ea` 的 AWT/OpenGL 测试在旧模块复现点光回弹，新模块的 GIZMO_LIGHT_DRAG_PASS 覆盖两种灯光的拖动、释放、撤销和重做。未打包完整 SDK。
+- Scene Explorer 新选中的灯光会在渲染线程取得或创建可编辑对象，初始化位置和方向后显示当前变换手柄。拖放与右键添加使用同一条选中链路。后续选中会使旧的异步回调失效。环境光没有空间手柄。
+- SDK 576ecbe6 和引擎 db8ab1149 当前工作树的 JDK 25 定向编译和 RTX 5080 AWT/OpenGL 4.3 测试通过。GIZMO_ADDED_LIGHT_SELECTION_PASS 走新增灯光的 Explorer 选择入口，验证视口没有焦点时方向光、点光和聚光灯显示手柄，点光和聚光灯使用落点。测试未模拟系统级拖放，未打包 SDK。
+- 修复 SDK 启动默认开启断言时的 `Illegal light list update`。灯光手柄创建时只初始化逻辑状态，几何状态由场景根按父到子更新。使用同一个 AWT/OpenGL 测试并开启 `-ea`，旧代码复现方向光断言，修复后 GIZMO_DIRTY_PARENT_LIGHT_PASS、GIZMO_ADDED_LIGHT_SELECTION_PASS 和 TRANSFORM_GIZMO_PASS 均通过。未重新打包 SDK。
+- 重建了 `run-sdk.bat` 使用的 `build/cluster/modules/com-jme3-gde-scenecomposer.jar`。旧 JAR 的第 661 行仍包含直接更新子节点的调用，可触发灯光列表和材质参数两条断言。已检查新 JAR 字节码，并用该 JAR 开启 `-ea` 重跑 AWT/OpenGL 手柄测试。Q 选择模式恢复三轴箭尖，仍只用于选择，W/E/R 继续负责变换。旧 SDK 进程需要重启才能加载新模块。
+
+## 2026-11-22 动画连线与视口手柄
+
+- 动画状态图从右侧出口拖到左侧入口创建过渡。挪动节点会重算连线，纵向错开的节点优先走中间空隙；双向过渡各自保留源和目标端口。图的运行时数据和保存格式沿用现有实现。
+- 平移和缩放轴杆使用实体网格，旋转环和端部手柄加粗。命中测试优先使用鼠标下的网格，再在周围 4 个视口像素内查找当前工具可操作的手柄。
+- Directional 和 Spot 的箭尖用沿局部 +Y 定向的锥体，跟随灯光方向并避开不同引擎包中 Cylinder 半径顺序差异。箭身总长 108 逻辑像素。
+- 基于 SDK 576ecbe6 和引擎 db8ab1149 的当前工作树，JDK 25 定向编译通过。AnimationEditorSmoke 验证双向过渡的端口、禁止同侧端口及上下错位的绕线。RTX 5080 OpenGL 4.3 AWT 测试验证 W/E/R 的近边缘命中、灯光箭尖方向及尺寸。未重打包 SDK。
+
+## 2026-11-22 动画 2D 混合和骨骼遮罩覆盖
+
+- States / 1D and 2D blend：给同一状态选择两个 Float 作为 X/Y，双击剪辑或阈值编辑每个样本的 X,Y 坐标。第一版采用 Cartesian 权重，坐标唯一，支持 2–64 个样本。清空 Y 恢复 1D，并按当前样本顺序重建递增阈值。
+- Masked Override：选 Boolean 开关、循环骨骼剪辑、淡入淡出秒数和骨骼树的一个或多个分支。在移动图保留全身跑步，从胸椎选择子树覆盖持枪姿势；不选根、骨盆或腿即可保留下肢。Apply preview 后开启骨骼显示可看到绿色覆盖分支，并在 Live parameters 操作两个 Float 和 Boolean。保存写入 J3O，支持撤销。第一版是一个覆盖层，无叠加和独立层状态机；根运动仍在待办。
+- Windows JDK 25 定向 SDK 编译、AnimationEditorSmoke 和 RTX 5080 AWT/OpenGL AnimationPreviewSmoke 回归通过。MASKED_2D_BLEND_PASS 验证真实 J3O 保存重载、双参数权重、淡入淡出、腿部姿势独立、重置和旧 1D 定义兼容。配对基线 SDK 576ecbe6、engine db8ab1149 加本次工作树。未手动操作新增对话框，未重打包整个 SDK。
+
+## 2026-11-22 Automatic LOD and DDS repair
+
+- Convert to J3O exposes Desktop/Mobile start LOD, defaulting to 0. Each geometry with usable generated LODs gets an engine LodControl. Model Detail and the legacy LOD action also attach a control on bake and include it in undo with the mesh. Compatible engine base db8ab1149 and SDK base 576ecbe6, with the paired working-tree changes.
+- Ordinary J3O save and opening in the SDK fill in missing PNG/JPEG DDS sidecars with the bundled Java BC3 encoder. Existing DDS files survive unchanged. Output is relative to the source, e.g. `Textures/Wall/brick.png` -> `Textures/Wall/dds/brick.png.dds`. Multiple models or materials share it. SDK preview uses the source if generation fails. A legacy direct DDS key can be repaired at the old output path if the registry and source survive.
+- SDK moves update logical texture keys and reuse existing generated bytes. Legacy registered outputs may keep their original path for direct J3O references. J3O copies in the same asset root share textures. Generated DDS directories cannot be copied, renamed or deleted separately. Single DDS deletion keeps the mapping for repair. Moves done outside SDK file operations do not update the registry.
+- Targeted JDK 25 compilation and MODEL_LOD_AND_DDS_PASS cover per-geometry LOD with shared meshes, external J3M save, DDS reuse and deletion followed by J3O reopen, same names in different folders, source moves and reload after copying the J3O. GeneratedTexturesSmoke also passed through NetBeans FileObject operations, including single-file deletion and generated path protection. The full SDK package and visible editor workflow were not run.
+
+## 2026-11-22 Scene, assets and animation editor
+
+- States / 1D blend uses dropdowns for state names and Float/Boolean parameters. Clips or Thresholds opens the ordered sample editor with one clip dropdown and one numeric threshold per Float sample. Boolean and empty parameters use one clip at threshold zero. Renaming keeps the entry and transition references and is a single undo step. The JDK 25 AnimationEditorSmoke passed, including dropdown selection, threshold validation and undo. Full SDK packaging was not run for this edit.
+
+- Scene Composer keeps transform handles at the viewport scale on Q/W/E/R, even with a stationary pointer. W uses the projected local/world axis. Drag vertically to change depth when an axis points almost directly at the camera. A blank click clears selection on release. Model removal clears the wireframe, handle and active drag. Other selected models stay selected.
+- Selection, snapping & cursor has a default-on Selection highlight. The tools viewport uses scene depth and draws a 1.5 logical pixel orange outline from the selection mask. The model surface is unchanged. Light and audio viewport markers use Feather SVGs at 36 pixels. Directional and spot arrows are 86 pixels long with a solid shaft. Spot angles are displayed in degrees and stored in radians. The paired engine adds a separate Light Intensity property, default 1.
+- Physics & effects can play, pause/resume, or Reset physics. The preview snapshots physics-controlled poses and Bullet values. Scene saves and Save on Close reset the preview before writing. Conversion to J3O has an off-by-default Separate collision bodies option for static triangle geometries, using the selected Mesh/Box/Sphere shape. Existing controls, skinned character collision and terrain handling are preserved.
+- Asset Browser raster previews decode through the image editor without a project asset manager. Double-click opens the image window. Properties shows the file or folder path, name and disk size with KB/MB/GB. The dialog shows a preview memory estimate when available. A failure to read or write the thumbnail cache leaves the decoded image usable.
+- Opening the Animation Editor, Apply preview and Reset initialize live Boolean controls to false. The authored defaults in Parameters and J3O remain available for runtime. Transitions use the source right port and destination left port at every layout position, including return links.
+- Compatibility bases SDK 576ecbe6 and engine db8ab1149, plus the current working-tree changes. JDK 25 targeted compilation, native Minie/J3O round trip, Sponza JPEG thumbnail/folder size, RTX 5080 OpenGL 4.3/AWT readback and the Swing animation graph/save smoke all passed. The full Gradle SDK build is blocked by daemon loopback access in this session.
+
+## 2026-11-22 动画根运动
+
+- 动画编辑器 Root Motion 选择基础动画中的根骨骼或节点，启用自动移动或仅提取。Apply preview 后勾选 Preview root movement 可对比实际移动和原地姿势。Save J3O 保存；关闭根运动再保存恢复普通播放。预览只操作副本，Reset 会重装预览姿势。
+- 勾选自动移动后，加载 J3O 并加入正常更新的场景即可，无需手动 attach。首次逻辑更新会启动已配置的动画图并应用 XZ 位移和 Y 轴转向。仅提取模式保留角色控制器的移动决定权，Java 通过 AnimationGraphPlayer.setRootMotionConsumer 接收局部增量。垂直动作保留在姿势中，物理墙体碰撞仍待项目级验证。
+- ROOT_MOTION_J3O_PASS 已验证合成的移动和转向剪辑、1D/2D、过渡、循环、暂停/重置/时间跳转、带旋转缩放的骨架父节点、外部关联和内嵌 J3O 重载。Windows 定向编译、Swing 动画编辑器及 AWT/OpenGL 预览回归通过。配对基线 SDK 576ecbe6 和 engine db8ab1149 加工作树。未手动操作新增对话框，未运行完整 SDK 打包。
+
+## 2026-11-22 Animation editor linked clips and embedded export
+
+- Open in Animation Editor accepts a rigged J3O with zero clips. It uses the selected node as composer owner when a rigged subtree has no composer with clips; existing double-click defaults are retained. Animation Links adds a single external clip or a whole library, removes/reloads links and can preview a source clip on a different compatible J3O. Link changes validate and save as an asset operation; save other graph edits first. Saved graphs must remain valid when removing links. Deleting the last saved state can clear the graph so an obsolete reference can be removed. Ordinary saves keep external clip references.
+- Export Embedded J3O creates a new file and preserves the source model. Uses AnimationLinkResolver.embed on an isolated copy, with no requirement that the composer and skinning control occupy the same node. No dependency on external animation J3Os remains in the export. Materials may still reference external DDS or other assets. The legacy Merge Animations action was not changed.
+- JDK 25 targeted compilation against the companion engine, plus AnimationLinksSmoke verified disk J3O references, cycle recovery, multi-level deduplication, updated source clips, separate instance poses and independent ufbx animation files associated with a same-rig model. Windows test uses tools/tests/AnimationLinksSmoke.java and the upstream Maya fixtures from the local ufbx checkout. Source bases SDK 576ecbe6 + working-tree changes and engine db8ab1149 + this feature. Full SDK rebuild and deployment pending.
+- On Windows, both ufbx fixture clips changed the exported actor's skin matrices after reloading from an asset directory containing only the actor J3O. AnimationEditorSmoke (headless Swing/save) and AnimationPreviewSmoke (RTX 5080 OpenGL 4.3/AWT) passed, including mounting an inactive model before installing a playback graph. The new link dialogs were not exercised interactively.
+
+## 2026-11-22 Asset Browser previews
+
+- The Preview pane has an independent model viewport. Drag to orbit, scroll to zoom, or use Fit. Models with animation clips have a clip selector and Play/Pause. The preview keeps animation and deformation controls but removes other controls from its own model. Closing the pane or changing assets stops playback and releases the viewport.
+- Textures support zoom, pan and Fit with dimensions and zoom shown beside the file size. DDS/ASTC thumbnails use the compressed texture decoder. HDR goes through the texture editor's display conversion. Existing texture error cards use the old cache revision and are regenerated. The audio pane shows the waveform, duration and Play/Stop for WAV/OGG. Other audio formats need a registered project loader.
+- The pane and status bar show file size and a preview memory estimate in KB/MB/GB. The estimate counts decoded texture or PCM data, or distinct model vertex/texture buffers. It does not measure GPU residency or complete object overhead. The bottom right also shows the current and maximum JVM heap.
+- JDK 25 targeted compile and `tools/tests/AssetInspectorSmoke.java` passed against SDK 576ecbe6 and the exported engine db8ab11. The smoke decoded the three TestGame room DDS files and Path.hdr into thumbnails, checked Swing zoom and WAV controls, and used RTX 5080/OpenGL 4.3 offscreen to check orbit, zoom, animation, pause and viewport cleanup. Full SDK build, visible editor interaction and audio output were not verified.
+
+## 2026-11-21 Optional SDR output dithering
+
+- AppSettings.SrgbOutputDithering defaults Off. LWJGL3 shader sRGB blit and SDK 3DViewer can opt in to a fixed 4x4 ordered pattern after sRGB encoding, within one 8-bit output code. Alpha and the linear image are unaffected. Separate scene preview option is off by default and applies live when shader output is enabled.
+- Targeted Java 11 engine and Java 25 SDK compilation passed. RTX5080 native SRGB_PRESENTATION_GPU_PASS covered unchanged RGB/alpha in the presentation path, a quarter-code near-black input becoming a subpixel pattern when enabled, and a return to uniform black when disabled. This verifies output quantization only. Visible TestScene2 HDR comparison and SDK deployment remain pending.
+
+## 2026-11-21 ufbx JNI FBX → J3O
+
+- SDK 的 Autodesk 模块通过 AssetManagerConfigurator 注册 ufbx 作为默认 FBX 加载器。现有 Convert to J3O、模型预览和 SDK 项目中通过 AssetManager 加载 FBX 共用该加载器。ufbx 0.23.1 原生代码解析 ASCII/二进制 FBX，Java 直接创建 JME 模型，无 glTF/GLB 中间文件。模型、骨骼和动画以普通 JME 对象保存，游戏运行时不依赖 ufbx。
+- 使用 `tools/build-ufbx-jni.ps1 -UfbxSource <本地 ufbx 源码目录>`，可传 `-CMake <cmake.exe>`。本地 Windows x64 构建把 DLL 和许可证放进 Autodesk 模块的 release 目录。CI 固定 ufbx v0.23.1 源码提交，预编译 Windows/Linux/macOS 的 x64、ARM64 库，SDK 构建从同次运行的产物汇集至 lib/ufbx/<平台>-<架构> 并由 NetBeans 模块打包。正式 CI 检查六个平台的库和许可证；用户运行时无需下载或编译。`-J-Djme.sdk.fbx.backend=legacy` 加重启恢复旧导入器，`-J-Djme.sdk.fbx.library=<绝对路径>` 用于本地测试。缺库时报告安装提示。
+- 保留节点层级、几何枢轴、三角化、法线、UV0、材质槽、基础 PBR 贴图、线性蒙皮及节点/骨骼 TRS 动画。按动画堆栈生成 AnimClip，以 60 Hz 采样并保留末帧，蒙皮保留归一化的四个最大权重。Blend Shape、复杂材质网络、附加 UV、非线性/多重蒙皮及独立动画文件重定向尚未实现。尚未用生产资产对照枢轴、复杂蒙皮或渲染结果。
+- FBX 内嵌图片提取至模型名.textures，DDS 生于相邻 dds 目录。项目内外置 PNG/JPEG 在原图同级 dds 目录生成。优先用 Texture Tools 的 BC3 与完整 mip，自动模式在没有平台编码器时复用 SDK 自带 Java Squish 写 BC3。J3O 材质保存直接 DDS 资产路径。已有 glTF/GLB 逻辑 PNG 键与 DDS 映射保留。编解码失败在打开 J3O 目标前终止。
+- 验证：Windows x64 CMake/MSVC JNI 构建通过，JDK 25 定向编译通过，Autodesk NetBeans 模块在独立 cluster 构建并打包 DLL、许可证和服务注册。UfbxConversionSmoke 验证静态 12 三角面模型、ASCII 刚性动画、二进制蒙皮动画重载后骨骼矩阵变化、外置与内嵌纹理生成 DDS 后仅复制 J3O 和 DDS 即可由独立 DesktopAssetManager 加载，以及 7×5 图片通过 Java Squish 生成三层 mip 的 BC3 DDS。其余目标的 CI 构建、完整 SDK 构建及可视验证待执行。兼容基线 SDK 576ecbe6 + 本次工作树，Engine db8ab1149，无引擎 Java/C 源代码改动。
+- 本机 Gradle 验证受守护进程回环连接限制，未验证完整 CI 汇集流程。持续规则已写入 SDK/引擎 AGENTS.md：新增 JNI 按 Bullet 方式提前构建并随 SDK 打包，发布时检查目标齐全。
+- 回归检查发现现有真实 GLB 样本在纹理准备前已丢失内嵌图片的 TextureKey。已用改动前的 SDK/引擎 JAR 复现同样失败。模拟内嵌图片及逻辑键/DDS 映射用例通过。此已知问题与本次 ufbx 路径独立，真实 GLB 的自动提取仍需修复。
+
+## 2026-11-21 Unity 导入插件分阶段计划（部分待实施）
+
+目标：从 Unity 资产包或项目资源导入可重载的 J3O。FBX 产出模型 J3O，Prefab 产出独立、可复用的预制体 J3O，场景 J3O 保存预制体资源引用及实例覆盖，支持范围内的 C# 行为在导入时生成 Java Control。现有导入器已能恢复标准资源包及导入部分文本场景和预制体，当前输出是快照，详见后续历史条目。本计划尚无实现、配对版本或验证结果。
+
+### 1. 先验证 FBX → J3O
+
+- [ ] 用带层级与枢轴的静态 FBX、带纹理与多个材质槽的 FBX、带蒙皮和动画的 FBX 建立基准。记录源模型的尺寸、轴向、节点、材质槽、骨骼与动画，便于对照。
+- [x] SDK 模型转换采用 ufbx JNI 直接导入 JME 模型，保存 J3O 和外置 DDS。见上方实现与样本验证。独立分离式 glTF 输出和 Blender 生产资产对照仍待验证。
+- [ ] 核对单位和轴向、父子变换、枢轴、材质槽、UV、法线、贴图、骨骼绑定与动画。明确坐标转换由哪一层负责，避免 FBX 转换与 Unity 场景组装重复翻轴。基础模型通路完成后再关联 Unity .meta/.mat，按材质类型映射 PBRLighting、Lighting 或 Unshaded，记录还未支持的着色器与贴图通道。
+- [ ] 验收：三类样本均可重复转换，重载的 J3O 仍能正常预览和播放动画。失败必须报告出错文件与阶段，且保留已有可用输出。以样本结果决定桥接是否作为默认路径。
+
+#### 模型转 J3O 共用的外置 DDS 流程
+
+- [ ] 新的 FBX 桥接输出分离式 glTF，图片放在外部文件中。供其他工具使用的标准 glTF 继续引用 PNG/JPEG 等标准支持的格式，DDS 由最终 J3O 的材质通过项目资产路径引用。
+- [ ] SDK 的模型转 J3O 入口和 Unity 导入路径共用纹理处理。读取普通外置图片，以及已有 .gltf/.glb 的 data URI 或 bufferView 内嵌图片。在保存目标 J3O 前，复用 SDK Texture Tools 的 DDS 编码能力生成或复用外部 .dds，把材质里的纹理替换成可重载的 TextureKey。使用次级 UV、贴图变换、不同 sampler 的情况保留原来的采样语义，纹理文件共享不应合并各材质的采样设置。
+- [ ] 按用途处理色彩空间与 mipmap，保留透明度。底色和自发光按 sRGB，法线和金属度/粗糙度/遮蔽等数据贴图按线性。纹理去重包含像素内容和影响编码的用途与设置，避免同名资源冲突，也避免把同一图片的 sRGB 和线性用法合并。确认所选 DDS 压缩格式可由目标 JME 渲染后端读取。
+- [ ] 编码与 J3O 保存使用暂存输出。编码、重绑或写入失败时报告模型、纹理与失败阶段，并保留已有可用输出，避免静默生成缺贴图的 J3O。
+- [ ] 验收：分离式 glTF、内嵌图片的 .gltf、内嵌图片的 .glb 三类输入都产出外置 DDS 和 J3O。用只包含结果 J3O 与 DDS 的资产目录及新的 AssetManager 重载，核对材质槽、颜色、透明度和法线。再核对材质通过 DDS 资产键取图，J3O 不包含内嵌纹理数据。以内嵌贴图和外置贴图混用、共享图片但采样参数不同的模型验证引用与去重。
+
+### 2. 验证 Prefab → 独立 J3O → 场景复用
+
+- [ ] 第一份样本选文本 Prefab，例如引用阶段 1 门板模型的 Door.prefab。按 GUID 定位资源，在资源内部按 fileID 定位节点和组件，生成一个 Door.j3o。资源索引保留 Unity ID 到 JME 对象 ID 的映射，供实例覆盖与重导使用。
+- [ ] 场景 J3O 中建立两个独立实例，分别记录自己引用的 Door.j3o 资源键、Transform 和覆盖值。评估以 AssetLinkNode 为底层，增加实例数据与覆盖恢复。先加载预制体并建立实例内 ID 表，再应用覆盖并修复引用。外部资源故障应报告来源和目标。
+- [ ] 验收：保存并重新加载场景后，两扇门仍指向同一份资源，场景没有把完整预制体分别内嵌两次。移动或替换其中一扇门的材质不会影响另一扇。更新预制体并重新加载后，两个实例获得新的资源内容，各自的覆盖仍生效。Prefab 实例是场景对象，GPU Instancing 是可独立启用的渲染优化。
+- [ ] 扩展到嵌套 Prefab、变体、stripped 对象、跨实例引用和重导时的稳定 ID。二进制 Prefab 单独验证，使用已有 Unity 5.1.1f1 样本评估解析或重序列化路径。FBX 桥接和 YAML→JSON 都不能替代二进制资源解析。
+
+### 3. 验证 MonoBehaviour → Java Control → J3O 运行
+
+- [ ] 保持 Control 接口和 AbstractControl 的 API 与序列化契约。新增继承自 AbstractControl 的 UnityBehaviourControl，作为生成脚本的父类。配套场景调度器负责激活与生命周期；保留旧 J3O 的加载回归。
+- [ ] 定义 Awake、OnEnable、Start、Update、LateUpdate、FixedUpdate、OnDisable、OnDestroy 对应的 Java 回调。先恢复字段和引用，再进入运行生命周期；分别处理组件 enabled、对象自身 activeSelf 和父级决定的有效激活状态。统一执行晚更新，固定步回调接入物理步，区分临时移出场景与销毁。加载、克隆及默认 SDK 编辑预览不执行脚本。
+- [ ] 先用一份 DoorControl 验证数据和调度契约。两个 Door.j3o 实例分别引用各自的门板，配置不同打开速度，单独触发和销毁。保存重载保留配置与引用，每次实例化重新开始运行生命周期。
+- [ ] 实现导入时代码生成。通过 m_Script GUID 和 .cs.meta 找到 C# 源码，用语法树与类型分析生成 Java。每种脚本类型只生成一个继承 UnityBehaviourControl 的 .java；J3O 为每个组件实例保存自己的字段与对象引用。生成文件放进明确的源目录，记录生成来源，重导不覆盖手写扩展。生成类随游戏编译和发布。
+- [ ] 首批支持字段、基础控制流、Transform、Time、组件查询和简单交互；为每条 Unity API 映射验证坐标、数值及事件语义。没有源码或遇到不支持的语法/API 时保留组件字段与引用，列出无法转换的位置，并允许 SDK 在没有生成类时查看资源。待验证后再扩大到输入、碰撞、动画和协程。
+- [ ] 验收：导入样本 .cs 自动产生可编译的 Java 源码。编译后打开包含两份 Door 引用的场景 J3O，分别触发、停用与销毁，核对字段覆盖、引用归属和回调顺序，并验证旧 J3O 和默认编辑预览。
+
+## 2026-11-21 In-process texture codecs
+
+- The Texture Tools module loads an installed JNI library for BC1–BC5, BC7 and ASTC. Java handles image input, mipmaps and DDS/ASTC/KTX1 containers. Encode, preview and mip replacement use no encoder subprocess in this mode. The native timeout is checked when control returns, not enforced by killing a child process.
+- The Windows x64 build links Compressonator 4.6.0 and astcenc 5.7.1 and has no runtime source download or extraction. The build script caches and verifies source archives, compiles the library and stages the platform ZIP, including upstream notices. Gradle can collect matching platform ZIPs from an artifact directory; generated binaries remain outside source control. Use `-J-Djme.sdk.texture.backend=jni` to fail if the library is absent. The default uses CLI only on a host without a JNI build, or when selected explicitly.
+- Windows x64 compilation passed with VS 2022/MSVC 14.44 and CMake/Ninja. Gradle's offline `prepareTextureTools` imported the platform ZIP. The JDK 25 smoke passed with only the JNI DLL available, and again using the isolated Ant-built module and cluster. It covered all six BC formats and ASTC, mip previews/replacement, sRGB metadata, odd dimensions, channel order, timeout output retention and strict missing-library behavior. Linux/macOS/ARM builds, the full SDK installer and visible editor UI were not tested. Source bases SDK 576ecbe6 and engine db8ab1149; this change adds no engine dependency.
+
+## 2026-11-21 Select newly added scene objects
+
+- Successful scene creation or insertion selects the new object in Scene Explorer and publishes the selection to Scene Composer. This covers right-click creation, the Spawn palette, model drops/imports and Scene Explorer drops. Undo/redo keep their existing refresh path. Selection uses object identity after the parent refreshes on the EDT and ignores parents outside the active scene.
+- Targeted JDK 25 compilation and an isolated Swing/NetBeans smoke check passed. The check covered a new object with a duplicate name under a nested parent, a new light, and a delayed selection from a replaced scene. Full SDK build/deployment and visible native drag-and-drop verification remain pending.
+
+## 2026-11-21 Game native cache repair helper
+
+- repair-native-cache.bat preserves an existing ordinary C:\JmeNativeCache directory as a dated backup, then calls setup-native-cache.bat to create the private replacement. Run elevated as the game user; the game itself can run normally with its existing VM option. Check mode is read-only.
+- Check mode confirmed the current directory still inherits permissions, and invalid arguments were rejected. The elevated repair was not run. The game JVM failed cache validation; the SDK launch method alone does not establish the cause.
+
+## 2026-11-21 Start and editor collision transforms
+
+- Spawn / Spatial and Scene Explorer / Add Spatial expose Start. Priority ID persists in J3O. The tool-only gizmo uses a position cube, cyan forward +Z and green up +Y arrows at screen-relative size. Move/rotate the underlying node using the standard tools. SDK editing does not jump the camera; standard SimpleApplication uses the runtime Start service from the paired engine.
+- Both creation menus share primitive collision creation. Box/quad and wire box use finite bounds, sphere variants use a spherical shape, line uses a thin oriented box, cylinder uses native static triangles, and Terrain uses the existing Minie mesh factory. All default to mass zero; the existing Physics panel can replace the shape. This remains the SDK's Minie asset format.
+- Scene change notifications coalesce transform work before physics stepping and before save. Rigid bodies, ghosts and character controls follow scene edits, including ancestor edits and undo/redo. Native scaling restrictions use the largest axis when a shape requires uniform scale. Scaling clones shared shapes before editing. Active preview adds/removes new colliders on scene attach/detach. Collision selection meshes use native shape scale once.
+- Targeted Java 25 SDK and Java 11 engine compilation passed. Isolated native Minie smoke passed primitive/terrain creation, transformed rigid bodies, capsule pose/scale, shared-shape isolation, preview registration/removal and re-attachment. Start J3O and camera selection also passed. No complete SDK build/deployment or visible viewport interaction test.
+
+## 2026-11-21 SceneComposer Spawn palette
+
+- Spawn exposes the existing Spatial and Light creation commands as draggable Swing buttons, including optional terrain, skybox and NavMesh commands when their modules are enabled. Existing configuration dialogs, scene dirty state, and undo/redo are reused. Drops target the editable scene root; scene switches cancel pending drops.
+- The viewer queues one world-space ray on drop with HiDPI conversion and a camera-depth fallback on misses. Drag motion performs no collision checks. Hidden geometry is skipped. Spatial placement converts to parent-local space; positional lights and reflection captures use the world point. Skyboxes, NavMesh and global lights retain their placement rules. Targeted compilation and a headless check passed for nested drag buttons, transfer data, nearest visible hit, hidden hit exclusion, and the miss fallback. Native drag/drop validation remains pending.
+
+## 2026-11-21 Histogram and film naming
+
+- Exposure and tone mapping use descriptive UI, API, shader, and example names. The original serialized enum values and editor keys are migrated on load. New saves use the renamed settings. Targeted engine/SDK compilation, legacy J3O enum migration, and the Swing post-processing panel smoke test passed. Export the engine and rebuild the SDK together. No full build or deployment.
+
+## 2026-11-21 GI bake settings and portable compiled SDK launcher
+
+- `setup-native-cache.bat` is a Windows helper for native extraction failures caused by replaceable ancestors. Run it elevated as the game user to create a fresh `C:\JmeNativeCache` with a private ACL. It prints the VM option to add to the game project. Existing directories are left alone.
+- The GI Probe Volume bake inspector saves all 15 bake-only controls as per-volume spatial user data in the scene J3O. Reopening restores saved values. Old scenes keep the same defaults. Editing the recipe marks the scene modified and keeps existing bake data. Multiple bounces with adaptive refinement are rejected before disabling the controls.
+- run-sdk.bat resolves JDK 25 using the build script's existing override/config/discovery precedence and starts the local compiled suite. JDK resolution for this mode does not require an engine checkout. Existing local --check passed without building or launching. GI source/diff checks only; rebuilt SDK save/reopen verification remains pending.
+- TestScene2 dark patches reported with Windows display HDR enabled, including with FSR2 and shader sRGB output disabled. Both output routes still present through the SDR Java2D AWT image. User confirmed SDK starts with -J-Dsun.java2d.d3d=false and the black patches persist. Added an opt-in main AWT preview comparison using -J-Djme.sdk.preview.repaint=true. It uses EDT repaint instead of BufferStrategy and the same 8-bit readback. Omit the option and restart to restore Accelerated mode. Source/diff checks only. Rebuilt SDK HDR-on comparison and a confirmed fix remain pending.
+
 ## 2026-11-20 compatible shader presentation / FSR publication revisions
 
 - Engine implementation: 85039d25e10b7f5237cf39f084c0e62366483d1f on dev_fix_lightprobe_issue; SDK implementation: 6d2c12e1dcc5154e33f68fac118832cf4ab9052c on master. Documentation-only commits follow. Export/rebuild this pair together; validation limits below remain applicable. No full SDK deployment for publication.
@@ -9,21 +232,21 @@
 - Post processing > Upscaling offers Off / FSR1 / FSR2, Render resolution scale (.25..1, default2/3), and Sharpness (default.2). Upscaling starts Off. Scene/depth/velocity scale internally; final output, tools and GUI stay native. FSR2 disables the active AA controls and bypasses engine TAA/FXAA without losing their saved choice/parameters; Off restores native scene dimensions and prior AA. FSR1 retains prior AA.
 - FSR1 runs after AA/Tonemap; FSR2 before exposure/Bloom/Tonemap. GUI is composed before the final shader sRGB encode. The actual UpscalingPass and parameters serialize through WorldSettings FPP, including its explicitly selected float format. Standard SimpleApplication SceneServices restores them when the loaded scene is attached to rootNode; loadModel alone does not configure rendering. Custom/manual FPP precedence remains as documented by the engine. The window output default is AppSettings-based, independent of J3O's preview switch.
 - This is the FP32 OpenGL4.3 FSR2 implementation using AMD kernels and GL-port references, not a TAA substitute. Optional render-size reactive/composition textures are available through the engine API; auto transparent-color difference capture is not integrated. Invalid motion gets a safe reactive adapter. See engine handoff for exact source provenance, modes/limits, native entry points and resource ownership. Other RHI/Vulkan/GTAO/frame-generation plans remain pending.
-- Validation: changed SDK classes compiled independently; UePostPanelSmoke passed UE4_POST_PANEL_PASS for output defaults, old-scene Off default, FSR2 AA card bypass/restoration and scale controls. PostAntiAliasingSmoke passed POST_AA_SETTINGS_PASS for WorldSettings/J3O round-trip through FSR1/FSR2/Off, scale, sharpness and original AA parameters. Engine native 20-stage four-path test plus moving/disocclusion/alpha/GUI/finite-output checks and eight static-edge cases pass on RTX5060Ti. Native default window path at1x/4x MSAA, core48/effects1 targeted tests and existing TAA/postprocessing regressions pass.
+- Validation: changed SDK classes compiled independently; the post-processing panel smoke test passed for output defaults, old-scene Off default, FSR2 AA card bypass/restoration and scale controls. PostAntiAliasingSmoke passed POST_AA_SETTINGS_PASS for WorldSettings/J3O round-trip through FSR1/FSR2/Off, scale, sharpness and original AA parameters. Engine native 20-stage four-path test plus moving/disocclusion/alpha/GUI/finite-output checks and eight static-edge cases pass on RTX5060Ti. Native default window path at1x/4x MSAA, core48/effects1 targeted tests and existing TAA/postprocessing regressions pass.
 - No full SDK build/export/deployment, actual visible editor runtime check, AMD/Intel/second-machine validation or performance claim. Source bases engine967c43bcc / SDKe18bf330 plus paired local edits; rebuild/export together. No commit/push or external asset edits. Existing generated archives/libraries/project version changes are preserved. New local evidence is in the engine build/fsr-sdk-{compile,panel,settings}.log and build/upscaling-*.log files.
 
 ## 2026-11-20 opt-in explicit shader sRGB preview output (local source)
 
 - Post processing adds Shader sRGB output (preview), default Off. On uses an owned float linear composition buffer and a final shader sRGB encode into ordinary RGBA8 before AWT readback; Off restores the previous hardware-sRGB target. Texture decoding, exposure/Tonemap, TAA and GI parameters are unchanged. All main-panel overlays/transparent rendering precede encoding. This is SDR, not HDR display support or an FSR implementation.
 - Selection follows scene editorOptions persistence/replay, and close restores Off. Only the main editor AWT panel is affected; thumbnails/material previews and standalone game window configuration are not changed. New engine SrgbPresentation/AwtPanel/FPP APIs are required. Source pair: engine967c43bcc + local edits, SDKe18bf330 + local edits. Export/rebuild together before use; no deployed binaries changed.
-- Independent compilation of SceneApplication, EditorPostProcessing and EditorPostProcessingPanel passed. Extended UePostPanelSmoke passed UE4_POST_PANEL_PASS on Swing EDT. Engine offscreen native SrgbPresentation smoke passed numeric transfer, alpha, resize and AWT+FPP on/off/on checks. Full SDK/AWT visible interaction, two-machine comparison and performance are unverified; no full SDK build/deployment or push. See engine handoff and local build/srgb-* logs for details. Existing generated archives/libraries/project version modifications are preserved.
+- Independent compilation of SceneApplication, EditorPostProcessing and EditorPostProcessingPanel passed. Extended the post-processing panel smoke test passed on Swing EDT. Engine offscreen native SrgbPresentation smoke passed numeric transfer, alpha, resize and AWT+FPP on/off/on checks. Full SDK/AWT visible interaction, two-machine comparison and performance are unverified; no full SDK build/deployment or push. See engine handoff and local build/srgb-* logs for details. Existing generated archives/libraries/project version modifications are preserved.
 
 ## 2026-11-20 global FPP anti-aliasing selector (source only)
 
 - Replaced the FXAA checkbox with Off / FXAA / TAA selection. Only the selected method's parameters are shown; switching preserves values. TAA controls: current-frame weight, base-pass velocity, transparent velocity and alpha threshold. Uses the existing SDK message bundle.
 - EditorPostProcessing creates a single-sample HDR chain with TAA first, before AO/fog/DOF/exposure/Bloom/tone mapping; FXAA remains after tone mapping. Mode selection enables exactly one or neither and resets TAA history. Legacy reference still uses fixed ToneMap+FXAA; modern selector is disabled and retained while comparing legacy.
 - WorldSettings stores the actual filter chain plus editor options through the existing scene-save flow. Old FXAA flags migrate to Off/FXAA; explicit new AntiAliasing takes precedence regardless of map iteration order. Scene switching creates independent filters. Needs paired engine TemporalAAFilter and temporal renderer/shaders (engine baseline 5bdf1e4e8 plus current local TAA changes; SDK baseline 7e32d6a5 plus these changes).
-- Validation: source/diff review only. First isolated javac attempt failed because its classpath lacked NetBeans LookupProvider. A retry with dependencies was rejected by automatic approval review as conflicting with the user's no-SDK-build instruction; no further compilation attempted. UePostPanelSmoke now covers card switching/legacy restoration; PostAntiAliasingSmoke covers filter exclusivity and WorldSettings parameter round-trip, but these new checks have NOT run. Native AWT/GL preview, scene switching, compilation and runtime save/reload remain unverified. No SDK build/deployment, commit or push.
+- Validation: source/diff review only. First isolated javac attempt failed because its classpath lacked NetBeans LookupProvider. A retry with dependencies was rejected by automatic approval review as conflicting with the user's no-SDK-build instruction; no further compilation attempted. HistogramFilmPanelSmoke now covers card switching/legacy restoration; PostAntiAliasingSmoke covers filter exclusivity and WorldSettings parameter round-trip, but these new checks have NOT run. Native AWT/GL preview, scene switching, compilation and runtime save/reload remain unverified. No SDK build/deployment, commit or push.
 
 ## Pending: code comment style review
 
@@ -39,10 +262,10 @@
 - Paired engine also includes exact-declaration FrameGraph compilation reuse, material-watch/sort-ID CPU optimizations and zero-duration animation fixes. Graph declarations remain dynamic each frame. CPU microbenchmarks improve, but three controlled Sponza pairs fluctuate substantially; no stable whole-frame FPS gain claimed. See engine handoff for test failures reproduced on baseline and performance figures.
 - No full SDK build/deployment in this publication. Generated ZIPs, exported engine/test-data libraries, extracted templates and local nbm.revision updates are retained locally and excluded from commits. Lemur/dual-GUI/Agent and neutral physics backend plans remain pending, not implemented. Compatible implementation revisions will follow in a documentation commit.
 ## 2026-11-19 compatible publication revisions
-- Engine implementation: fbc68bd0d on dev_fix_lightprobe_issue; SDK implementation: dc5d1ec2 on master. Use this pair for WorldSettings, UE4-style post-processing and preceding sky composition changes. Documentation-only commits follow. Validation limits below remain applicable; no full SDK build for publication.
+- Engine implementation: fbc68bd0d on dev_fix_lightprobe_issue; SDK implementation: dc5d1ec2 on master. Use this pair for WorldSettings, histogram and film post-processing and preceding sky composition changes. Documentation-only commits follow. Validation limits below remain applicable; no full SDK build for publication.
 
 ## 2026-11-19 publication checkpoint
-- Publish current WorldSettings, editor lifecycle and UE4-style post-processing source changes together with the existing sky-composition commits. Validation and limitations are recorded below; no full SDK build or deployment for publication.
+- Publish current WorldSettings, editor lifecycle and histogram and film post-processing source changes together with the existing sky-composition commits. Validation and limitations are recorded below; no full SDK build or deployment for publication.
 - SDK also includes binary Unity input diagnostics and conversion load-failure handling. Generated archives, extracted libraries/templates, crash logs and local build revision changes are excluded.
 - User IDE startup used Android Studio Java 11 despite Gradle using JDK25; runtime selection needs JDK25. IDEA module tree recovered after Gradle synchronization; no IDE configuration was changed.
 
@@ -51,13 +274,13 @@
 - Paired engine change defaults GiSceneBaker.Settings.separateSky=false and corrects total-mode bounce composition/sky-pixel intensity. Targeted SDK action javac passed via engine build/sdk-bounces-check.args. Engine native tests cover both formats, all four paths and Lighting/PBR; TestScene3 fixed-view outputs identical. Full NetBeans UI, SDK build/deployment/restart were not run.
 - Sky intensity/exposure are not modified by this UI change. Original project scenes untouched; comparison candidates/logs remain under the engine build directory. Distance-field sky occlusion remains pending; this changes composition, not that feature. Preserve concurrent post-processing and WorldSettings work.
 
-## 2026-11-19 UE4-style SDR exposure / Film / CombineLUTs (working tree)
-- Compared local UE4.27.2 StarEngine histogram/adaptation and Film/CombineLUTs source. Existing JME behavior was not equivalent. Added AutoExposureFilter.Mode.UE4Histogram with brightness limits (.03..2), configurable log histogram (-8..4), soft adjacent bins, 18% grey and linear/exponential transition (1.5 stops). In this mode Speed Up means brighter scene / lower multiplier; Legacy retains old direction and multiplier EV bounds. Portable 32x32 metering differs from UE compute histogram; no EV100 camera, pre-exposure or metering mask.
-- ColorGradingFilter now uses the viewport FrameGraph. Neutral/Filmic retain their prior equations; Curve.UE4 adds AP1/D60 film response with .88/.55/.26/0/.04 controls, glow/red shaping, blue correction, bright saturated gamut expansion, Bradford white balance, grading gamma/offset and tonal gains. CombineLUTs generates a 32^3 log-input atlas only when parameters change; ApplyColorLUT samples it into linear SDR, alpha preserved and framebuffer encodes sRGB once. LUT GPU state is never serialized and is freed on cleanup.
-- Optional external N*N by N LUT (16/32/64) via setColorLut: raw Linear texture data whose RGB values represent sRGB display colors; blends during LUT generation. SDK exposes procedural controls, not an external-LUT file picker. Tint is approximate; full per-range saturation/contrast/gamma/offset vectors and HDR/PQ output are absent. This is UE4-style SDR, NOT pixel-identical UE or full ACES output-transform parity.
-- SDK Exposure adds UE4 histogram toggle, brightness/log ranges/percentiles/transition; ToneMap adds UE4 Film toggle/curve/white balance/gamut controls; Combine LUTs section adds gamma/offset and tonal gains. All numeric settings round-trip through existing WorldSettings editor options. Old scenes default to old modes; explicitly enable UE4Exposure and UE4Tonemap to opt in. Inapplicable controls are disabled. No full SDK build/deployment/restart or push.
-- Validation: targeted JDK25 filter/example and SDK class compilation passed. Native RTX5080 GL4.3 legacy CINEMATIC_POST_PASS; new TestUE4PostProcessing --verify UE4_POST_GPU_PASS for 1x and 4x MSAA, with exposure direction, grey/black/HDR, alpha, LUT insertion/removal, FPP detach/re-attach and serialization. Final 1x adds saturated RGB checks. Logs build/ue4-post-check/{legacy,modern-final,modern-msaa}.log. No side-by-side same-scene UE image comparison or measured performance claim. Initial command processes intermittently crashed 0xC0000005 and were retried.
-- Runnable example: jme3test.post.TestUE4PostProcessing, --verify for offscreen numeric checks; -Duepost.samples=4 for MSAA. Non-verify demo varies HDR background luminance. SDK tools/tests/UePostPanelSmoke passed UE4_POST_PANEL_PASS on EDT (independent headless Swing test, -Xint retry); checks legacy/new control enablement and resource lookup, not full NetBeans integration.
+## 2026-11-19 histogram and film SDR exposure / Film / CombineLUTs (working tree)
+- Added AutoExposureFilter.Mode.SceneHistogram with brightness limits (.03..2), configurable log histogram (-8..4), soft adjacent bins, 18% grey and linear/exponential transition (1.5 stops). In this mode Speed Up means brighter scene / lower multiplier; Legacy retains old direction and multiplier EV bounds. Portable 32x32 metering differs from UE compute histogram; no EV100 camera, pre-exposure or metering mask.
+- ColorGradingFilter now uses the viewport FrameGraph. Neutral/Filmic retain their prior equations; Curve.FilmLut adds AP1/D60 film response with .88/.55/.26/0/.04 controls, glow/red shaping, blue correction, bright saturated gamut expansion, Bradford white balance, grading gamma/offset and tonal gains. CombineLUTs generates a 32^3 log-input atlas only when parameters change; ApplyColorLUT samples it into linear SDR, alpha preserved and framebuffer encodes sRGB once. LUT GPU state is never serialized and is freed on cleanup.
+- Optional external N*N by N LUT (16/32/64) via setColorLut: raw Linear texture data whose RGB values represent sRGB display colors; blends during LUT generation. SDK exposes procedural controls, not an external-LUT file picker. Tint is approximate; full per-range saturation/contrast/gamma/offset vectors and HDR/PQ output are absent. This is histogram and film SDR, NOT pixel-identical UE or full ACES output-transform parity.
+- SDK Exposure adds scene histogram toggle, brightness/log ranges/percentiles/transition; ToneMap adds Film / combined LUT toggle/curve/white balance/gamut controls; Combine LUTs section adds gamma/offset and tonal gains. All numeric settings round-trip through existing WorldSettings editor options. Old scenes default to old modes; explicitly enable HistogramExposure and FilmLutTonemap to opt in. Inapplicable controls are disabled. No full SDK build/deployment/restart or push.
+- Validation: targeted JDK25 filter/example and SDK class compilation passed. Native RTX5080 GL4.3 legacy CINEMATIC_POST_PASS; the histogram and film example GPU smoke test passed for 1x and 4x MSAA, with exposure direction, grey/black/HDR, alpha, LUT insertion/removal, FPP detach/re-attach and serialization. Final 1x adds saturated RGB checks. No side-by-side same-scene UE image comparison or measured performance claim. Initial command processes intermittently crashed 0xC0000005 and were retried.
+- Runnable example: jme3test.post.TestHistogramFilmPostProcessing, --verify for offscreen numeric checks; -DhistogramFilm.samples=4 for MSAA. Non-verify demo varies HDR background luminance. SDK tools/tests/the post-processing panel smoke test passed on EDT (independent headless Swing test, -Xint retry); checks legacy/new control enablement and resource lookup, not full NetBeans integration.
 - Source pair: engine base a0d07893a + this working tree; SDK base d8a6ff1f + working tree. Preserve concurrent GI/SkyLight/Unity edits and earlier WorldSettings work; not part of this feature validation. TAA and Lemur/dual-GUI/Agent backlogs remain separate pending work.
 
 ## 2026-11-18 scene-owned FPP and editor lifecycle (working tree, not deployed)
@@ -544,8 +767,82 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - GI Volume > Curved receiver correction defaults Off, including old scenes. On enables curved projection limiting; Off restores the previous plane algorithm. Scene save retains the flag; no rebake required. GiPreview forwards it through the updated engine streaming API. Requires paired engine export/SDK rebuild; no running SDK replacement.
 - Engine defaults/persistence/page toggle tests5/5 passed. Actual TestScene2 off/on/off captures confirm Off matches pre-fix baseline byte-for-byte; On removes the arch strip. Two SDK classes compiled against updated engine. TestScene3 remains unavailable, per user. No full SDK build/deployment, commit/push.
 
+## 2026-11-22 Original asset visibility (partial work)
+- Asset Browser has a default-on Hide original assets checkbox, filtering source image/model extensions while retaining folder navigation. No files are removed. Source change only; compilation and UI validation not run. Automatic conversion/import queue and Link/AddTo drop selection remain unimplemented. Existing unrelated working-tree changes preserved. Bases SDK 576ecbe6 / engine db8ab1149 plus working trees.
+
+## 2026-11-22 Asset visibility and model drop checkpoint
+- Default-on source visibility filter and Link/AddTo popup source compile passed using JDK 25 and current runtime dependencies (build/asset-import-check). Link wraps the loaded model in AssetLinkNode; AddTo retains the existing embedded insertion. Both use existing undo/dirty state handling. Viewer accepts NetBeans NodeTransfer for Assets tree nodes as well as Asset Browser transfers. Native drag/drop and persistence checks still pending; no runtime JAR deployed.
+- Automatic external import/conversion queue, source retention checkbox and mixed model/texture handling remain outstanding. This is not completion of the three-part request.
+
+## 2026-11-22 External drop/paste conversion and model drop choices
+
+- Asset Browser's default-on Hide original assets checkbox hides source images/models and glTF BIN/OBJ MTL sidecars; folders remain navigable. Unchecking restores visibility without deleting files.
+- External OS file-list drops and Ctrl+V share ExternalAssetImport in both Project Assets (root and child folders) and Asset Browser (grid, blank viewport and folder tree). A debounced recursive listener also handles newly created files/folders copied directly into the active project's disk Assets directory. Existing files at watcher startup are not converted. Project close detaches registered watchers.
+- A serial worker stages the batch outside Assets. Models show the existing conversion options plus default-off Copy original resources to Assets. Referenced textures are consumed with the model; unrelated PNG/JPEG/BMP/GIF images get sequential BC3 DDS dialogs with width/height and optional full mip chains. Models are processed first to identify shared dependencies. J3O material texture keys reference generated DDS directly, so omitted PNG/JPEG originals and the SDK mapping are not runtime requirements. Unsupported texture conversions retain required source dependencies rather than breaking the model.
+- Confirmation of all dialogs precedes publication. Cancel discards the staged batch; errors preserve original inputs. Outputs publish via sibling temporary files, reject differing existing files, and roll back new outputs on publication failure. External originals are never deleted. For files just copied into Assets, unretained consumed sources are removed only after successful publication and byte equality checks. Changed inputs abort import. New copied batches are detected after two seconds of filesystem quiet; an incomplete dependency set reports an error and remains intact.
+- Viewer model drops expose Link/AddTo and reuse existing undo/dirty state. Link serializes AssetLinkNode, AddTo embeds the loaded model. Both Asset Browser transfer flavors and Project Assets NetBeans NodeTransfer are accepted; J3M uses existing hit-target material application. Popup coordinates now use the drop component; changing scenes before choosing cancels insertion.
+- Paired bases SDK 576ecbe6 / engine db8ab1149 plus current working trees. JDK25 targeted compilation passed. ExternalAssetImportSmoke passed EXTERNAL_ASSET_IMPORT_PASS dialogs=9: DDS dimensions/full mips, default source exclusion/retention, cancel, mixed OBJ/image dialogs, J3O loading, linked-model persistence, DDS references after removing source and mapping, real file-list PasteType queue, filesystem-created-image event, and overwrite protection. Source diff whitespace checks passed. Repeat with tools/verify-external-asset-import.ps1 using existing built dependencies; this is an isolated javac/test command, not SDK packaging.
+- Per user request, no SDK build, packaging or runtime module replacement. Actual OS mouse drops in the complete SDK, J3M viewport interaction, and FBX/glTF-specific complete imports still need user validation after their build. Tests do not establish native UI behavior or every model codec. Prior partial-work entries are superseded for implemented source paths, not these validation limits.
+
+## 2026-11-22 G visibility, directional arrows and Start camera marker
+
+- G now saves/disables the Editor tools viewport as well as the overlay and existing root/stat cull state, restoring each viewport's original enabled state on the second press or scene close. Fixed-pixel markers use CullHint.Never and could survive ancestor-only hiding in flattened render queues; disabling their dedicated viewport covers Start, lights and newly created helpers without changing game objects.
+- Directional light shafts are 1.8x their previous shaft length (total marker roughly 178 rather than 108 screen pixels); shaft/tip thickness and spot arrows stay as before. Start forward/up arrows now use cylinder shafts and cone tips with the same screen-space thickness as lights, retaining cyan +Z, green +Y and the yellow origin cube.
+- Start adds a camera-facing 36px camera icon offset above the origin. The original camera.svg and camera.png fallback use the existing editor icon palette/outline weights and the SDK BSD license; this new drawing is not copied from Feather. All markers remain tools-only and follow G.
+- SDK base 576ecbe6 / engine db8ab1149 plus working trees. Targeted JDK25 source compilation passed against paired local engine classes. RTX5080 native AWT/OpenGL4.3 helper-only TransformGizmoSmoke passed EDITOR_HELPER_VISIBILITY_AND_START_PASS: viewport hiding/restoration, camera marker creation, solid Start axes and retained colors. No pixel-diff or complete-editor mouse verification. The broader existing transform smoke encountered an unrelated Q-mode missing-arrowhead assertion with the mixed local runtime; it is not reported as passing. Use -Djme.test.helpersOnly=true for this targeted regression.
+- Per user request, no SDK build/package/deployment or runtime JAR replacement. Rebuild with the paired current engine/SDK sources. Independent checks used build/asset-import-check/gizmo.args and gizmo-run.args; these local dependency paths are not portable artifacts.
+
+## 2026-11-22 Audio preview isolation and JNI media import
+
+- Asset Browser inspector and standalone sound window now play decoded PCM through a per-preview Java Sound Clip worker instead of adding AudioNodes to the editor's OpenAL renderer. Stop, selection change, window close and replay cancel queued playback and close the device line; natural completion releases it too. This removes the browser playback path from the reported ALAudioRenderer state-0 failure. The underlying cause of invalid source status in arbitrary scene/game OpenAL playback was not reproduced or broadly fixed.
+- ExternalAssetImport now queues MP3/MP4/M4A/AAC/FLAC conversion dialogs for both Project Assets and Asset Browser drops/paste and newly copied disk files. Defaults: OGG Vorbis, 44100 Hz, 160 kbps, original retention off. MP4 exports its first audio track, no video; more than two channels downmix to stereo. Output names include the source extension (song.mp3.ogg) to avoid MP3/MP4 basename collisions. Existing source files have Convert audio to OGG in Project Assets/Asset Browser; Browser double-click/inspector also offers conversion. Raw media gets a source card rather than unsupported waveform playback and follows Hide original assets.
+- In-process JavaCV/JavaCPP 1.5.12 and FFmpeg 7.1.1 JNI only: no ProcessBuilder, ffmpeg process, executable selection or runtime download. Gradle corelibs declares default LGPL native artifacts for Windows x86_64, Linux x86_64/arm64 and macOS x86_64/arm64. Existing library generation exposes them to SDK modules; copyBaseLibs verifies each target JAR/native payload and distributed notices under jme3-core-libraries/release/licenses/audio-import. Unsupported architectures fail conversion with originals preserved. JavaCPP uses its normal extracted-library cache. No new engine dependency or scene asset format.
+- Windows x64 targeted JDK25 compilation passed with downloaded pinned dependencies in build/audio-import-check/lib. JNI_AUDIO_IMPORT_PASS used JNI to generate real MP3 and audio+video MP4, converted them to stereo 48k OGG, decoded output samples, rejected a video-only MP4 and corrupt MP4, and checked failed output cleanup/original retention. ASSET_AUDIO_PLAYER_PASS exercised silent real Java Sound playback, repeated play/stop, line release and queued-play cancellation. Tests are tools/tests/AudioImportSmoke.java and AssetAudioPlayerSmoke.java. Compilation/runtime argument files and logs are local build/audio-import-check artifacts. No general claim about other codecs or audio devices.
+- Per user request, no SDK build, packaging, engine export or runtime module replacement. Full Gradle packaging checks and Linux/macOS JNI execution remain untested. Actual complete-editor UI/audio interaction should be checked after the user's build. Compatible bases remain SDK 576ecbe6 / engine db8ab1149 plus current working trees. Engine sources were not changed for this audio work.
+
 ## 待办：完善地形编辑器（2026-11-22）
 
 - [ ] 先盘点现有新建/导入、地形画刷、材质绘制及保存能力，结合实际场景确认最影响使用的缺口和优先级。
 - [ ] 优先验收高度与材质编辑的笔刷反馈、撤销/重做和保存重载。再评估大地形编辑性能、分块边缘、碰撞同步及新版渲染路径的预览；将确认的问题拆成独立任务。
 - 下次继续 SDK 地形工具、Terrain、画刷或大地形集成时，主动提醒用户这项待办。引擎侧 VT（含 LightProbe 烘焙评估）和 Virtual Shadow Maps 见引擎的 `RENDERING_QUALITY_ROADMAP.md`。本次仅登记计划，无实现或构建。
+
+## 2026-11-22 修复转换后的 OGG 无法播放
+
+- Windows x64 固定 JNI 包缺少 libvorbis，JavaCV 只指定编码器名称时写出 Ogg FLAC。旧产物使用 SDK OGGLoader 复现 `The file has no identification header`。新转换显式选择 Vorbis，必要时使用内置立体声编码器，提交前用 jME3 OGGLoader 检查 PCM。
+- Project Assets 和 Asset Browser 的旧转换文件可右键 `Repair converted OGG...`。确认后在后台验证 Ogg FLAC，转为 44.1 kHz / 160 kbps Vorbis，再原位原子替换，保留路径与引用。验证失败保留源文件，已有 Vorbis 不会被重写。
+- Windows x64 定向编译与 JNI_AUDIO_IMPORT_PASS 通过。用 SDK 所带 OGGLoader 完整解码测试输出，覆盖单声道 MP3、音视频 MP4、全部界面采样率/码率组合、旧输出修复、拒绝重复修复及无音轨和损坏文件。未构建或替换 SDK，完整编辑器菜单尚未手测。配套基线 SDK 7b4f4b1b、引擎 44031b02e 加工作树，无引擎实现改动。
+
+## 2026-11-22 修复普通纹理编辑器加载后空白
+
+- 图片后台解码完成时，画布可能已经以空尺寸布局过。原逻辑仅从外层面板调用 revalidate，未刷新滚动区内的画布布局。现在由画布发起 revalidate 并重绘视口，加载及失败状态也同步首选和最小尺寸。Fit、缩放和平移共用此更新路径。HDR 继续以只读方式显示并可使用导航控件。
+- Windows JDK25 定向编译和真实 Swing 窗口的 TextureNavigationSmoke 通过。回归等待视口先布局，再安装模拟异步解码完成的 HDR 图像，不强制重排，检查画布大小和实际绘制像素。原模块在同一测试中复现空白，新代码通过。现有 Fit、滚轮、右键平移及压缩纹理编辑器导航检查通过。未构建或替换 SDK，未使用用户的 Path.hdr。基线 SDK 7b4f4b1b / 引擎 44031b02e 加工作树。
+
+## 2026-11-22 Physics preview feedback and Reset gravity
+
+- Fixed editor collision synchronization treating dynamic rigid-body/character logical-update pose writes as manual scene edits. Bullet steps after logical controls; feeding the displayed prior pose back on the next frame prevents normal falling. SceneApplication now scopes logical updates through EditorCollisionSync; registered simulated poses are excluded from transform notifications in that scope. Static/kinematic bodies and edits outside that scope retain synchronization.
+- Reset temporarily protects gravity while restoring a detached dynamic body, then restores the original protection flag. This avoids Minie's detached/unprotected gravity warning without changing the authored protection policy.
+- JDK 25 targeted compilation passed against current engine AppSettings source and SDK dependencies. Native Minie EditorPhysicsSmoke now covers a mass-5 cube with editor frame ordering, reset/J3O state restoration, protection flag and replay. Disabling the new notification suppression reproduces the failed falling assertion. The user's exact scene/upward motion and Rebuild collision UI interaction have not been reproduced; overlapping collision shapes remain a possible additional issue.
+- SDK 576ecbe6 / engine db8ab1149 plus current working trees. No asset changes, full SDK build or deployment; local verification files are build/physics-preview-fix. Runtime modules must be rebuilt before user verification.
+- AWT/OpenGL preview render-thread execution passed EDITOR_PHYSICS_PASS and PHYSICS_AWT_PASS using a temporary preview window. This validates the native preview context and helper lifecycle, not full SceneComposer button interaction or the reported scene.
+
+## 2026-11-22 动画图剪辑简短名称
+
+- 动画图默认状态、添加 Clip State、源剪辑预览以及状态表的剪辑字段和样本选择，按资产文件名显示单剪辑，例 `Idle.j3o` → `Idle`。本地只有一个默认片段时用当前资产名，例如 `Paladin`。多个本地剪辑仍保留各自名称，多个外部剪辑才附加其剪辑名。已有图中由剪辑 ID 生成的旧状态标题只在显示时缩短。用户改过的状态名、转场、入口和绑定 ID 不迁移，无剪辑资源不生成虚假动作。
+- Windows JDK25 定向编译与 ANIMATION_EDITOR_SWING_SAVE_RUNTIME_PASS 通过，涵盖单本地默认片段、嵌入 clip 按原 ID 绑定、Idle 外部状态短名及旧状态显示。未构建 SDK 或修改用户的 Paladin/Idle 资产。配套基线 SDK 7b4f4b1b / 引擎 44031b02e 加当前工作树，无引擎实现改动。
+
+## 2026-11-22 Conversion progress, DDS menus and folder deletion
+
+- Texture import now displays an immediate SDK progress activity with the current mip and dimensions. Java Squish has no within-mip callback, so this is not a fabricated percentage. MP3/MP4 audio-to-OGG conversion reports decoded-time percentage when duration is known, otherwise an activity indicator, then output verification. Compressed Texture Editor shows an activity bar for worker operations. Handles/bars finish on errors and completion; existing option-dialog cancellation remains unchanged. MP4 still imports audio only.
+- Added Convert texture to DDS to ordinary PNG/JPEG/BMP/GIF context menus in Asset Browser and project AssetNode, reusing existing dimensions/mips/retention/staged-publication semantics and refusing output collisions. Existing audio conversion and legacy .ogg repair actions are retained.
+- Asset Browser deletes a managed folder through GeneratedTextures once, before DataFolder can delete individual children. This validates generated-output-directory protection before deleting any child. Source folders can remove their source/DDS pairs and registry entries together. Directory enumeration closes before unlink; filesystem failures retry up to five times (750 ms total delay per path), then report the exact failure. Permanent failures may still leave a partial tree and retained records for retry. Delete errors no longer say Could not open asset. This protection is based on source/output ownership, not a complete J3O/J3M reference index; deleting J3O/J3M does not itself remove mapping records.
+- SDK log identified the user's FBX Import failed after successful J3O publication as DirectoryNotEmptyException while cleaning E:/MyWorks/JmonkeyProjects/TestGame/.jme-import-5492365292293660103/Models. Private staging cleanup now uses the bounded deletion routine. A remaining cleanup failure logs a distinct warning and states that published assets were imported, rather than claiming conversion failed. The exact FBX was not reimported in this change; model/texture import and cleanup regressions passed.
+- User authorized deletion of E:/MyWorks/JmonkeyProjects/TestGame/assets/Models/Paladin/Attach1.textures. Backed up its existing files and the registry in build/delete-folder-check. An independent-process DataObject deletion succeeded, so the original interactive error was not reproduced there. Restored only that folder from backup, then verified current ownership-aware deletion: dds-only deletion rejected with all files intact; entire Attach1.textures deleted successfully; unrelated registry entries exactly preserved (ACTUAL_ATTACH1_DELETE_PASS). Folder is now absent by request; backup remains. No other user asset was intentionally changed.
+- JDK 25 targeted compilation; JNI_AUDIO_IMPORT_PASS (MP3/MP4, rates, repair and failure cases); CONVERSION_PROGRESS_MENU_PASS (Swing busy/end state, PNG menu, OGG repair retained); GENERATED_TEXTURE_DELETION_PASS (protection before mutation, temporary Windows reader lock, source mapping cleanup, staging root); EXTERNAL_ASSET_IMPORT_PASS (DDS/J3O publication, no leftover staging, retention, cancel, collision, disk watcher) passed. Exact three candidate JARs passed menu/deletion/import regressions.
+- Updated local build/cluster/modules Core, Texture Tools and Asset Browser JARs; installed hashes match tested candidates. Backups and logs are build/conversion-progress-check. Restart SDK to load; no full SDK packaging or push. Compatible repository bases at completion: SDK 7b4f4b1b / engine 44031b02e plus working-tree changes. Full interactive drag/drop and permanently locked production files remain outside this validation.
+
+## 2026-11-22 Animation graph ports stay attached when nodes move
+
+- Fixed edgeRoute recomputing source/destination sides from horizontal separation on each paint. Each transition row now retains its source-side flag (the target is the opposite side); port dragging stores the actual chosen side. Node movement changes only routing. Reciprocal stacked routes use distinct lanes/labels and side offsets, with left-edge clearance bounded for positive node positions.
+- The editor-only jme.animationGraph.ports.v1 String persists row-aligned L/R choices alongside the graph on its composer owner. History snapshots include the hidden model column; save conflict detection and failed-save rollback include the new data. Transition From/To and runtime graph format are unchanged. Old files infer sides once from loaded node centers; original port choices cannot be reconstructed if an older file already lost that information. Save J3O retains the inferred/edited sides thereafter.
+- JDK 25 targeted compile and AnimationEditorSmoke passed: bidirectional port dragging, source/target preservation through stacked and reversed layouts, separate route labels, undo/redo, and J3O reopening with a saved left port overriding current layout. Rendered stacked graph inspected in build/animation-port-check/stacked.png. Packaged Core candidate passed ANIMATION_EDITOR_SWING_SAVE_RUNTIME_PASS, then installed into build/cluster/modules/com-jme3-gde-core.jar with identical SHA-256. Backup core-before.jar and logs remain in build/animation-port-check. Restart SDK to load.
+- SDK 7b4f4b1b / engine 44031b02e plus working-tree changes. No engine/runtime transition changes, user model writes, full SDK packaging or push. Graph canvas/Swing and persistence verified; no new 3D preview behavior introduced.

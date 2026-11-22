@@ -23,7 +23,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HexFormat;
@@ -42,7 +41,7 @@ import org.openide.filesystems.FileUtil;
 
 /**
  * Generates PC DDS dependencies on source-model conversion, before J3O output
- * is opened. Material texture keys stay logical, including embedded materials.
+ * is opened. ufbx imports use direct DDS keys; glTF retains logical image keys.
  * PNG/JPEG Texture2D sources under the primary asset root are deduplicated.
  * For GLB and glTF root-level keys named imageN.png/jpg/jpeg, loaded pixels are
  * decoded into a model-specific ".textures" directory. This covers bufferView
@@ -67,7 +66,7 @@ import org.openide.filesystems.FileUtil;
  * 第三步：同一转换继续生成该 PNG 旁 dds/文件名.png.dds，并把稳定 key 写入 J3O。
  * 第四步：重复转换复用同内容文件和有效 DDS；内容变化生成新哈希文件，不覆盖旧图。
  * 第五步：普通外部 PNG/JPG 仍在原位置生成 DDS，材质逻辑 key 保持不变。
- * 第六步：普通保存已有 J3O 不再次提取或压缩；可关闭生成纹理解析以预览原图。
+ * 第六步：给已有 J3O 绑定材质后保存，只补齐材质引用的、尚无 DDS 的 PNG/JPEG。
  * </pre>
  */
 final class ModelTexturePreparation {
@@ -76,6 +75,7 @@ final class ModelTexturePreparation {
             Pattern.CASE_INSENSITIVE);
     private static final Pattern SUPPORTED_STREAM_NAME = Pattern.compile("image[0-9]+\\.(png|jpg|jpeg)",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern UFBX_STREAM_NAME = Pattern.compile("ufbx-image[0-9]+\\.png");
 
     static void prepare(Spatial model, ProjectAssetManager assets) throws IOException {
         prepare(model, assets, null);
@@ -91,21 +91,9 @@ final class ModelTexturePreparation {
         }
         Path root = folder.toPath().toAbsolutePath().normalize();
         GeneratedTextures store = new GeneratedTextures(root);
-        List<Texture> textures = new ArrayList<>();
-        Set<Texture> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-        model.depthFirstTraversal(spatial -> {
-            if (spatial instanceof Geometry geometry && geometry.getMaterial() != null) {
-                for (var parameter : geometry.getMaterial().getParams()) {
-                    if (parameter instanceof MatParamTexture textureParameter) {
-                        Texture texture = textureParameter.getTextureValue();
-                        if (texture != null && seen.add(texture)) {
-                            textures.add(texture);
-                        }
-                    }
-                }
-            }
-        });
+        Set<Texture> textures = textures(model);
         Map<String, Boolean> keys = new LinkedHashMap<>();
+        boolean fbx = sourceModel != null && "fbx".equalsIgnoreCase(sourceModel.getExt());
         for (Texture texture : textures) {
             if (texture.getType() != Texture.Type.TwoDimensional
                     || !(texture.getKey() instanceof TextureKey key)
@@ -114,14 +102,18 @@ final class ModelTexturePreparation {
                 continue;
             }
             String name = key.getName();
-            boolean embedded = hasGltfStreamTextureName(sourceModel, name);
+            boolean ufbxPixels = fbx && UFBX_STREAM_NAME.matcher(name).matches();
+            boolean embedded = ufbxPixels || hasGltfStreamTextureName(sourceModel, name);
             if (embedded) {
-                if (!SUPPORTED_STREAM_NAME.matcher(name).matches()) {
+                if (!ufbxPixels && !SUPPORTED_STREAM_NAME.matcher(name).matches()) {
                     LOG.warning("Skipping unsupported embedded glTF texture format: " + name);
                     continue;
                 }
                 String extracted = extractEmbedded(texture, key, root, sourceModel);
                 if (extracted == null) {
+                    if (ufbxPixels) {
+                        throw new IOException("Cannot generate DDS from FBX texture " + name);
+                    }
                     continue;
                 }
                 name = extracted;
@@ -138,6 +130,8 @@ final class ModelTexturePreparation {
         }
         assets.getAssetFolder().refresh();
         TextureToolchain tools = TextureToolchain.installed();
+        boolean portableDds = fbx && !tools.hasConfiguredDdsEncoder();
+        Map<String, Path> outputs = new LinkedHashMap<>();
         for (String key : keys.keySet()) {
             if (keys.get(key) && store.source(key) == null) {
                 LOG.info("Skipping already compressed imported texture: " + key);
@@ -148,14 +142,79 @@ final class ModelTexturePreparation {
                 continue;
             }
             try {
-                store.ensure(key, tools);
+                Path output;
+                if (!fbx) {
+                    output = store.ensureLogicalDds(key, tools);
+                } else if (portableDds) {
+                    output = store.ensurePortableBc3(key, PortableModelDds::write);
+                } else {
+                    output = store.ensure(key, tools);
+                }
+                if (output != null) {
+                    outputs.put(key, output);
+                }
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Texture conversion interrupted", exception);
             }
         }
+        if (fbx) {
+            for (Texture texture : textures) {
+                if (texture.getKey() instanceof TextureKey key) {
+                    Path output = outputs.get(key.getName());
+                    if (output != null) {
+                        TextureKey ddsKey = new TextureKey(root.relativize(output).toString().replace('\\', '/'),
+                                key.isFlipY());
+                        ddsKey.setGenerateMips(key.isGenerateMips());
+                        ddsKey.setAnisotropy(key.getAnisotropy());
+                        ddsKey.setTextureTypeHint(key.getTextureTypeHint());
+                        texture.setKey(ddsKey);
+                    }
+                }
+            }
+        }
         assets.clearCache();
         assets.getAssetFolder().refresh();
+    }
+
+    static void prepareMissing(Spatial model, ProjectAssetManager assets) throws IOException {
+        if (assets == null || assets.getAssetFolder() == null) {
+            return;
+        }
+        FileObject assetFolder = assets.getAssetFolder();
+        var folder = FileUtil.toFile(assetFolder);
+        if (folder == null) {
+            return;
+        }
+        var store = new GeneratedTextures(folder.toPath());
+        Set<String> keys = new java.util.HashSet<>();
+        for (Texture texture : textures(model)) {
+            if (texture.getType() == Texture.Type.TwoDimensional
+                    && texture.getKey() instanceof TextureKey key && key.getClass() == TextureKey.class
+                    && keys.add(key.getName())) {
+                try {
+                    store.ensureMissingPortableBc3(key.getName(), PortableModelDds::write);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("DDS generation interrupted", exception);
+                }
+            }
+        }
+        assetFolder.refresh();
+    }
+
+    private static Set<Texture> textures(Spatial model) {
+        Set<Texture> result = Collections.newSetFromMap(new IdentityHashMap<>());
+        model.depthFirstTraversal(spatial -> {
+            if (spatial instanceof Geometry geometry && geometry.getMaterial() != null) {
+                for (var parameter : geometry.getMaterial().getParams()) {
+                    if (parameter instanceof MatParamTexture texture && texture.getTextureValue() != null) {
+                        result.add(texture.getTextureValue());
+                    }
+                }
+            }
+        });
+        return result;
     }
 
     private static boolean hasGltfStreamTextureName(FileObject sourceModel, String name) {
@@ -171,22 +230,22 @@ final class ModelTexturePreparation {
         Image image = texture.getImage();
         String oldName = originalKey.getName();
         if (image == null || image.getData(0) == null) {
-            LOG.warning("Skipping embedded glTF texture without decoded pixels: " + oldName);
+            LOG.warning("Skipping model texture without decoded pixels: " + oldName);
             return null;
         }
         if (image.getFormat().isCompressed()) {
-            LOG.warning("Skipping already compressed embedded glTF texture: " + oldName);
+            LOG.warning("Skipping already compressed model texture: " + oldName);
             return null;
         }
         if (!supportsPngExtraction(image.getFormat())) {
-            LOG.warning("Skipping non-8-bit embedded glTF texture; no DDS was generated: " + oldName
+            LOG.warning("Skipping non-8-bit model texture; no DDS was generated: " + oldName
                     + " (" + image.getFormat() + ")");
             return null;
         }
         BufferedImage decoded = toAwt(image);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         if (!ImageIO.write(decoded, "png", bytes)) {
-            throw new IOException("No PNG writer for embedded glTF texture: " + oldName);
+            throw new IOException("No PNG writer for model texture: " + oldName);
         }
         byte[] encoded = bytes.toByteArray();
         String hash = sha256(encoded);
@@ -210,7 +269,7 @@ final class ModelTexturePreparation {
         stableKey.setTextureTypeHint(originalKey.getTextureTypeHint());
         texture.setKey(stableKey);
         texture.setName(stableName);
-        LOG.info((created ? "Extracted" : "Reused") + " embedded glTF texture: " + oldName + " -> " + stableName);
+        LOG.info((created ? "Extracted" : "Reused") + " model texture: " + oldName + " -> " + stableName);
         return stableName;
     }
 

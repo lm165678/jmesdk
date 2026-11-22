@@ -3,9 +3,13 @@ package com.jme3.gde.core.assets;
 import static com.jme3.gde.core.assets.AnimationEditorMessages.text;
 
 import com.jme3.anim.AnimComposer;
+import com.jme3.anim.Joint;
+import com.jme3.anim.TransformTrack;
 import com.jme3.anim.graph.AnimationGraph;
 import com.jme3.anim.graph.AnimationGraph.*;
 import com.jme3.anim.graph.AnimationGraphPlayer;
+import com.jme3.export.binary.AnimationLinkResolver;
+import com.jme3.export.binary.AnimationLinkResolver.Link;
 import com.jme3.bounding.BoundingBox;
 import com.jme3.light.AmbientLight;
 import com.jme3.light.DirectionalLight;
@@ -14,8 +18,12 @@ import com.jme3.math.Vector3f;
 import com.jme3.scene.Spatial;
 import java.awt.*;
 import java.awt.event.*;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -43,22 +51,41 @@ import org.openide.windows.TopComponent;
  * 第一步：右键 j3o 或场景节点选择 Open in Animation Editor。
  * 第二步：Parameters 添加 FLOAT / BOOLEAN / TRIGGER 参数，默认值分别为数字 / true或false / 0。
  * 修改定义后重新 Apply preview；BOOLEAN 转换使用 TRUE / FALSE，实时参数只影响预览。
- * 第三步：States 设置动画片段；1D 混合用 | 分隔片段和递增阈值，指定 FLOAT 参数。
+ * 第三步：在 StateName 输入状态名，选择混合参数。打开 Clips 或 Thresholds 逐行选择片段和阈值。
+ * FLOAT 支持多行；BOOLEAN 或空参数只使用一个片段，阈值为 0。
  * 第四步：Transitions 按行优先级设置条件、过渡秒数和最早退出秒数（-1 不限制）。
  * 第五步：Apply preview，拖动预览旋转、滚轮缩放，修改 Live parameters 检查状态高亮。
  * 预览显示完整模型，播放 Composer 选中的控制器；环境光照仅作用于预览副本。
  * 第六步：Save J3O 保存；游戏中 AnimationGraphPlayer.attach(composerOwner) 启动。
  * 第七步：Double-click 选择 SCENE 并保存可恢复场景默认打开；右键始终可强制打开。
+ * 第八步：骨架模型即使没有动作也能打开。Animation Links 添加选定片段或整个库。
+ * 关联保存到当前目标 J3O。删除关联可恢复原列表，循环与重复条目不会保存。
+ * 动作资源可用 Preview on Model 选择兼容角色，预览不会写入任一文件。
+ * 第九步：需要单文件交付时使用 Export embedded J3O，原文件仍保留资源引用。
  * </pre>
  * Shift+wheel zooms around the cursor (25% to 300%); middle drag pans the view.
  * Navigation is EDT-only and does not alter saved positions or undo history.
- * V1 has non-interruptible transitions and no event tracks or layered graph editing.
- * Drag either of a node's blue ports onto another node to create an edge. Click an
- * arrow to select its transition row; each direction is a separate edge. New
+ * V1 has non-interruptible transitions and a single masked override.
+ * <pre>
+ * 第一步：声明 MoveX、MoveY 两个 Float，在 States 中选为 X/Y 混合参数。
+ * 第二步：双击剪辑或阈值列，为每个 2D 样本填写 X,Y 坐标。
+ * 第三步：声明 Armed Boolean，打开 Masked Override 选择 HoldGun 和胸椎分支。
+ * 第四步：Apply preview，调节两个 Float 并切换 Armed；Save J3O 保存。
+ * 第五步：在 Masked Override 中移除覆盖，或清空 Y 轴恢复 1D 混合。
+ * 第六步：Root Motion 选择移动根轨道及运行模式；保存 J3O 后在游戏加载自动启动。
+ * 轨道列表显示短名称，悬停查看完整路径；选择后预览以黄色标出目标及子级。
+ * 关闭选择器恢复原骨架显示，临时高亮不会写入模型。
+ * 预览用 Apply preview 后勾选 Preview root movement；关闭复选框只看原地姿势。
+ * 物理角色选择 Extract Only，在 Java 角色控制器中消费每帧位移。
+ * </pre>
+ * Drag between facing sides of horizontally separated states. The direction follows
+ * the drag; the two outer ports cannot be connected. Moving a state reroutes its edges.
+ * 第一步：从 Idle 右端拖到 Walk 左端。第二步：从 Walk 左端拖回 Idle 右端建立返回过渡。
+ * Click an arrow to select its transition row; each direction is a separate edge. New
  * edges default to ALWAYS with a 0.2-second fade and no exit-time restriction;
  * configure their condition before applying preview. Escape cancels a drag.
  * <pre>
- * 第一步：从节点左侧或右侧蓝色圆点拖到目标节点，松开后创建由起点到目标的转换箭头。
+ * 第一步：从蓝色圆点拖到另一节点异侧的圆点，松开后创建由起点到目标的过渡。
  * 第二步：Transitions 设置参数、条件和 Fade seconds；反向切换需要反向连线。
  * 第三步：点击已有箭头直接定位条件行；Ctrl+Z 撤销连线，Esc 取消未完成连线。
  * 第四步：空白处拖出选择框，Shift 增选；Delete 删除状态及其连线，Ctrl+Z 完整恢复。
@@ -86,8 +113,11 @@ public final class AnimationEditorTopComponent extends TopComponent {
     private final JLabel guidance = new JLabel();
     private final JTextField entry = new JTextField(12);
     private final DefaultTableModel parameters = model(text("Animation.Name"), text("Animation.Type"), text("Animation.Default"));
-    private final DefaultTableModel states = model(text("Animation.Name"), text("Animation.Blend_parameter"), text("Animation.Clips_separated"), text("Animation.Thresholds"), text("Animation.Loop"), "X", "Y");
-    private final DefaultTableModel edges = model(text("Animation.From"), text("Animation.To"), text("Animation.Parameter"), text("Animation.Condition"), text("Animation.Value"), text("Animation.Fade_seconds"), text("Animation.Exit_seconds_1_off"));
+    private final DefaultTableModel states = model("StateName", text("Animation.Blend_parameter"), text("Animation.Clips_separated"), text("Animation.Thresholds"), text("Animation.Loop"), "X", "Y", text("Animation.Blend_parameter_y"));
+    private Overlay overlay;
+    private RootMotion rootMotion;
+    private static final String PORTS_DATA = "jme.animationGraph.ports.v1";
+    private final DefaultTableModel edges = edgeModel();
     private final List<JTable> tables = new ArrayList<>();
     private final List<AnimationGraphComments.Box> comments = new ArrayList<>();
     private final JPanel previewPanel = new JPanel(new BorderLayout());
@@ -108,6 +138,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
     private Snapshot snapshot;
     private String savedGraph;
     private String savedComments;
+    private String savedPorts;
     private JButton undoButton;
     private JButton redoButton;
     private String activeState = "";
@@ -136,12 +167,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         setLayout(new BorderLayout(6, 6));
         setActivatedNodes(new org.openide.nodes.Node[]{data.getNodeDelegate()});
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        for (int i = 0; i < owners.size(); i++) {
-            ownerChoice.addItem(i + ": " + owners.get(i).getName() + " ("
-                    + owners.get(i).getControl(AnimComposer.class).getAnimClipsNames().size() + text("Animation.clips")
-                    + owners.get(i).getControl(AnimComposer.class).getAnimClips().stream()
-                            .mapToInt(clip -> clip.getTracks().length).max().orElse(0) + text("Animation.tracks_max"));
-        }
+        refreshOwnerChoices();
         toolbar.add(new JLabel(text("Animation.Composer")));
         toolbar.add(ownerChoice);
         ownerChoice.setToolTipText(text("Animation.More_tracks_may_cover_more_parts_See_Guide_for_track_targets_node"));
@@ -152,6 +178,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
         preference.setRenderer(AnimationEditorMessages.valueRenderer());
         JPanel playback = new JPanel(new FlowLayout(FlowLayout.LEFT));
         playback.add(button(text("Animation.Guide"), this::showGuide));
+        toolbar.add(button(text("Animation.External_links"), this::showAnimationLinks));
+        toolbar.add(button(text("Animation.Export_embedded"), this::exportEmbedded));
+        playback.add(button(text("Animation.Masked_override"), this::editOverlay));
+        toolbar.add(button(text("Animation.Root_motion"), this::editRootMotion));
         playback.add(button(text("Animation.Preview_source_clip"), this::previewSourceClip));
         playback.add(button(text("Animation.Apply_preview"), () -> applyPreview()));
         playback.add(button(text("Animation.Pause"), () -> enqueuePlayer(player -> player.setPaused(true))));
@@ -170,7 +200,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
         add(top, BorderLayout.NORTH);
         tabs.addTab(text("Animation.State_graph"), new JScrollPane(canvas));
         tabs.addTab(text("Animation.Parameters"), tablePanel(parameters, new Object[]{text("Animation.Parameter"), "FLOAT", "0"}));
-        tabs.addTab(text("Animation.States_1D_blend"), tablePanel(states, new Object[]{text("Animation.State"), "", firstClip(), "0", "true", "40", "40"}));
+        tabs.addTab(text("Animation.States_1D_2D_blend"), tablePanel(states,
+                new Object[]{text("Animation.State"), "", firstClip(), "0", "true", "40", "40", ""}));
         tabs.addTab(text("Animation.Transitions"), tablePanel(edges, new Object[]{"", "", "", "ALWAYS", "0", "0.2", "-1"}));
         JPanel previewContainer = new JPanel(new BorderLayout());
         previewPanel.setPreferredSize(new Dimension(420, 380));
@@ -184,7 +215,18 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 app.enqueue(() -> app.showTargets(visible));
             }
         });
-        previewContainer.add(skeleton, BorderLayout.NORTH);
+        JPanel previewOptions = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        previewOptions.add(skeleton);
+        JCheckBox previewMotion = new JCheckBox(text("Animation.Preview_root_motion"));
+        previewMotion.addActionListener(event -> {
+            boolean enabled = previewMotion.isSelected();
+            if (preview != null) {
+                Preview app = preview;
+                app.enqueue(() -> app.rootMotionVisible = enabled);
+            }
+        });
+        previewOptions.add(previewMotion);
+        previewContainer.add(previewOptions, BorderLayout.NORTH);
         live.setLayout(new BoxLayout(live, BoxLayout.Y_AXIS));
         JScrollPane controls = new JScrollPane(live);
         controls.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
@@ -198,13 +240,13 @@ public final class AnimationEditorTopComponent extends TopComponent {
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tabs, previewContainer);
         split.setResizeWeight(0.60);
         add(split, BorderLayout.CENTER);
-        // Keep diagnostics on the existing bottom row, leaving more height for the graph.
+        // Leave the graph its full height by putting diagnostics in the bottom row.
         JPanel footer = new JPanel(new GridLayout(1, 2, 12, 0)) {
             @Override
             public Dimension getPreferredSize() {
                 Dimension size = super.getPreferredSize();
                 // Diagnostics use available width; JLabel clips with an ellipsis.
-                // Full text remains accessible through each label's tooltip.
+                // Put the full text in tooltips so the labels can fit in the panel.
                 return new Dimension(0, size.height);
             }
         };
@@ -269,7 +311,20 @@ public final class AnimationEditorTopComponent extends TopComponent {
         return composer.getAnimClips().stream()
                 .filter(clip -> !AnimationEditorSupport.constantTransformClip(clip))
                 .map(com.jme3.anim.AnimClip::getName).sorted().findFirst()
-                .orElseGet(() -> composer.getAnimClipsNames().stream().sorted().findFirst().orElseThrow());
+                .orElseGet(() -> composer.getAnimClipsNames().stream().sorted().findFirst().orElse(""));
+    }
+
+    private void refreshOwnerChoices() {
+        var items = new javax.swing.DefaultComboBoxModel<String>();
+        for (int i = 0; i < owners.size(); i++) {
+            Spatial model = owners.get(i);
+            AnimComposer composer = model.getControl(AnimComposer.class);
+            int tracks = composer.getAnimClips().stream().mapToInt(clip -> clip.getTracks().length).max().orElse(0);
+            items.addElement(i + ": " + model.getName() + " (" + composer.getAnimClipsNames().size()
+                    + text("Animation.clips") + tracks + text("Animation.tracks_max"));
+        }
+        items.setSelectedItem(items.getElementAt(ownerIndex));
+        ownerChoice.setModel(items);
     }
 
     private static AnimationEditorSupport.Preference parsePreference(String value) {
@@ -284,6 +339,38 @@ public final class AnimationEditorTopComponent extends TopComponent {
         return new DefaultTableModel(columns, 0);
     }
 
+    private DefaultTableModel edgeModel() {
+        return new DefaultTableModel(new String[]{text("Animation.From"), text("Animation.To"),
+            text("Animation.Parameter"), text("Animation.Condition"), text("Animation.Value"),
+            text("Animation.Fade_seconds"), text("Animation.Exit_seconds_1_off"), "SourceLeft"}, 0) {
+            @Override
+            public void addRow(Object[] values) {
+                Object[] row = Arrays.copyOf(values, 8);
+                if (row[7] == null) {
+                    int from = canvas.find(String.valueOf(row[0]));
+                    int to = canvas.find(String.valueOf(row[1]));
+                    row[7] = from >= 0 && to >= 0 && from != to
+                            && canvas.bounds(from).getCenterX() > canvas.bounds(to).getCenterX();
+                }
+                super.addRow(row);
+            }
+        };
+    }
+
+    /**
+     * Editor-only sides follow transition rows through history and J3O saves.
+     * Older graphs infer their sides once from the loaded positions.
+     * 第一步：从需要的左/右端口创建连线；第二步：移动节点只改变路径。
+     * 第三步：Save J3O 保存端口，重新打开、撤销及重做均保留连接侧。
+     */
+    private String encodePorts() {
+        StringBuilder result = new StringBuilder("1:");
+        for (int i = 0; i < edges.getRowCount(); i++) {
+            result.append(Boolean.TRUE.equals(edges.getValueAt(i, 7)) ? 'L' : 'R');
+        }
+        return result.toString();
+    }
+
     private static JButton button(String text, Runnable action) {
         JButton button = new JButton(text);
         button.addActionListener(event -> action.run());
@@ -294,9 +381,28 @@ public final class AnimationEditorTopComponent extends TopComponent {
         JTable table = new JTable(model) {
             @Override
             public javax.swing.table.TableCellEditor getCellEditor(int row, int column) {
+                if (model == states) {
+                    int stateRow = convertRowIndexToModel(row);
+                    return switch (convertColumnIndexToModel(column)) {
+                        case 0 -> stateNameEditor(stateRow);
+                        case 1 -> blendParameterEditor();
+                        case 2, 3 -> new SamplesEditor(stateRow);
+                        default -> super.getCellEditor(row, column);
+                    };
+                }
                 if (model == parameters && column == 2
                         && "BOOLEAN".equals(cell(model, row, 1))) {
                     return valueEditor(new String[]{"true", "false"});
+                }
+                if (model == states && convertColumnIndexToModel(column) == 7) {
+                    List<String> choices = new ArrayList<>();
+                    choices.add("");
+                    for (int i = 0; i < parameters.getRowCount(); ++i) {
+                        if ("FLOAT".equals(cell(parameters, i, 1))) {
+                            choices.add(cell(parameters, i, 0));
+                        }
+                    }
+                    return new DefaultCellEditor(new JComboBox<>(choices.toArray(String[]::new)));
                 }
                 if (model == edges && column == 2) {
                     List<String> names = new ArrayList<>();
@@ -323,6 +429,20 @@ public final class AnimationEditorTopComponent extends TopComponent {
             }
 
             @Override
+            public void setValueAt(Object value, int row, int column) {
+                int field = convertColumnIndexToModel(column);
+                if (model == states && field == 0) {
+                    renameState(convertRowIndexToModel(row), value.toString());
+                } else if (model == states && field == 1) {
+                    changeBlendParameter(convertRowIndexToModel(row), value.toString());
+                } else if (model == states && field == 7) {
+                    changeBlendY(convertRowIndexToModel(row), value.toString());
+                } else {
+                    super.setValueAt(value, row, column);
+                }
+            }
+
+            @Override
             public Object getValueAt(int row, int column) {
                 Object value = super.getValueAt(row, column);
                 if (model == parameters && column == 2
@@ -332,6 +452,9 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 return value;
             }
         };
+        if (model == edges) {
+            table.removeColumn(table.getColumnModel().getColumn(7));
+        }
         tables.add(table);
         table.setDefaultRenderer(Object.class, new javax.swing.table.DefaultTableCellRenderer() {
             @Override
@@ -342,6 +465,19 @@ public final class AnimationEditorTopComponent extends TopComponent {
                         && "BOOLEAN".equals(cell(model, row, 1)))))
                         || (model == edges && column == 3) || (model == states && column == 4)) {
                     setText(AnimationEditorMessages.value(value));
+                }
+                int field = source.convertColumnIndexToModel(column);
+                if (model == states && field == 0) {
+                    setText(stateTitle(source.convertRowIndexToModel(row)));
+                }
+                if (model == states && (field == 2 || field == 3)) {
+                    String label = field == 2 ? Arrays.stream(value.toString().split("\\|"))
+                            .map(clip -> editorClipLabel(clip, clipNames())).collect(java.util.stream.Collectors.joining(" | "))
+                            : value.toString();
+                    setText(label + "  …");
+                    setToolTipText(text("Animation.Edit_samples"));
+                } else {
+                    setToolTipText(null);
                 }
                 return this;
             }
@@ -394,14 +530,574 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 table.setRowSelectionInterval(row - 1, row - 1);
             }
         }));
+        if (model == states) {
+            buttons.add(button(text("Animation.Edit_blend_y"), () -> {
+                int row = table.getSelectedRow();
+                if (row >= 0) {
+                    int column = table.convertColumnIndexToView(7);
+                    table.scrollRectToVisible(table.getCellRect(row, column, true));
+                    if (table.editCellAt(row, column) && table.getEditorComponent() instanceof JComboBox<?> choice) {
+                        choice.requestFocusInWindow();
+                        choice.showPopup();
+                    }
+                }
+            }));
+        }
         panel.add(buttons, BorderLayout.SOUTH);
         if (model == states) {
-            JLabel help = new JLabel(text("Animation.1D_blend_clips_Idle_Walk_Run_thresholds_0_1_2_Float_parameter_Spe"));
+            JLabel help = new JLabel(text("Animation.Blend_axes_help"));
             panel.add(help, BorderLayout.NORTH);
         } else if (model == edges) {
             panel.add(new JLabel(text("Animation.Top_row_wins_Exit_is_elapsed_seconds_1_disables_it_Active_fades_c")), BorderLayout.NORTH);
         }
         return panel;
+    }
+
+    private List<String> clipNames() {
+        return owner.getControl(AnimComposer.class).getAnimClipsNames().stream().sorted().toList();
+    }
+
+    private DefaultCellEditor stateNameEditor(int row) {
+        JTextField name = new JTextField();
+        return new DefaultCellEditor(name) {
+            @Override
+            public boolean stopCellEditing() {
+                if (!canNameState(row, name.getText().trim())) {
+                    name.setBackground(new Color(255, 210, 210));
+                    return false;
+                }
+                name.setText(name.getText().trim());
+                return super.stopCellEditing();
+            }
+        };
+    }
+
+    private boolean canNameState(int row, String name) {
+        if (name.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < states.getRowCount(); i++) {
+            if (i != row && cell(states, i, 0).equals(name)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void renameState(int row, String name) {
+        String previous = cell(states, row, 0);
+        if (previous.equals(name) || !canNameState(row, name)) {
+            return;
+        }
+        edit(() -> {
+            states.setValueAt(name, row, 0);
+            for (int i = 0; i < edges.getRowCount(); i++) {
+                for (int endpoint = 0; endpoint < 2; endpoint++) {
+                    if (cell(edges, i, endpoint).equals(previous)) {
+                        edges.setValueAt(name, i, endpoint);
+                    }
+                }
+            }
+            if (entry.getText().trim().equals(previous)) {
+                entry.setText(name);
+            }
+        });
+    }
+
+    private DefaultCellEditor blendParameterEditor() {
+        var choice = new JComboBox<String>();
+        choice.addItem("");
+        for (int i = 0; i < parameters.getRowCount(); i++) {
+            String type = cell(parameters, i, 1);
+            if (Type.FLOAT.name().equals(type) || Type.BOOLEAN.name().equals(type)) {
+                choice.addItem(cell(parameters, i, 0));
+            }
+        }
+        return new DefaultCellEditor(choice);
+    }
+
+    private boolean canBlend(String parameter) {
+        for (int i = 0; i < parameters.getRowCount(); i++) {
+            if (parameter.equals(cell(parameters, i, 0))) {
+                return Type.FLOAT.name().equals(cell(parameters, i, 1));
+            }
+        }
+        return false;
+    }
+
+    private void changeBlendParameter(int row, String parameter) {
+        if (parameter.equals(cell(states, row, 1))) {
+            return;
+        }
+        boolean blend = canBlend(parameter);
+        if (blend && parameter.equals(cell(states, row, 7))) {
+            status.setText(text("Animation.Two_float_axes"));
+            return;
+        }
+        if (!blend && cell(states, row, 2).contains("|")) {
+            EventQueue.invokeLater(() -> JOptionPane.showMessageDialog(this,
+                    text("Animation.Remove_blend_samples_first")));
+            return;
+        }
+        edit(() -> {
+            states.setValueAt(parameter, row, 1);
+            if (!blend) {
+                states.setValueAt("", row, 7);
+                states.setValueAt("0", row, 3);
+            }
+        });
+        showPendingParameters();
+    }
+
+    private void changeBlendY(int row, String parameter) {
+        String previous = cell(states, row, 7);
+        if (previous.equals(parameter)) {
+            return;
+        }
+        String x = cell(states, row, 1);
+        if (!parameter.isEmpty() && (!canBlend(x) || !canBlend(parameter) || parameter.equals(x))) {
+            status.setText(text("Animation.Two_float_axes"));
+            return;
+        }
+        edit(() -> {
+            states.setValueAt(parameter, row, 7);
+            if (previous.isEmpty() != parameter.isEmpty()) {
+                String[] samples = cell(states, row, 3).split("\\|", -1);
+                for (int i = 0; i < samples.length; ++i) {
+                    samples[i] = parameter.isEmpty() ? Integer.toString(i) : samples[i] + ",0";
+                }
+                states.setValueAt(String.join("|", samples), row, 3);
+            }
+        });
+        showPendingParameters();
+    }
+
+    private void editOverlay() {
+        List<String> switches = new ArrayList<>();
+        for (int i = 0; i < parameters.getRowCount(); ++i) {
+            if ("BOOLEAN".equals(cell(parameters, i, 1))) {
+                switches.add(cell(parameters, i, 0));
+            }
+        }
+        var composer = owner.getControl(AnimComposer.class);
+        List<String> clips = clipNames().stream().filter(name ->
+                Arrays.stream(composer.getAnimClip(name).getTracks()).anyMatch(track ->
+                        track instanceof TransformTrack transform && transform.getTarget() instanceof Joint)).toList();
+        if ((switches.isEmpty() || clips.isEmpty()) && overlay == null) {
+            status.setText(text("Animation.Overlay_requires_inputs"));
+            return;
+        }
+        var selectedSwitch = new JComboBox<>(switches.toArray(String[]::new));
+        var selectedClip = new JComboBox<>(clips.toArray(String[]::new));
+        var fade = new JTextField(overlay == null ? "0.15" : Float.toString(overlay.fade));
+        if (overlay != null) {
+            selectedSwitch.setSelectedItem(overlay.parameter);
+            selectedClip.setSelectedItem(overlay.clip);
+        }
+        var skeleton = new javax.swing.tree.DefaultMutableTreeNode(text("Animation.Mask_bones"));
+        var tree = new JTree(skeleton);
+        tree.setRootVisible(false);
+        var selectedRoots = new ArrayList<javax.swing.tree.TreePath>();
+        var nodes = new java.util.LinkedHashMap<String, javax.swing.tree.DefaultMutableTreeNode>();
+        Runnable refresh = () -> {
+            selectedRoots.clear();
+            nodes.clear();
+            skeleton.removeAllChildren();
+            var clip = composer.getAnimClip((String) selectedClip.getSelectedItem());
+            if (clip != null) {
+                for (var track : clip.getTracks()) {
+                    if (track instanceof TransformTrack transform && transform.getTarget() instanceof Joint joint) {
+                        addMaskJoint(joint, skeleton, nodes);
+                    }
+                }
+            }
+            ((javax.swing.tree.DefaultTreeModel) tree.getModel()).reload();
+            for (var item : nodes.entrySet()) {
+                var path = new javax.swing.tree.TreePath(item.getValue().getPath());
+                tree.expandPath(path);
+                if (overlay != null && overlay.joints.contains(item.getKey())) {
+                    selectedRoots.add(path);
+                }
+            }
+            tree.setSelectionPaths(selectedRoots.toArray(javax.swing.tree.TreePath[]::new));
+        };
+        selectedClip.addActionListener(event -> refresh.run());
+        refresh.run();
+        var form = new JPanel(new GridLayout(3, 2, 6, 4));
+        form.add(new JLabel(text("Animation.Overlay_boolean")));
+        form.add(selectedSwitch);
+        form.add(new JLabel(text("Animation.Overlay_clip")));
+        form.add(selectedClip);
+        form.add(new JLabel(text("Animation.Overlay_fade_seconds")));
+        form.add(fade);
+        var panel = new JPanel(new BorderLayout(6, 6));
+        panel.add(form, BorderLayout.NORTH);
+        var scroll = new JScrollPane(tree);
+        scroll.setPreferredSize(new Dimension(460, 260));
+        panel.add(scroll, BorderLayout.CENTER);
+        panel.add(new JLabel(text("Animation.Mask_subtrees_hint")), BorderLayout.SOUTH);
+        String[] options = {text("Animation.Apply_mask_override"), text("Animation.Remove"), text("Animation.Close_external_links")};
+        while (true) {
+            int choice = JOptionPane.showOptionDialog(this, panel, text("Animation.Masked_override"),
+                    JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+            if (choice == 1) {
+                edit(() -> overlay = null);
+                showPendingParameters();
+                return;
+            }
+            if (choice != 0) {
+                return;
+            }
+            try {
+                var paths = tree.getSelectionPaths();
+                float seconds = Float.parseFloat(fade.getText().trim());
+                if (paths == null || selectedSwitch.getSelectedItem() == null
+                        || selectedClip.getSelectedItem() == null || !Float.isFinite(seconds) || seconds < 0) {
+                    throw new IllegalArgumentException(text("Animation.Overlay_requires_inputs"));
+                }
+                List<String> masks = Arrays.stream(paths)
+                        .map(path -> (javax.swing.tree.DefaultMutableTreeNode) path.getLastPathComponent())
+                        .map(node -> ((MaskJoint) node.getUserObject()).path()).toList();
+                edit(() -> overlay = new Overlay((String) selectedSwitch.getSelectedItem(),
+                        (String) selectedClip.getSelectedItem(), seconds, masks));
+                showPendingParameters();
+                return;
+            } catch (IllegalArgumentException invalid) {
+                JOptionPane.showMessageDialog(this, invalid.getMessage());
+            }
+        }
+    }
+
+    private void editRootMotion() {
+        var candidates = new java.util.LinkedHashMap<String, RootTrack>();
+        var composer = owner.getControl(AnimComposer.class);
+        for (int row = 0; row < states.getRowCount(); ++row) {
+            for (String name : cell(states, row, 2).split("\\|")) {
+                var clip = composer.getAnimClip(name.trim());
+                if (clip == null) {
+                    continue;
+                }
+                for (var track : clip.getTracks()) {
+                    if (track instanceof TransformTrack transform) {
+                        if (transform.getTarget() instanceof Joint joint) {
+                            String path = AnimationGraph.jointPath(joint);
+                            candidates.putIfAbsent("joint:" + path, new RootTrack(path, true));
+                        } else if (transform.getTarget() instanceof Spatial spatial) {
+                            String path = AnimationGraph.nodePath(owner, spatial);
+                            if (path != null) {
+                                candidates.putIfAbsent("node:" + path, new RootTrack(path, false));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (candidates.isEmpty() && rootMotion == null) {
+            status.setText(text("Animation.Root_motion_requires_track"));
+            return;
+        }
+        var source = new JComboBox<>(candidates.values().toArray(RootTrack[]::new));
+        source.setPrototypeDisplayValue(new RootTrack("MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM", true));
+        source.setMaximumRowCount(12);
+        source.setRenderer(new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list,
+                    Object value, int index, boolean selected, boolean focused) {
+                super.getListCellRendererComponent(list, value, index, selected, focused);
+                setToolTipText(value instanceof RootTrack track ? track.hint() : null);
+                return this;
+            }
+        });
+        var automatic = new JCheckBox(text("Animation.Root_motion_auto"), rootMotion == null || rootMotion.autoApply);
+        if (rootMotion != null) {
+            source.setSelectedItem(new RootTrack(rootMotion.path, rootMotion.joint));
+        }
+        Runnable highlight = () -> {
+            RootTrack track = (RootTrack) source.getSelectedItem();
+            source.setToolTipText(track == null ? null : track.hint());
+            Preview app = preview;
+            if (app != null) {
+                app.enqueue(() -> app.focusRootTrack(track));
+            }
+        };
+        source.addActionListener(event -> highlight.run());
+        highlight.run();
+        var form = new JPanel(new GridLayout(0, 1, 0, 5));
+        form.add(new JLabel(text("Animation.Root_motion_track")));
+        form.add(source);
+        form.add(automatic);
+        form.add(new JLabel(text("Animation.Root_motion_consumer_hint")));
+        String[] options = {text("Animation.Apply_mask_override"), text("Animation.Disable_root_motion"),
+            text("Animation.Close_external_links")};
+        try {
+            while (true) {
+                int choice = JOptionPane.showOptionDialog(this, form, text("Animation.Root_motion"),
+                        JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+                if (choice == 1) {
+                    edit(() -> rootMotion = null);
+                    showPendingParameters();
+                    return;
+                }
+                if (choice != 0) {
+                    return;
+                }
+                if (source.getSelectedItem() instanceof RootTrack track) {
+                    if (!track.joint() && ".".equals(track.path()) && automatic.isSelected()) {
+                        JOptionPane.showMessageDialog(this, text("Animation.Root_motion_needs_child"));
+                        continue;
+                    }
+                    edit(() -> rootMotion = new RootMotion(track.path(), track.joint(), automatic.isSelected()));
+                    showPendingParameters();
+                    return;
+                }
+                JOptionPane.showMessageDialog(this, text("Animation.Root_motion_requires_track"));
+            }
+        } finally {
+            Preview app = preview;
+            if (app != null) {
+                app.enqueue(() -> app.focusRootTrack(null));
+            }
+        }
+    }
+
+    private record RootTrack(String path, boolean joint) {
+        @Override
+        public String toString() {
+            String name = path.substring(path.lastIndexOf('/') + 1);
+            if (name.length() > 45) {
+                name = name.substring(0, 42) + "...";
+            }
+            return text(joint ? "Animation.Root_motion_joint" : "Animation.Root_motion_node") + " " + name;
+        }
+
+        String hint() {
+            return text(joint ? "Animation.Root_motion_joint" : "Animation.Root_motion_node") + " " + path;
+        }
+    }
+
+    private static javax.swing.tree.DefaultMutableTreeNode addMaskJoint(Joint joint,
+            javax.swing.tree.DefaultMutableTreeNode root,
+            Map<String, javax.swing.tree.DefaultMutableTreeNode> nodes) {
+        String path = AnimationGraph.jointPath(joint);
+        var found = nodes.get(path);
+        if (found != null) {
+            return found;
+        }
+        var parent = joint.getParent() == null ? root : addMaskJoint(joint.getParent(), root, nodes);
+        var node = new javax.swing.tree.DefaultMutableTreeNode(new MaskJoint(joint.getName(), path));
+        parent.add(node);
+        nodes.put(path, node);
+        return node;
+    }
+
+    private record MaskJoint(String name, String path) {
+        @Override
+        public String toString() {
+            return name == null || name.isBlank() ? "(root)" : name;
+        }
+    }
+
+    private void applySamples(int row, Samples samples) {
+        edit(() -> {
+            states.setValueAt(samples.clips(), row, 2);
+            states.setValueAt(samples.thresholds(), row, 3);
+        });
+        showPendingParameters();
+    }
+
+    private final class SamplesEditor extends AbstractCellEditor implements javax.swing.table.TableCellEditor {
+        private final int row;
+
+        private SamplesEditor(int row) {
+            this.row = row;
+        }
+
+        @Override
+        public Component getTableCellEditorComponent(JTable table, Object value, boolean selected, int viewRow, int column) {
+            JButton open = button(text("Animation.Edit_samples"), () -> {
+                cancelCellEditing();
+                var panel = new StateSamplesPanel(clipNames(), canBlend(cell(states, row, 1)),
+                        cell(states, row, 2), cell(states, row, 3), !cell(states, row, 7).isEmpty(),
+                        data.getPrimaryFile().getName());
+                while (JOptionPane.showConfirmDialog(table, panel, text("Animation.Edit_samples"),
+                        JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
+                    try {
+                        applySamples(row, panel.samples());
+                        break;
+                    } catch (IllegalArgumentException invalid) {
+                        JOptionPane.showMessageDialog(table, invalid.getMessage());
+                    }
+                }
+            });
+            EventQueue.invokeLater(() -> {
+                if (open.isShowing() && table.getEditorComponent() == open) {
+                    open.doClick(0);
+                }
+            });
+            return open;
+        }
+
+        @Override
+        public Object getCellEditorValue() {
+            return null;
+        }
+
+        @Override
+        public boolean stopCellEditing() {
+            cancelCellEditing();
+            return true;
+        }
+    }
+
+    record Samples(String clips, String thresholds) {
+    }
+
+    static final class StateSamplesPanel extends JPanel {
+        private final List<String> available;
+        private final java.util.Map<String, String> labels;
+        private final boolean blend;
+        private final boolean twoDimensional;
+        private final List<SampleRow> samples = new ArrayList<>();
+        private final JPanel rows = new JPanel(new GridBagLayout());
+        private final JButton add;
+
+        StateSamplesPanel(List<String> available, boolean blend, String clips, String thresholds) {
+            this(available, blend, clips, thresholds, false);
+        }
+
+        StateSamplesPanel(List<String> available, boolean blend, String clips, String thresholds, boolean twoDimensional) {
+            this(available, blend, clips, thresholds, twoDimensional, null);
+        }
+
+        StateSamplesPanel(List<String> available, boolean blend, String clips, String thresholds, boolean twoDimensional,
+                String localAssetName) {
+            super(new BorderLayout(0, 6));
+            this.available = available;
+            labels = linkedClipChoices(available, localAssetName).stream().collect(java.util.stream.Collectors.toMap(
+                    LinkedClipChoice::id, LinkedClipChoice::label));
+            this.blend = blend;
+            this.twoDimensional = twoDimensional;
+            add = button(text("Animation.Add_clip_sample"), () -> addSample(null, nextThreshold()));
+            var scroll = new JScrollPane(rows);
+            scroll.setPreferredSize(new Dimension(460, 200));
+            add(scroll, BorderLayout.CENTER);
+            add(add, BorderLayout.SOUTH);
+            add(new JLabel(text(twoDimensional ? "Animation.Blend_sample_xy"
+                    : blend ? "Animation.Blend_sample_columns" : "Animation.Single_clip_sample")),
+                    BorderLayout.NORTH);
+            String[] names = clips.split("\\|", -1);
+            String[] values = thresholds.split("\\|", -1);
+            for (int i = 0; i < names.length; i++) {
+                addSample(names[i].isEmpty() ? null : names[i], i < values.length ? values[i] : "");
+            }
+        }
+
+        private void addSample(String clip, String threshold) {
+            var choice = new JComboBox<>(available.toArray(String[]::new));
+            var renderer = new DefaultListCellRenderer();
+            choice.setRenderer((list, value, index, selected, focused) -> renderer
+                    .getListCellRendererComponent(list, labels.getOrDefault(value, value), index, selected, focused));
+            if (clip != null && !available.contains(clip)) {
+                choice.addItem(clip);
+            }
+            if (clip != null) {
+                choice.setSelectedItem(clip);
+            }
+            var value = new JTextField(threshold, 8);
+            value.setToolTipText(text("Animation.Thresholds"));
+            var sample = new SampleRow(choice, value);
+            samples.add(sample);
+            rebuildRows();
+        }
+
+        private String nextThreshold() {
+            if (twoDimensional) {
+                return "0,0";
+            }
+            try {
+                double last = Float.parseFloat(samples.getLast().threshold().getText().trim());
+                return Float.toString((float) (last + 1d));
+            } catch (NumberFormatException invalid) {
+                return "";
+            }
+        }
+
+        private void rebuildRows() {
+            rows.removeAll();
+            for (int i = 0; i < samples.size(); i++) {
+                SampleRow sample = samples.get(i);
+                var position = new GridBagConstraints();
+                position.gridy = i;
+                position.weightx = 1;
+                position.fill = GridBagConstraints.HORIZONTAL;
+                rows.add(sample.clip(), position);
+                position.weightx = 0;
+                if (blend) {
+                    rows.add(sample.threshold(), position);
+                }
+                var remove = button(text("Animation.Remove"), () -> {
+                    samples.remove(sample);
+                    rebuildRows();
+                });
+                remove.setEnabled(samples.size() > 1);
+                rows.add(remove, position);
+            }
+            var remaining = new GridBagConstraints();
+            remaining.gridy = samples.size();
+            remaining.weighty = 1;
+            rows.add(Box.createGlue(), remaining);
+            add.setEnabled(blend && !available.isEmpty());
+            rows.revalidate();
+            rows.repaint();
+        }
+
+        Samples samples() {
+            if (!blend && samples.size() > 1) {
+                throw new IllegalArgumentException(text("Animation.Remove_blend_samples_first"));
+            }
+            var clips = new ArrayList<String>();
+            var thresholds = new ArrayList<String>();
+            float previous = Float.NEGATIVE_INFINITY;
+            var coordinates = new java.util.HashSet<String>();
+            for (SampleRow row : samples) {
+                String clip = (String) row.clip().getSelectedItem();
+                if (clip == null || !available.contains(clip)) {
+                    throw new IllegalArgumentException(text("Animation.Select_available_clip"));
+                }
+                clips.add(clip);
+                if (twoDimensional) {
+                    String[] pair = row.threshold().getText().split(",", -1);
+                    if (pair.length != 2) {
+                        throw new IllegalArgumentException(text("Animation.Unique_sample_xy"));
+                    }
+                    float x = Float.parseFloat(pair[0].trim());
+                    float y = Float.parseFloat(pair[1].trim());
+                    String xy = (x == 0 ? 0f : x) + "," + (y == 0 ? 0f : y);
+                    if (!Float.isFinite(x) || !Float.isFinite(y) || !coordinates.add(xy)) {
+                        throw new IllegalArgumentException(text("Animation.Unique_sample_xy"));
+                    }
+                    thresholds.add(xy);
+                    continue;
+                }
+                float value = 0;
+                if (blend) {
+                    try {
+                        value = Float.parseFloat(row.threshold().getText().trim());
+                    } catch (NumberFormatException invalid) {
+                        value = Float.NaN;
+                    }
+                    if (!Float.isFinite(value) || value <= previous) {
+                        throw new IllegalArgumentException(text("Animation.Increasing_sample_thresholds"));
+                    }
+                }
+                thresholds.add(Float.toString(value));
+                previous = value;
+            }
+            return new Samples(String.join("|", clips), String.join("|", thresholds));
+        }
+
+        private record SampleRow(JComboBox<String> clip, JTextField threshold) {
+        }
     }
 
     private static DefaultCellEditor valueEditor(Object[] values) {
@@ -427,7 +1123,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         live.repaint();
     }
 
-    /** Keep preview controls top-aligned; extra viewport height must not stretch parameter rows. */
+    /** Leaves extra space below the preview controls so the parameter rows keep their height. */
     private void compactLiveRows() {
         int nameWidth = 0;
         for (Component component : live.getComponents()) {
@@ -457,23 +1153,39 @@ public final class AnimationEditorTopComponent extends TopComponent {
             states.setRowCount(0);
             edges.setRowCount(0);
             comments.clear();
+            overlay = null;
+            rootMotion = null;
             canvas.clearSelection();
             savedGraph = owner.getUserData(AnimationGraph.USER_DATA);
             savedComments = owner.getUserData(AnimationGraphComments.USER_DATA);
+            savedPorts = owner.getUserData(PORTS_DATA);
             comments.addAll(AnimationGraphComments.decode(savedComments));
             AnimationGraph graph;
             if (savedGraph == null) {
                 List<State> initial = new ArrayList<>();
                 List<String> clips = new ArrayList<>(owner.getControl(AnimComposer.class).getAnimClipsNames());
-                java.util.Collections.sort(clips);
+                // Give existing local clips first choice of the short state names.
+                clips.sort(java.util.Comparator.comparing((String clip) -> linkedAsset(clip) != null)
+                        .thenComparing(java.util.Comparator.naturalOrder()));
+                Set<String> names = new java.util.HashSet<>();
+                String initialEntry = "";
+                String entryClip = firstClip();
                 for (int i = 0; i < clips.size(); i++) {
-                    initial.add(new State(clips.get(i), "", List.of(clips.get(i)), new float[]{0}, true,
+                    String clip = clips.get(i);
+                    String name = uniqueStateName(editorClipLabel(clip, clips), names);
+                    names.add(name);
+                    if (clip.equals(entryClip)) {
+                        initialEntry = name;
+                    }
+                    initial.add(new State(name, "", List.of(clip), new float[]{0}, true,
                             40 + (i % 3) * 200, 40 + (i / 3) * 110));
                 }
-                graph = new AnimationGraph(firstClip(), List.of(), initial, List.of());
+                graph = new AnimationGraph(initialEntry, List.of(), initial, List.of());
             } else {
                 graph = AnimationGraph.decode(savedGraph);
             }
+            overlay = graph.overlay;
+            rootMotion = graph.rootMotion;
             entry.setText(graph.entry);
             for (Parameter p : graph.parameters) {
                 parameters.addRow(new Object[]{p.name, p.type.name(), p.initial});
@@ -481,12 +1193,23 @@ public final class AnimationEditorTopComponent extends TopComponent {
             for (State s : graph.states) {
                 List<String> thresholds = new ArrayList<>();
                 for (int i = 0; i < s.clips.size(); i++) {
-                    thresholds.add(Float.toString(s.threshold(i)));
+                    thresholds.add(s.isTwoDimensional() ? s.threshold(i) + "," + s.sampleY(i)
+                            : Float.toString(s.threshold(i)));
                 }
-                states.addRow(new Object[]{s.name, s.parameter, String.join("|", s.clips), String.join("|", thresholds), s.loop, s.x, s.y});
+                states.addRow(new Object[]{s.name, s.parameter, String.join("|", s.clips),
+                    String.join("|", thresholds), s.loop, s.x, s.y, s.parameterY});
             }
             for (Transition t : graph.transitions) {
                 edges.addRow(new Object[]{t.from, t.to, t.parameter, t.operator.name(), t.value, t.duration, t.exitTime});
+            }
+            if (savedPorts != null && savedPorts.startsWith("1:")
+                    && savedPorts.length() == edges.getRowCount() + 2) {
+                for (int i = 0; i < edges.getRowCount(); i++) {
+                    char side = savedPorts.charAt(i + 2);
+                    if (side == 'L' || side == 'R') {
+                        edges.setValueAt(side == 'L', i, 7);
+                    }
+                }
             }
             dirty = false;
             undo.discardAllEdits();
@@ -538,14 +1261,25 @@ public final class AnimationEditorTopComponent extends TopComponent {
             String[] samples = cell(states, i, 2).split("\\|", -1);
             String[] thresholdText = cell(states, i, 3).split("\\|", -1);
             float[] thresholds = new float[thresholdText.length];
+            String parameterY = cell(states, i, 7);
+            float[] samplesY = parameterY.isEmpty() ? new float[0] : new float[thresholds.length];
             for (int j = 0; j < thresholds.length; j++) {
-                thresholds[j] = Float.parseFloat(thresholdText[j].trim());
+                if (parameterY.isEmpty()) {
+                    thresholds[j] = Float.parseFloat(thresholdText[j].trim());
+                } else {
+                    String[] pair = thresholdText[j].split(",", -1);
+                    if (pair.length != 2) {
+                        throw new IllegalArgumentException(text("Animation.Unique_sample_xy"));
+                    }
+                    thresholds[j] = Float.parseFloat(pair[0].trim());
+                    samplesY[j] = Float.parseFloat(pair[1].trim());
+                }
             }
             String loop = cell(states, i, 4);
             if (!loop.equals("true") && !loop.equals("false")) {
                 throw new IllegalArgumentException(text("Animation.Loop_must_be_true_or_false"));
             }
-            ss.add(new State(cell(states, i, 0), cell(states, i, 1), Arrays.asList(samples), thresholds,
+            ss.add(new State(cell(states, i, 0), cell(states, i, 1), parameterY, Arrays.asList(samples), thresholds, samplesY,
                     Boolean.parseBoolean(loop), number(states, i, 5), number(states, i, 6)));
         }
         for (int i = 0; i < edges.getRowCount(); i++) {
@@ -583,7 +1317,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             ts.add(new Transition(cell(edges, i, 0), cell(edges, i, 1), cell(edges, i, 2),
                     Operator.valueOf(cell(edges, i, 3)), number(edges, i, 4), number(edges, i, 5), number(edges, i, 6)));
         }
-        AnimationGraph result = new AnimationGraph(entry.getText().trim(), ps, ss, ts);
+        AnimationGraph result = new AnimationGraph(entry.getText().trim(), ps, ss, ts, overlay, rootMotion);
         result.validate(owner.getControl(AnimComposer.class));
         return result;
     }
@@ -725,6 +1459,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
     private final class Snapshot {
         private final List<AnimationGraphComments.Box> boxes = List.copyOf(comments);
+        private final Overlay maskedOverride = overlay;
+        private final RootMotion motion = rootMotion;
         private final Object[][][] rows = new Object[3][][];
         private final String entryText = entry.getText();
         private final Object preferred = preference.getSelectedItem();
@@ -755,6 +1491,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
             preference.setSelectedItem(preferred);
             comments.clear();
             comments.addAll(boxes);
+            overlay = maskedOverride;
+            rootMotion = motion;
             canvas.clearSelection();
             snapshot = this;
             dirty = true;
@@ -764,7 +1502,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
         boolean sameContent(Snapshot other) {
             return Arrays.deepEquals(rows, other.rows) && entryText.equals(other.entryText)
-                    && java.util.Objects.equals(preferred, other.preferred) && boxes.equals(other.boxes);
+                    && java.util.Objects.equals(preferred, other.preferred) && boxes.equals(other.boxes)
+                    && maskedOverride == other.maskedOverride && motion == other.motion;
         }
     }
 
@@ -857,13 +1596,16 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
     /** 第一步：先预览源片段；第二步：再创建状态与条件，Apply preview 检查图。 */
     private void previewSourceClip() {
-        Object clip = JOptionPane.showInputDialog(this, text("Animation.Select_a_source_clip_independent_of_the_graph"), text("Animation.Preview_source_clip"),
-                JOptionPane.PLAIN_MESSAGE, null, owner.getControl(AnimComposer.class).getAnimClipsNames().toArray(), firstClip());
-        if (clip == null) {
-            return;
+        LinkedClipChoice clip = chooseEditorClip(clipNames(), "Animation.Select_a_source_clip_independent_of_the_graph",
+                "Animation.Preview_source_clip");
+        if (clip != null) {
+            previewClip(clip.id());
         }
+    }
+
+    private void previewClip(String clip) {
         AnimationGraph definition = new AnimationGraph(text("Animation.Source_clip"), List.of(),
-                List.of(new State(text("Animation.Source_clip"), "", List.of(clip.toString()), new float[]{0}, true, 0, 0)), List.of());
+                List.of(new State(text("Animation.Source_clip"), "", List.of(clip), new float[]{0}, true, 0, 0)), List.of());
         applyPreview(definition);
     }
 
@@ -880,6 +1622,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
     private void applyPreview() {
         if (emptyDraft()) {
+            applyPreview(null);
             return;
         }
         try {
@@ -893,6 +1636,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         if (preview == null || disposed) {
             return;
         }
+        AnimationGraph previewDefinition = previewDefaults(definition);
         try {
             Spatial selected = owner;
             Preview app = preview;
@@ -906,13 +1650,13 @@ public final class AnimationEditorTopComponent extends TopComponent {
                         if (!disposed && revision == previewRevision) {
                             app.enqueue(() -> {
                                 try {
-                                    app.install(clone.model(), clone.owner(), definition);
+                                    app.install(clone.model(), clone.owner(), previewDefinition);
                                     EventQueue.invokeLater(() -> {
                                         if (!disposed && revision == previewRevision) {
                                             setInputsEnabled(live, true);
                                         }
                                     });
-                                } catch (Exception exception) {
+                                } catch (Exception | AssertionError exception) {
                                     app.message = AnimationEditorMessages.failure(exception);
                                     AnimationEditorSupport.error(exception);
                                 }
@@ -925,13 +1669,13 @@ public final class AnimationEditorTopComponent extends TopComponent {
             });
             live.removeAll();
             live.add(new JLabel(text("Animation.Live_parameters_preview_only_reapply_preview_after_editing_defini")));
-            for (Parameter parameter : definition.parameters) {
+            for (Parameter parameter : previewDefinition == null ? List.<Parameter>of() : previewDefinition.parameters) {
                 JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
                 row.add(new JLabel(parameter.name));
                 if (parameter.type == Type.TRIGGER) {
                     row.add(button(text("Animation.Trigger"), () -> enqueuePlayer(p -> p.trigger(parameter.name))));
                 } else if (parameter.type == Type.BOOLEAN) {
-                    JCheckBox value = new JCheckBox(AnimationEditorMessages.value(parameter.initial != 0), parameter.initial != 0);
+                    JCheckBox value = new JCheckBox(AnimationEditorMessages.value(false));
                     value.addActionListener(e -> {
                         boolean checked = value.isSelected();
                         value.setText(AnimationEditorMessages.value(checked));
@@ -948,7 +1692,9 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 }
                 live.add(row);
                 boolean used = definition.transitions.stream().anyMatch(t -> parameter.name.equals(t.parameter))
-                        || definition.states.stream().anyMatch(s -> parameter.name.equals(s.parameter));
+                        || definition.states.stream().anyMatch(s -> parameter.name.equals(s.parameter)
+                                || parameter.name.equals(s.parameterY))
+                        || (definition.overlay != null && parameter.name.equals(definition.overlay.parameter));
                 if (!used) {
                     row.add(new JLabel(text("Animation.Not_referenced_by_a_state_or_transition_no_effect_on_animation")));
                 }
@@ -963,6 +1709,19 @@ public final class AnimationEditorTopComponent extends TopComponent {
         }
     }
 
+    // Start preview with all switches off so opening the editor cannot trigger competing transitions.
+    static AnimationGraph previewDefaults(AnimationGraph definition) {
+        if (definition == null) {
+            return null;
+        }
+        List<Parameter> parameters = definition.parameters.stream()
+                .map(value -> value.type == Type.BOOLEAN && value.initial != 0
+                        ? new Parameter(value.name, value.type, 0f) : value)
+                .toList();
+        return new AnimationGraph(definition.entry, parameters, definition.states, definition.transitions,
+                definition.overlay, definition.rootMotion);
+    }
+
     private void enqueuePlayer(java.util.function.Consumer<AnimationGraphPlayer> operation) {
         if (preview != null) {
             Preview app = preview;
@@ -975,15 +1734,17 @@ public final class AnimationEditorTopComponent extends TopComponent {
     }
 
     private void save() {
-        if (emptyDraft()) {
+        if (emptyDraft() && savedGraph == null) {
             return;
         }
         if (saving) {
             return;
         }
         try {
-            String text = graph().encode();
+            String text = states.getRowCount() == 0 ? null : graph().encode();
             String commentText = AnimationGraphComments.encode(comments);
+            String portText = encodePorts();
+            String expectedPorts = savedPorts;
             String expectedComments = savedComments;
             String expected = savedGraph;
             String preferred = preference.getSelectedItem().toString();
@@ -998,19 +1759,22 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     }
                     com.jme3.gde.core.scene.SceneApplication.getApplication().enqueue(() -> {
                         if (!java.util.Objects.equals(expected, target.getUserData(AnimationGraph.USER_DATA))
-                                || !java.util.Objects.equals(expectedComments, target.getUserData(AnimationGraphComments.USER_DATA))) {
+                                || !java.util.Objects.equals(expectedComments, target.getUserData(AnimationGraphComments.USER_DATA))
+                                || !java.util.Objects.equals(expectedPorts, target.getUserData(PORTS_DATA))) {
                             throw new IllegalStateException(text("Animation.Animation_definition_changed_elsewhere_reopen_the_editor"));
                         }
                         String previousPreference = root.getUserData(AnimationEditorSupport.PREFERENCE);
                         try {
                             target.setUserData(AnimationGraph.USER_DATA, text);
                             target.setUserData(AnimationGraphComments.USER_DATA, commentText);
+                            target.setUserData(PORTS_DATA, portText);
                             root.setUserData(AnimationEditorSupport.PREFERENCE, preferred);
                             data.setModified(true);
                             AnimationEditorSupport.saveSnapshot(data, root);
                         } catch (Exception exception) {
                             target.setUserData(AnimationGraph.USER_DATA, expected);
                             target.setUserData(AnimationGraphComments.USER_DATA, expectedComments);
+                            target.setUserData(PORTS_DATA, expectedPorts);
                             root.setUserData(AnimationEditorSupport.PREFERENCE, previousPreference);
                             throw exception;
                         }
@@ -1019,6 +1783,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     EventQueue.invokeLater(() -> {
                         savedGraph = text;
                         savedComments = commentText;
+                        savedPorts = portText;
                         dirty = false;
                         status.setText(text("Animation.Saved") + data.getPrimaryFile().getNameExt());
                     });
@@ -1036,6 +1801,422 @@ public final class AnimationEditorTopComponent extends TopComponent {
         } catch (Exception exception) {
             AnimationEditorSupport.error(exception);
         }
+    }
+
+    private void showAnimationLinks() {
+        if (saving) {
+            return;
+        }
+        try {
+            List<Link> current = AnimationLinkResolver.links(owner);
+            JList<Link> listing = new JList<>(current.toArray(Link[]::new));
+            listing.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            if (!current.isEmpty()) {
+                listing.setSelectedIndex(0);
+            }
+            String clip = text("Animation.Add_external_clip");
+            String library = text("Animation.Add_external_library");
+            String remove = text("Animation.Remove_external_link");
+            String close = text("Animation.Close_external_links");
+            String reload = text("Animation.Reload_external_links");
+            String previewModel = text("Animation.Preview_external_model");
+            String[] choices = {clip, library, remove, reload, previewModel, close};
+            int choice = JOptionPane.showOptionDialog(this, new JScrollPane(listing),
+                    text("Animation.External_links"), JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE,
+                    null, choices, clip);
+            if (choice == 2 && listing.getSelectedValue() != null) {
+                if (dirty) {
+                    JOptionPane.showMessageDialog(this, text("Animation.Save_graph_before_removing_link"),
+                            text("Animation.External_links"), JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+                List<Link> edited = new ArrayList<>(current);
+                edited.remove(listing.getSelectedValue());
+                saveLinks(current, edited);
+            } else if (choice == 0 || choice == 1) {
+                chooseSource(current, choice == 1);
+            } else if (choice == 3 && !current.isEmpty()) {
+                saveLinks(current, current);
+            } else if (choice == 4) {
+                previewOnModel();
+            }
+        } catch (Exception failure) {
+            AnimationEditorSupport.error(failure);
+        }
+    }
+
+    private Path projectAssets() throws IOException {
+        ProjectAssetManager manager = data.getLookup().lookup(ProjectAssetManager.class);
+        if (manager == null || manager.getAssetFolder() == null) {
+            throw new IOException(text("Animation.External_links_need_project"));
+        }
+        var folder = org.openide.filesystems.FileUtil.toFile(manager.getAssetFolder());
+        if (folder == null) {
+            throw new IOException(text("Animation.External_links_need_project"));
+        }
+        return folder.toPath().toRealPath();
+    }
+
+    private String assetKey(Path file) throws IOException {
+        Path base = projectAssets();
+        Path asset = file.toRealPath();
+        if (!asset.startsWith(base)) {
+            throw new IOException(text("Animation.External_links_need_project"));
+        }
+        return base.relativize(asset).toString().replace('\\', '/');
+    }
+
+    private String ownerAssetKey() throws IOException {
+        var file = org.openide.filesystems.FileUtil.toFile(data.getPrimaryFile());
+        if (file == null) {
+            throw new IOException(text("Animation.External_links_need_project"));
+        }
+        return assetKey(file.toPath());
+    }
+
+    private void chooseSource(List<Link> current, boolean library) {
+        try {
+            String chosen = chooseJ3o();
+            if (chosen == null) {
+                return;
+            }
+            Link candidate = new Link(chosen, null);
+            if (library) {
+                appendLink(current, candidate);
+                return;
+            }
+            beginLinkWork();
+            RequestProcessor.getDefault().post(() -> {
+                try {
+                    List<String> clips = AnimationLinkResolver.clipIds(
+                            data.getLookup().lookup(ProjectAssetManager.class), candidate.asset());
+                    EventQueue.invokeLater(() -> {
+                        finishLinkWork();
+                        if (disposed || clips.isEmpty()) {
+                            return;
+                        }
+                        String clip = chooseLinkedClip(clips, text("Animation.External_links"));
+                        if (clip != null) {
+                            appendLink(current, new Link(candidate.asset(), clip));
+                        }
+                    });
+                    if (clips.isEmpty()) {
+                        AnimationEditorSupport.error(new IOException(text("Animation.No_external_clips")));
+                    }
+                } catch (Exception failure) {
+                    AnimationEditorSupport.error(failure);
+                    EventQueue.invokeLater(this::finishLinkWork);
+                }
+            });
+        } catch (Exception failure) {
+            AnimationEditorSupport.error(failure);
+        }
+    }
+
+    private String chooseJ3o() throws IOException {
+        JFileChooser chooser = new JFileChooser(projectAssets().toFile());
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("J3O", "j3o"));
+        return chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION
+                ? assetKey(chooser.getSelectedFile().toPath()) : null;
+    }
+
+    private String chooseLinkedClip(List<String> clips, String title) {
+        var choices = linkedClipChoices(clips);
+        var selected = (LinkedClipChoice) JOptionPane.showInputDialog(this, text("Animation.Add_external_clip"),
+                title, JOptionPane.PLAIN_MESSAGE, null, choices.toArray(), choices.get(0));
+        return selected == null ? null : selected.id();
+    }
+
+    // Display the asset name in the picker, while keeping the resolver ID for persistence.
+    static List<LinkedClipChoice> linkedClipChoices(List<String> ids) {
+        return linkedClipChoices(ids, null);
+    }
+
+    private static List<LinkedClipChoice> linkedClipChoices(List<String> ids, String localAssetName) {
+        List<LinkedClipChoice> choices = new ArrayList<>();
+        for (String id : ids) {
+            choices.add(new LinkedClipChoice(id, clipLabel(id, ids, localAssetName)));
+        }
+        var counts = choices.stream().collect(java.util.stream.Collectors.groupingBy(
+                LinkedClipChoice::label, java.util.stream.Collectors.counting()));
+        return choices.stream().map(choice -> counts.get(choice.label()) == 1 ? choice
+                : new LinkedClipChoice(choice.id(), choice.label() + " (" + decodeClipLabel(choice.id()) + ")")).toList();
+    }
+
+    private static String linkedAsset(String id) {
+        int separator = id.indexOf('#');
+        if (separator <= 0 || id.indexOf('#', separator + 1) < 0) {
+            return null;
+        }
+        String asset = decodeClipLabel(id.substring(0, separator));
+        return asset.toLowerCase(java.util.Locale.ROOT).endsWith(".j3o") ? asset : null;
+    }
+
+    /** 第一步：关联 Idle.j3o，再添加 Clip State 显示 Idle。第二步：保存仍绑定原剪辑 ID。 */
+    private static String clipLabel(String id, List<String> ids, String localAssetName) {
+        String asset = linkedAsset(id);
+        if (asset == null) {
+            if (localAssetName != null && !id.isEmpty() && ids.contains(id)
+                    && ids.stream().filter(candidate -> linkedAsset(candidate) == null).limit(2).count() == 1) {
+                return localAssetName;
+            }
+            return id;
+        }
+        String name = asset.substring(asset.lastIndexOf('/') + 1, asset.length() - 4);
+        boolean multiple = ids.stream().filter(candidate -> asset.equals(linkedAsset(candidate)))
+                .limit(2).count() > 1;
+        return multiple ? name + " — " + decodeClipLabel(id.split("#", 3)[2]) : name;
+    }
+
+    private String editorClipLabel(String id, List<String> ids) {
+        return clipLabel(id, ids, data.getPrimaryFile().getName());
+    }
+
+    private LinkedClipChoice chooseEditorClip(List<String> clips, String message, String title) {
+        if (clips.isEmpty()) {
+            return null;
+        }
+        var choices = linkedClipChoices(clips, data.getPrimaryFile().getName());
+        String initial = firstClip();
+        return (LinkedClipChoice) JOptionPane.showInputDialog(this, text(message), text(title),
+                JOptionPane.PLAIN_MESSAGE, null, choices.toArray(),
+                choices.stream().filter(choice -> choice.id().equals(initial)).findFirst().orElse(null));
+    }
+
+    private static String uniqueStateName(String base, Set<String> names) {
+        String name = base;
+        for (int suffix = 2; names.contains(name); suffix++) {
+            name = base + " " + suffix;
+        }
+        return name;
+    }
+
+    private String stateTitle(int row) {
+        String name = cell(states, row, 0);
+        String clip = cell(states, row, 2).split("\\|", 2)[0];
+        if (!clip.isEmpty() && name.startsWith(clip)) {
+            String suffix = name.substring(clip.length());
+            if (suffix.isEmpty() || suffix.matches(" [0-9]+")) {
+                return editorClipLabel(clip, clipNames()) + suffix;
+            }
+        }
+        return name;
+    }
+
+    private static String decodeClipLabel(String encoded) {
+        try {
+            return java.net.URLDecoder.decode(encoded.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException invalidEscape) {
+            return encoded;
+        }
+    }
+
+    record LinkedClipChoice(String id, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private void previewOnModel() throws IOException {
+        String destination = chooseJ3o();
+        if (destination == null) {
+            return;
+        }
+        String source = ownerAssetKey();
+        if (source.equals(destination)) {
+            previewSourceClip();
+            return;
+        }
+        var manager = data.getLookup().lookup(ProjectAssetManager.class);
+        beginLinkWork();
+        RequestProcessor.getDefault().post(() -> {
+            try {
+                List<String> clips = AnimationLinkResolver.clipIds(manager, source);
+                if (clips.isEmpty()) {
+                    throw new IOException(text("Animation.No_external_clips"));
+                }
+                EventQueue.invokeLater(() -> {
+                    finishLinkWork();
+                    if (disposed) {
+                        return;
+                    }
+                    String choice = chooseLinkedClip(clips, text("Animation.Preview_external_model"));
+                    if (choice != null) {
+                        loadPreviewModel(manager, destination, new Link(source, choice));
+                    }
+                });
+            } catch (Exception failure) {
+                AnimationEditorSupport.error(failure);
+                EventQueue.invokeLater(this::finishLinkWork);
+            }
+        });
+    }
+
+    private void loadPreviewModel(ProjectAssetManager manager, String destination, Link clip) {
+        Preview app = preview;
+        if (app == null) {
+            return;
+        }
+        int revision = ++previewRevision;
+        beginLinkWork();
+        RequestProcessor.getDefault().post(() -> {
+            try {
+                Spatial model = manager.loadModel(destination);
+                var tracks = AnimationLinkResolver.validate(manager, destination, model, List.of(clip));
+                AnimComposer composer = model.getControl(AnimComposer.class);
+                if (composer == null) {
+                    composer = new AnimComposer();
+                    model.addControl(composer);
+                }
+                composer.setLinkedAnimClips(tracks);
+                String state = text("Animation.Source_clip");
+                AnimationGraph graph = new AnimationGraph(state, List.of(), List.of(
+                        new State(state, "", List.of(clip.clip()), new float[]{0}, true, 0, 0)), List.of());
+                EventQueue.invokeLater(() -> {
+                    if (!disposed && revision == previewRevision) {
+                        app.enqueue(() -> app.install(model, model, graph));
+                    }
+                });
+            } catch (Exception failure) {
+                AnimationEditorSupport.error(failure);
+            } finally {
+                EventQueue.invokeLater(this::finishLinkWork);
+            }
+        });
+    }
+
+    private void appendLink(List<Link> current, Link link) {
+        List<Link> edited = new ArrayList<>(current);
+        edited.add(link);
+        saveLinks(current, edited);
+    }
+
+    private void beginLinkWork() {
+        saving = true;
+        setInputsEnabled(this, false);
+        status.setText(text("Animation.Loading_external_links"));
+    }
+
+    private void finishLinkWork() {
+        saving = false;
+        setInputsEnabled(this, true);
+        updateHistoryButtons();
+    }
+
+    private void saveLinks(List<Link> expected, List<Link> revised) {
+        Spatial target = owner;
+        beginLinkWork();
+        RequestProcessor.getDefault().post(() -> {
+            try {
+                String asset = ownerAssetKey();
+                if (data.loadAsset() != root) {
+                    throw new IOException(text("Animation.Model_was_reloaded_reopen_the_animation_editor_before_saving"));
+                }
+                var manager = data.getLookup().lookup(ProjectAssetManager.class);
+                String added = com.jme3.gde.core.scene.SceneApplication.getApplication().enqueue(() -> {
+                    if (!AnimationLinkResolver.links(target).equals(expected)) {
+                        throw new IOException(text("Animation.Animation_definition_changed_elsewhere_reopen_the_editor"));
+                    }
+                    AnimComposer composer = target.getControl(AnimComposer.class);
+                    var old = new ArrayList<>(composer.getAnimClips());
+                    old.removeAll(composer.getEmbeddedAnimClips());
+                    var bound = AnimationLinkResolver.validate(manager, asset, target, revised);
+                    composer.setLinkedAnimClips(bound);
+                    try {
+                        String existingGraph = target.getUserData(AnimationGraph.USER_DATA);
+                        if (existingGraph != null) {
+                            AnimationGraph.decode(existingGraph).validate(composer);
+                        }
+                        AnimationLinkResolver.writeLinks(target, revised);
+                        AnimationEditorSupport.saveSnapshot(data, root);
+                    } catch (Exception failure) {
+                        composer.setLinkedAnimClips(old);
+                        AnimationLinkResolver.writeLinks(target, expected);
+                        throw failure;
+                    }
+                    return bound.stream()
+                            .filter(clip -> old.stream().noneMatch(previous -> clip.getName().equals(previous.getName())))
+                            .min(java.util.Comparator.comparing(AnimationEditorSupport::constantTransformClip))
+                            .map(com.jme3.anim.AnimClip::getName).orElse(null);
+                }).get();
+                EventQueue.invokeLater(() -> refreshLinks(added));
+            } catch (Exception failure) {
+                AnimationEditorSupport.error(failure);
+                EventQueue.invokeLater(this::finishLinkWork);
+            }
+        });
+    }
+
+    private void refreshLinks(String added) {
+        try {
+            if (!disposed) {
+                refreshOwnerChoices();
+                if (!dirty && savedGraph == null) {
+                    loadOwner();
+                }
+                refreshGuidance();
+            }
+        } finally {
+            finishLinkWork();
+        }
+        if (!disposed) {
+            if (added != null) {
+                previewClip(added);
+            } else {
+                applyPreview();
+            }
+        }
+    }
+
+    private void exportEmbedded() {
+        if (saving || dirty) {
+            status.setText(text("Animation.Save_graph_before_link_edit"));
+            return;
+        }
+        try {
+            JFileChooser chooser = new JFileChooser(projectAssets().toFile());
+            chooser.setSelectedFile(projectAssets().resolve(data.getPrimaryFile().getName() + "-embedded.j3o").toFile());
+            if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return;
+            }
+            Path output = chooser.getSelectedFile().toPath().toAbsolutePath();
+            if (!output.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".j3o")) {
+                output = output.resolveSibling(output.getFileName() + ".j3o");
+            }
+            if (Files.exists(output)) {
+                throw new IOException(text("Animation.Export_requires_new_file"));
+            }
+            writeEmbeddedCopy(output);
+        } catch (Exception failure) {
+            AnimationEditorSupport.error(failure);
+        }
+    }
+
+    private void writeEmbeddedCopy(Path output) {
+        beginLinkWork();
+        RequestProcessor.getDefault().post(() -> {
+            try {
+                var manager = data.getLookup().lookup(ProjectAssetManager.class);
+                String key = ownerAssetKey();
+                Spatial copy = com.jme3.gde.core.scene.SceneApplication.getApplication()
+                        .enqueue(() -> root.clone(true)).get();
+                AnimationLinkResolver.embed(manager, key, copy);
+                Path temporary = Files.createTempFile(output.getParent(), ".embedded-animation-", ".j3o");
+                try {
+                    new com.jme3.export.binary.BinaryExporter().save(copy, temporary.toFile());
+                    Files.move(temporary, output);
+                } finally {
+                    Files.deleteIfExists(temporary);
+                }
+                org.openide.filesystems.FileUtil.refreshFor(output.toFile());
+                EventQueue.invokeLater(() -> status.setText(text("Animation.Saved") + output.getFileName()));
+            } catch (Exception failure) {
+                AnimationEditorSupport.error(failure);
+            } finally {
+                EventQueue.invokeLater(this::finishLinkWork);
+            }
+        });
     }
 
     private boolean discard() {
@@ -1103,8 +2284,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
         private int offsetX;
         private int offsetY;
         private int linking = -1;
+        private boolean linkFromLeft;
         private Point linkEnd;
-        private boolean linkLeft;
         private double zoom = 1;
         private double panX;
         private double panY;
@@ -1158,10 +2339,10 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     }
                     for (int i = states.getRowCount() - 1; i >= 0; i--) {
                         Rectangle b = bounds(i);
-                        if (event.getPoint().distance(b.x + b.width, b.y + 32) <= 10
-                                || event.getPoint().distance(b.x, b.y + 32) <= 10) {
-                            linkLeft = event.getX() < b.getCenterX();
+                        boolean left = event.getX() < b.getCenterX();
+                        if (nearPort(event.getPoint(), b, left)) {
                             linking = i;
+                            linkFromLeft = left;
                             linkEnd = event.getPoint();
                             repaint();
                             return;
@@ -1237,8 +2418,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     }
                     if (SwingUtilities.isLeftMouseButton(event) && isEnabled() && hitState(event.getPoint()) < 0) {
                         for (int i = edges.getRowCount() - 1; i >= 0; i--) {
-                            java.awt.geom.CubicCurve2D curve = edgeCurve(i);
-                            if (curve != null && nearCurve(curve, event.getPoint())) {
+                            EdgeRoute route = edgeRoute(i);
+                            if (route != null && nearCurve(route.path(), event.getPoint())) {
                                 editTransition(i);
                                 return;
                             }
@@ -1255,7 +2436,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     }
                     event = modelEvent(event);
                     if (isEnabled() && linking >= 0) {
-                        linkEnd = event.getPoint();
+                        int target = linkTarget(event.getPoint());
+                        linkEnd = target < 0 ? event.getPoint() : port(bounds(target), !linkFromLeft);
                         repaint();
                         return;
                     }
@@ -1312,11 +2494,11 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     }
                     if (linking >= 0) {
                         int source = linking;
+                        int target = linkTarget(event.getPoint());
                         linking = -1;
                         linkEnd = null;
-                        int target = hitState(event.getPoint());
                         if (isEnabled() && target >= 0) {
-                            addTransition(cell(states, source, 0), cell(states, target, 0));
+                            addTransition(cell(states, source, 0), cell(states, target, 0), linkFromLeft);
                         }
                         repaint();
                         return;
@@ -1496,8 +2678,8 @@ public final class AnimationEditorTopComponent extends TopComponent {
 
         private int edgeAt(Point point) {
             for (int i = edges.getRowCount() - 1; i >= 0; i--) {
-                java.awt.geom.CubicCurve2D curve = edgeCurve(i);
-                if (curve != null && nearCurve(curve, point)) {
+                EdgeRoute route = edgeRoute(i);
+                if (route != null && nearCurve(route.path(), point)) {
                     return i;
                 }
             }
@@ -1515,8 +2697,39 @@ public final class AnimationEditorTopComponent extends TopComponent {
             return -1;
         }
 
+        private Point port(Rectangle bounds, boolean left) {
+            return new Point(left ? bounds.x : bounds.x + bounds.width, (int) bounds.getCenterY());
+        }
+
+        private boolean nearPort(Point point, Rectangle bounds, boolean left) {
+            return port(bounds, left).distance(point) * zoom <= 18;
+        }
+
+        private int linkTarget(Point point) {
+            for (int i = states.getRowCount() - 1; i >= 0; i--) {
+                Rectangle node = bounds(i);
+                boolean left = point.x < node.getCenterX();
+                if (left != linkFromLeft && nearPort(point, node, left)) {
+                    Rectangle source = bounds(linking);
+                    if (source.getMaxX() <= node.getMinX() && linkFromLeft) {
+                        continue;
+                    }
+                    if (node.getMaxX() <= source.getMinX() && !linkFromLeft) {
+                        continue;
+                    }
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         private void addTransition(String from, String to) {
             edges.addRow(new Object[]{from, to, "", "ALWAYS", "0", "0.2", "-1"});
+            editTransition(edges.getRowCount() - 1);
+        }
+
+        private void addTransition(String from, String to, boolean sourceLeft) {
+            edges.addRow(new Object[]{from, to, "", "ALWAYS", "0", "0.2", "-1", sourceLeft});
             editTransition(edges.getRowCount() - 1);
         }
 
@@ -1527,36 +2740,93 @@ public final class AnimationEditorTopComponent extends TopComponent {
             table.scrollRectToVisible(table.getCellRect(row, 3, true));
         }
 
-        private java.awt.geom.CubicCurve2D edgeCurve(int row) {
-            int from = find(cell(edges, row, 0));
-            int to = find(cell(edges, row, 1));
+        private EdgeRoute edgeRoute(int row) {
+            String source = cell(edges, row, 0);
+            String target = cell(edges, row, 1);
+            int from = find(source);
+            int to = find(target);
             if (from < 0 || to < 0) {
                 return null;
             }
             Rectangle a = bounds(from);
             Rectangle b = bounds(to);
-            double lane = 0;
-            for (int i = 0; i < row; i++) {
-                if (cell(edges, i, 0).equals(cell(edges, row, 0)) && cell(edges, i, 1).equals(cell(edges, row, 1))) {
-                    lane -= 24;
+            int repeats = 0;
+            boolean reciprocal = false;
+            for (int i = 0; i < edges.getRowCount(); i++) {
+                String edgeSource = cell(edges, i, 0);
+                String edgeTarget = cell(edges, i, 1);
+                if (i < row && edgeSource.equals(source) && edgeTarget.equals(target)) {
+                    repeats++;
+                }
+                if (from != to && edgeSource.equals(target) && edgeTarget.equals(source)) {
+                    reciprocal = true;
                 }
             }
-            if (from == to) {
-                return new java.awt.geom.CubicCurve2D.Double(a.x + a.width, a.y + 32,
-                        a.x + a.width + 85, a.y - 90 + lane, a.x - 85, a.y - 90 + lane, a.x, a.y + 32);
+            // Port identity belongs to the edge; moving nodes only changes its route.
+            boolean returnThroughGap = Boolean.TRUE.equals(edges.getValueAt(row, 7));
+            double start = returnThroughGap ? a.getMinX() : a.getMaxX();
+            double end = returnThroughGap ? b.getMaxX() : b.getMinX();
+            double startY = a.y + 32;
+            double endY = b.y + 32;
+            if (returnThroughGap ? start > end : end > start) {
+                double handle = Math.copySign(Math.min(80, Math.abs(end - start) / 3), end - start);
+                double bend = -30 - 24 * repeats;
+                if (returnThroughGap) {
+                    bend = -bend;
+                } else if (!reciprocal) {
+                    bend = (repeats % 2 == 0 ? -1 : 1) * (30 + 24 * (repeats / 2));
+                }
+                var curve = new java.awt.geom.CubicCurve2D.Double(start, startY, start + handle, startY + bend,
+                        end - handle, endY + bend, end, endY);
+                return new EdgeRoute(curve, end, endY, Math.atan2(-bend, handle),
+                        (start + end) / 2, (startY + endY) / 2 + .75 * bend);
             }
-            boolean right = a.getCenterX() <= b.getCenterX();
-            double start = right ? a.getMaxX() : a.x;
-            double end = right ? b.x : b.getMaxX();
-            double handle = Math.min(80, Math.abs(end - start) / 3);
-            double sign = right ? 1 : -1;
-            double bend = sign * (-30 + lane);
-            return new java.awt.geom.CubicCurve2D.Double(start, a.y + 32,
-                    start + sign * handle, a.y + 32 + bend,
-                    end - sign * handle, b.y + 32 + bend, end, b.y + 32);
+            // Use the gap between stacked nodes while keeping both ports fixed.
+            // Overlapping vertical spans need room outside the nodes.
+            double side = 26 + 8 * repeats + (reciprocal && returnThroughGap ? 12 : 0);
+            double gapTop = startY <= endY ? a.getMaxY() : b.getMaxY();
+            double gapBottom = startY <= endY ? b.getMinY() : a.getMinY();
+            boolean stacked = gapBottom - gapTop >= 12;
+            double right = returnThroughGap
+                    ? (stacked ? start : Math.min(start, b.getMinX())) - side
+                    : (stacked ? start : Math.max(start, b.getMaxX())) + side;
+            double left = returnThroughGap
+                    ? (stacked ? end : Math.max(end, a.getMaxX())) + side
+                    : (stacked ? end : Math.min(end, a.getMinX())) - side;
+            if (returnThroughGap && start > 0) {
+                right = Math.max(0, right);
+            } else if (!returnThroughGap && end > 0) {
+                left = Math.max(0, left);
+            }
+            double outerClearance = 22 + 16 * repeats;
+            double lane = stacked
+                    ? gapTop + (gapBottom - gapTop)
+                            * (reciprocal ? (returnThroughGap ? .65 : .35) : (1 - .5 / (repeats + 1)))
+                    : Math.max(a.getMaxY(), b.getMaxY()) + outerClearance + (returnThroughGap ? 14 : 0);
+            double[] x = {start, right, right, left, left, end};
+            double[] y = {startY, startY, lane, lane, endY, endY};
+            var path = new java.awt.geom.Path2D.Double();
+            path.moveTo(start, startY);
+            for (int i = 1; i < x.length - 1; i++) {
+                double beforeX = x[i - 1] - x[i];
+                double beforeY = y[i - 1] - y[i];
+                double afterX = x[i + 1] - x[i];
+                double afterY = y[i + 1] - y[i];
+                double before = Math.abs(beforeX) + Math.abs(beforeY);
+                double after = Math.abs(afterX) + Math.abs(afterY);
+                double radius = Math.min(18, Math.min(before, after) / 2);
+                path.lineTo(x[i] + beforeX * radius / before, y[i] + beforeY * radius / before);
+                path.quadTo(x[i], y[i], x[i] + afterX * radius / after, y[i] + afterY * radius / after);
+            }
+            path.lineTo(end, endY);
+            return new EdgeRoute(path, end, endY, returnThroughGap ? Math.PI : 0, (left + right) / 2, lane);
         }
 
-        private boolean nearCurve(java.awt.geom.CubicCurve2D curve, Point point) {
+        private record EdgeRoute(java.awt.Shape path, double endX, double endY,
+                double angle, double labelX, double labelY) {
+        }
+
+        private boolean nearCurve(java.awt.Shape curve, Point point) {
             java.awt.geom.PathIterator path = curve.getPathIterator(null, 2);
             double[] coordinates = new double[6];
             double x = 0;
@@ -1636,18 +2906,17 @@ public final class AnimationEditorTopComponent extends TopComponent {
             }
             JMenuItem add = new JMenuItem(text("Animation.Add_clip_state"));
             add.addActionListener(action -> {
-                Object clip = JOptionPane.showInputDialog(AnimationEditorTopComponent.this, text("Animation.Animation_clip"),
-                        text("Animation.New_state"), JOptionPane.PLAIN_MESSAGE, null,
-                        owner.getControl(AnimComposer.class).getAnimClipsNames().toArray(), firstClip());
+                var clips = clipNames();
+                LinkedClipChoice clip = chooseEditorClip(clips, "Animation.Animation_clip", "Animation.New_state");
                 if (clip != null) {
-                    String name = clip.toString();
-                    int suffix = 2;
-                    while (find(name) >= 0) {
-                        name = clip + " " + suffix++;
+                    Set<String> names = new java.util.HashSet<>();
+                    for (int row = 0; row < states.getRowCount(); row++) {
+                        names.add(cell(states, row, 0));
+                        names.add(stateTitle(row));
                     }
-                    String stateName = name;
+                    String stateName = uniqueStateName(editorClipLabel(clip.id(), clips), names);
                     edit(() -> {
-                        states.addRow(new Object[]{stateName, "", clip, "0", "true", point.x, point.y});
+                        states.addRow(new Object[]{stateName, "", clip.id(), "0", "true", point.x, point.y});
                         if (states.getRowCount() == 1) {
                             entry.setText(stateName);
                         }
@@ -1722,27 +2991,27 @@ public final class AnimationEditorTopComponent extends TopComponent {
                         box.x() + box.width() - 4, box.y() + box.height() - 12);
             }
             for (int i = 0; i < edges.getRowCount(); i++) {
-                java.awt.geom.CubicCurve2D curve = edgeCurve(i);
-                if (curve == null) {
+                EdgeRoute route = edgeRoute(i);
+                if (route == null) {
                     continue;
                 }
-                int x2 = (int) curve.getX2();
-                int y2 = (int) curve.getY2();
+                int x2 = (int) route.endX();
+                int y2 = (int) route.endY();
                 g.setColor(i == hoveredEdge ? Color.CYAN : getForeground());
                 g.setStroke(new BasicStroke(i == hoveredEdge ? 4 : 2));
-                g.draw(curve);
-                double angle = Math.atan2(y2 - curve.getCtrlY2(), x2 - curve.getCtrlX2());
+                g.draw(route.path());
+                double angle = route.angle();
                 for (double direction : new double[]{angle - 0.45, angle + 0.45}) {
                     g.drawLine(x2, y2, x2 - (int) (12 * Math.cos(direction)), y2 - (int) (12 * Math.sin(direction)));
                 }
-                int labelX = (int) ((curve.getX1() + 3 * curve.getCtrlX1() + 3 * curve.getCtrlX2() + curve.getX2()) / 8);
-                int labelY = (int) ((curve.getY1() + 3 * curve.getCtrlY1() + 3 * curve.getCtrlY2() + curve.getY2()) / 8);
+                int labelX = (int) route.labelX();
+                int labelY = (int) route.labelY();
                 g.drawString(Integer.toString(i + 1), labelX, labelY - 5);
             }
             if (linking >= 0 && linking < states.getRowCount() && linkEnd != null) {
-                Rectangle source = bounds(linking);
+                Point source = port(bounds(linking), linkFromLeft);
                 g.setColor(Color.CYAN);
-                g.drawLine(linkLeft ? source.x : source.x + source.width, source.y + 32, linkEnd.x, linkEnd.y);
+                g.drawLine(source.x, source.y, linkEnd.x, linkEnd.y);
             }
             for (int i = 0; i < states.getRowCount(); i++) {
                 Rectangle b = bounds(i);
@@ -1753,7 +3022,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
                 g.setColor(selectedStates.contains(i) ? Color.CYAN : name.equals(entry.getText()) ? Color.ORANGE : Color.LIGHT_GRAY);
                 g.drawRoundRect(b.x, b.y, b.width, b.height, 14, 14);
                 g.setColor(Color.WHITE);
-                g.drawString(name, b.x + 10, b.y + 23);
+                g.drawString(stateTitle(i), b.x + 10, b.y + 23);
                 g.drawString(!cell(states, i, 2).contains("|") ? text("Animation.Clip") : text("Animation.1D") + cell(states, i, 1), b.x + 10, b.y + 45);
                 g.setColor(new Color(75, 195, 240));
                 g.fillOval(b.x + b.width - 6, b.y + 26, 12, 12);
@@ -1776,11 +3045,21 @@ public final class AnimationEditorTopComponent extends TopComponent {
     private static final class Preview extends com.jme3.gde.core.editor.SceneApplication {
         private AnimationTargetOverlay targetOverlay;
         private boolean targetsVisible;
+        private boolean rootMotionVisible;
+        private RootTrack focusedRootTrack;
+
+        void focusRootTrack(RootTrack track) {
+            focusedRootTrack = track;
+            if (targetOverlay != null) {
+                targetOverlay.focus(track == null ? null : track.path(), track != null && track.joint());
+                targetOverlay.show(targetsVisible || track != null);
+            }
+        }
 
         void showTargets(boolean visible) {
             targetsVisible = visible;
             if (targetOverlay != null) {
-                targetOverlay.show(visible);
+                targetOverlay.show(visible || focusedRootTrack != null);
             }
         }
 
@@ -1800,7 +3079,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
             DirectionalLight sun = new DirectionalLight();
             sun.setDirection(new Vector3f(-1, -2, -1).normalizeLocal());
             rootNode.addLight(sun);
-            // Reuse the SDK studio environment so metallic GLTF materials remain visible.
+            // Use the SDK studio environment so metallic glTF surfaces have something to reflect.
             Spatial environment = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
             studioProbe = com.jme3.light.SkyLight.fromEnvironment((com.jme3.light.LightProbe) environment.getLocalLightList().get(0));
             rootNode.addLight(studioProbe);
@@ -1816,6 +3095,7 @@ public final class AnimationEditorTopComponent extends TopComponent {
         void install(Spatial model, Spatial selectedOwner, AnimationGraph graph) {
             if (player != null) {
                 player.close();
+                player = null;
             }
             rootNode.detachAllChildren();
             // Do not run arbitrary gameplay, physics or environment controls in preview.
@@ -1835,23 +3115,47 @@ public final class AnimationEditorTopComponent extends TopComponent {
                     composer.setEnabled(false);
                 }
             });
-            rootNode.attachChild(model);
+            com.jme3.scene.Node motionWrapper = null;
+            if (graph != null && graph.rootMotion != null && !graph.rootMotion.joint
+                    && ".".equals(graph.rootMotion.path)) {
+                motionWrapper = new com.jme3.scene.Node("Root motion preview");
+                motionWrapper.setCullHint(Spatial.CullHint.Never);
+            }
+            selectedOwner.setUserData(AnimationGraph.USER_DATA, null);
             AnimComposer composer = selectedOwner.getControl(AnimComposer.class);
             composer.setEnabled(true);
+            composer.reset();
             composer.setGlobalSpeed(1);
-            player = new AnimationGraphPlayer(graph, composer);
+            player = graph == null ? null : new AnimationGraphPlayer(graph, composer);
+            if (player != null && graph.rootMotion != null) {
+                Spatial mover = motionWrapper == null ? selectedOwner : motionWrapper;
+                player.setRootMotionConsumer(delta -> {
+                    if (rootMotionVisible) {
+                        delta.applyTo(mover);
+                    }
+                });
+            }
             center.set(0, 0, 0);
             radius = 4;
-            rootNode.updateGeometricState();
-            if (model.getWorldBound() != null) {
-                center = model.getWorldBound().getCenter().clone();
-                if (model.getWorldBound() instanceof BoundingBox box) {
+            model.updateLogicalState(0);
+            var poseBounds = SkinnedPreviewBounds.fit(model);
+            if (poseBounds != null) {
+                center = poseBounds.getCenter().clone();
+                if (poseBounds instanceof BoundingBox box) {
                     radius = Math.max(0.2f, Math.max(box.getXExtent(), Math.max(box.getYExtent(), box.getZExtent()))) * 3.5f;
                 }
             }
-            targetOverlay = new AnimationTargetOverlay(assetManager, model, composer, radius * 0.006f);
+            if (motionWrapper == null) {
+                rootNode.attachChild(model);
+            } else {
+                motionWrapper.attachChild(model);
+                rootNode.attachChild(motionWrapper);
+            }
+            rootNode.setCullHint(Spatial.CullHint.Never);
+            targetOverlay = new AnimationTargetOverlay(assetManager, model, composer, radius * 0.006f,
+                    graph == null ? null : graph.overlay);
             rootNode.attachChild(targetOverlay.geometry);
-            targetOverlay.show(targetsVisible);
+            focusRootTrack(focusedRootTrack);
             rootNode.updateGeometricState();
             orbit(0, 0, 1);
         }

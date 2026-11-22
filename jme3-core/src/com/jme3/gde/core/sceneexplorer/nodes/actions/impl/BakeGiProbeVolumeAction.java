@@ -9,7 +9,8 @@ import com.jme3.gde.core.sceneexplorer.nodes.*;
 import com.jme3.gde.core.sceneexplorer.nodes.actions.ToolAction;
 import com.jme3.scene.Spatial;
 import java.awt.BorderLayout;
-import java.awt.GridLayout;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.awt.event.ActionEvent;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.*;
@@ -44,7 +45,7 @@ import org.openide.util.lookup.ServiceProvider;
  * 第六步：Diffuse bounce passes 默认 1，可选 2..8 进行多次漫反射烘焙。
  * 每轮只读取上一轮完整结果，旧数据不参与反馈；运行时仍使用原来的八探针设置。
  * 烘焙时间和临时内存增加，结果保存到原 GI 数据格式；取消保留旧结果。
- * 面板重新打开时次数恢复为 1；选择 1 并重新烘焙可恢复单次反射。
+ * 保存场景后恢复各 Volume 的烘焙选项；选择 1 并重新烘焙可恢复单次反射。
  * 多次反射暂不支持 Adaptive local refinement；体积应覆盖需要接收反射的表面。
  * 第七步：Separate sky visibility 默认关闭，烘焙包含天空的完整漫反射。
  * 体积内替代天空漫反射，体积外或关闭 GI 后回退天光；天空反射独立保留。
@@ -54,6 +55,8 @@ import org.openide.util.lookup.ServiceProvider;
  */
 @ServiceProvider(service = ToolAction.class)
 public final class BakeGiProbeVolumeAction implements ToolAction {
+    private static final String BAKE_OPTION_PREFIX = "jme.sdk.giBake.";
+
     @Override
     public Class<?> getNodeClass() {
         return JmeGiProbeVolume.class;
@@ -72,7 +75,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         };
     }
 
-    /** Opens bake settings on the EDT; the caller must supply an editable scene volume. */
+    /** Opens bake settings for an editable volume. Call on the EDT. */
     public void show(GiProbeVolume volume, DataObject file) {
         JDialog dialog = new JDialog((java.awt.Frame) null, "Bake GI volume", false);
         dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
@@ -83,8 +86,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
     }
 
     /**
-     * Embeddable EDT inspector; hiding it cancels in-flight work without replacing
-     * old data. A dialog packs at 360 pixels. As a direct JScrollPane view the root
+     * Bakes from the inspector on the EDT. Hiding the inspector cancels the
+     * current job and keeps the last bake. The dialog packs at 360 pixels. As a direct JScrollPane view the root
      * tracks viewport width, including when the vertical scrollbar appears, so
      * asynchronous grid/status text cannot widen the Properties dock or clip labels.
      */
@@ -239,6 +242,41 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         placement.setToolTipText("Reject interior probes; exact triangle distance enforces clearance, including edges and corners. Every relocation is rechecked.");
         adaptive.setToolTipText("Surface-coverage refinement; classification and safe relocation are required. Uncovered areas retain coarse GI. Visualize GI volumes: green=valid, blue=fine, yellow=relocated, red=invalid, cyan=not resident.");
         visibility.setToolTipText("Directional distance atlas resolution. 16 by default; 32 for difficult geometry. Requires rebaking.");
+        Map<String, JComponent> bakeOptions = new LinkedHashMap<>();
+        bakeOptions.put("captureSize", capture);
+        bakeOptions.put("radianceSamples", samples);
+        bakeOptions.put("separateSky", separateSky);
+        bakeOptions.put("bounceCount", bounces);
+        bakeOptions.put("visibilityResolution", visibility);
+        bakeOptions.put("probeClearance", clearance);
+        bakeOptions.put("captureDistance", far);
+        bakeOptions.put("frameBudgetMs", budget);
+        bakeOptions.put("shadowMapSize", shadowSize);
+        bakeOptions.put("captureShadows", shadows);
+        bakeOptions.put("compactStorage", compact);
+        bakeOptions.put("classifyProbes", placement);
+        bakeOptions.put("adaptiveRefinement", adaptive);
+        bakeOptions.put("maxRefinements", refinements);
+        bakeOptions.put("refinementDepth", depth);
+        bakeOptions.forEach((name, widget) -> {
+            Runnable persist = () -> {
+                if (syncingCounts[0]) {
+                    return;
+                }
+                Object value = widget instanceof JSpinner spinner
+                        ? spinner.getValue() : ((JCheckBox) widget).isSelected();
+                SceneApplication.getApplication().enqueue(() -> {
+                    volume.setUserData(BAKE_OPTION_PREFIX + name, value);
+                    SwingUtilities.invokeLater(() -> file.setModified(true));
+                    return null;
+                });
+            };
+            if (widget instanceof JSpinner spinner) {
+                spinner.addChangeListener(event -> persist.run());
+            } else {
+                ((JCheckBox) widget).addItemListener(event -> persist.run());
+            }
+        });
         JLabel status = new JLabel("Captures a snapshot. Save the scene after completion.");
         status.setMinimumSize(new java.awt.Dimension(0, 20));
         status.setToolTipText(status.getText());
@@ -252,9 +290,25 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             float fadeDistance = volume.getFadeDistance();
             var counts = volume.getProbeCounts();
             var extent = volume.getCoverage().mult(volume.getWorldScale());
+            Map<String, Object> savedOptions = new LinkedHashMap<>();
+            for (String name : bakeOptions.keySet()) {
+                savedOptions.put(name, volume.getUserData(BAKE_OPTION_PREFIX + name));
+            }
             SwingUtilities.invokeLater(() -> {
+                savedOptions.forEach((name, value) -> {
+                    JComponent widget = bakeOptions.get(name);
+                    if (widget instanceof JSpinner spinner && value instanceof Number) {
+                        spinner.setValue(value);
+                    } else if (widget instanceof JCheckBox checkbox && value instanceof Boolean selected) {
+                        checkbox.setSelected(selected);
+                    }
+                });
                 surfaceLayout.setSelected(surfaceMode);
+                boolean refining = !surfaceMode && adaptive.isSelected();
                 adaptive.setEnabled(!surfaceMode);
+                refinements.setEnabled(refining);
+                depth.setEnabled(refining);
+                placement.setEnabled(!refining);
                 intensity.setValue((double) strength);
                 fade.setValue((double) fadeDistance);
                 countX.setValue((int) counts.x);
@@ -330,6 +384,10 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         });
         cancel.addActionListener(event -> cancelled.set(true));
         start.addActionListener(event -> {
+            if ((Integer) bounces.getValue() > 1 && adaptive.isSelected() && !surfaceLayout.isSelected()) {
+                status.setText("Multiple bounce passes require Adaptive local refinement to be off.");
+                return;
+            }
             start.setEnabled(false);
             cancel.setEnabled(true);
             cancelled.set(false);
@@ -350,10 +408,6 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.radianceSamples = (Integer) samples.getValue();
             quality.bounceCount = (Integer) bounces.getValue();
             quality.separateSky = separateSky.isSelected();
-            if (quality.bounceCount > 1 && adaptive.isSelected() && !surfaceLayout.isSelected()) {
-                status.setText("Multiple bounce passes require Adaptive local refinement to be off.");
-                return;
-            }
             quality.visibilityResolution = (Integer) visibility.getValue();
             quality.far = ((Integer) far.getValue()).floatValue();
             quality.compactStorage = compact.isSelected();

@@ -71,7 +71,7 @@ public final class RenderDocSupport {
         return null;
     }
 
-    /** Called once before the SDK creates graphics contexts, never from Options. */
+    /** Call once at startup, before the SDK creates its graphics contexts. */
     public static synchronized void initializeBeforeGraphics() {
         if (initialized) {
             return;
@@ -96,10 +96,10 @@ public final class RenderDocSupport {
                 throw new IllegalStateException("RenderDoc API 1.4.0 is unavailable.");
             }
             api = result.getValue();
-            // The JVM owns crash reporting; RenderDoc must not replace its handler.
+            // Leave the JVM's crash handler installed.
             function(10).invokeVoid(new Object[]{});
             gl = NativeLibrary.getInstance("opengl32");
-            // Explicit SDK captures only; avoid overlapping global hotkey captures.
+            // SDK capture requests share one slot with the global hotkey.
             function(5).invokeVoid(new Object[]{null, 0});
             function(6).invokeVoid(new Object[]{null, 0});
             loadedPath = executable;
@@ -111,7 +111,7 @@ public final class RenderDocSupport {
         }
     }
 
-    // Stable ABI slots from renderdoc_app.h API 1.4.0: cdecl, native pointer stride.
+    // ABI slots from renderdoc_app.h 1.4.0, using cdecl and native pointer size.
     private static Function function(int slot) {
         return Function.getFunction(api.getPointer((long) slot * Native.POINTER_SIZE),
                 Function.C_CONVENTION, "UTF-8");
@@ -164,7 +164,7 @@ public final class RenderDocSupport {
         return button;
     }
 
-    /** Render-thread only; returns whether this call owns a capture. */
+    /** Call on the render thread. Returns {@code true} if this call started the capture. */
     public static boolean beginFrame() {
         if (!REQUEST.getAndSet(false)) {
             return false;
@@ -197,7 +197,7 @@ public final class RenderDocSupport {
         }
     }
 
-    /** Always paired in finally; failed renders are discarded. */
+    /** Pair with capture start in a finally block. Failed frames are discarded. */
     public static void endFrame(boolean success) {
         try {
             if (!success) {

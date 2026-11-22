@@ -1,0 +1,17 @@
+MaterialDef EditorSelectionOutline {
+    MaterialParameters {
+        Texture2D Mask
+        Vector2 PixelStep
+        Color OutlineColor
+    }
+    Technique {
+        VertexShader GLSL330 GLSL150 GLSL100: com/jme3/gde/scenecomposer/SelectionOutline.vert
+        FragmentShader GLSL330 GLSL150 GLSL100: com/jme3/gde/scenecomposer/SelectionOutline.frag
+        RenderState {
+            FaceCull Off
+            DepthTest Off
+            DepthWrite Off
+            Blend Alpha
+        }
+    }
+}

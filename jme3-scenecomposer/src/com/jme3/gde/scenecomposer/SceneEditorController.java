@@ -552,9 +552,9 @@ public class SceneEditorController implements NodeListener {
                     linkNode.setLocalTranslation(localVec);
                 }
                 addSpatialUndo(selected, linkNode, null, jmeRootNode);
+                selectAddedModel(selected, linkNode);
             }
             file.closeAsset();
-            refreshSelected();
         } catch (Exception ex) {
             Confirmation msg = new NotifyDescriptor.Confirmation(
                     "Error importing " + file.getName() + "\n" + ex.toString(),
@@ -592,6 +592,7 @@ public class SceneEditorController implements NodeListener {
             if (selected instanceof AssetLinkNode) {
                 AssetLinkNode linkNode = (AssetLinkNode) selected;
                 linkNode.attachLinkedChild(manager, new ModelKey(assetName));
+                refreshSelected();
             } else {
                 manager.clearCache();
                 ModelKey key = new ModelKey(assetName);
@@ -604,8 +605,8 @@ public class SceneEditorController implements NodeListener {
                     linkNode.setLocalTranslation(localVec);
                 }
                 addSpatialUndo(selected, linkNode, null, jmeRootNode);
+                selectAddedModel(selected, linkNode);
             }
-            refreshSelected();
         } catch (Exception ex) {
             Confirmation msg = new NotifyDescriptor.Confirmation(
                     "Error importing " + assetName + "\n" + ex.toString(),
@@ -651,9 +652,9 @@ public class SceneEditorController implements NodeListener {
                     selected.worldToLocal(location, localVec);
                     file.setLocalTranslation(localVec);
                 }
+                addSpatialUndo(selected, file, null, jmeRootNode);
+                selectAddedModel(selected, file);
             }
-            refreshSelected();
-            addSpatialUndo(selected, file, null, jmeRootNode);
         } catch (Exception ex) {
             Confirmation msg = new NotifyDescriptor.Confirmation(
                     "Error importing " + file.getName() + "\n" + ex.toString(),
@@ -663,6 +664,20 @@ public class SceneEditorController implements NodeListener {
         }
         progressHandle.finish();
 
+    }
+
+    private void selectAddedModel(Node parent, Spatial model) {
+        java.awt.EventQueue.invokeLater(() -> {
+            var explorer = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance();
+            if (explorer.getExplorerManager().getRootContext() != jmeRootNode) {
+                return;
+            }
+            var parentNode = jmeRootNode.getChild(parent);
+            if (parentNode != null) {
+                parentNode.refresh(true);
+                explorer.selectAddedObject(parentNode, model);
+            }
+        });
     }
 
     public void setNeedsSave(boolean state) {

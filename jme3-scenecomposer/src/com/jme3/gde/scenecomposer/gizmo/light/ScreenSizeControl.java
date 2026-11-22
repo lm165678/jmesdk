@@ -12,12 +12,12 @@ import com.jme3.scene.control.AbstractControl;
  * Real radius/cone geometry must never use this control: it represents world units.
  * Runs on the render thread for the actual viewport camera, including orthographic views.
  */
-final class ScreenSizeControl extends AbstractControl {
+public final class ScreenSizeControl extends AbstractControl {
     private final float pixels;
     private final float meshSize;
     private Vector3f offset;
 
-    ScreenSizeControl(float pixels, float meshSize) {
+    public ScreenSizeControl(float pixels, float meshSize) {
         this.pixels = pixels;
         this.meshSize = meshSize;
     }

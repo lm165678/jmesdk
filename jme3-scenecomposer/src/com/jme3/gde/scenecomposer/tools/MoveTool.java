@@ -19,17 +19,15 @@ import org.openide.loaders.DataObject;
 import org.openide.util.Lookup;
 
 /**
- * Move an object. When created, it generates a quad that will lie along a plane
- * that the user selects for moving on. When the mouse is over the axisMarker,
- * it will highlight the plane that it is over: XY,XZ,YZ. When clicked and then
- * dragged, the selected object will move along that plane.
+ * Drag an arrow to move along one axis, or a square to move in its plane.
+ * When the arrow points into the screen, dragging up moves away from the view.
  *
  * @author Brent Owens
  */
 public class MoveTool extends SceneEditTool {
 
     private Vector3f pickedMarker;
-    private Vector3f constraintAxis; //used for one axis move
+    private AxisTranslationDrag axisDrag;
     private boolean wasDragging = false;
     private Vector3f startPosition;
     private Vector3f lastPosition;
@@ -178,7 +176,7 @@ public class MoveTool extends SceneEditTool {
         if (!pressed) {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
-            constraintAxis = Vector3f.UNIT_XYZ; // no constraint
+            axisDrag = null;
             finishMove();
             pickManager.reset();
         } else {
@@ -198,15 +196,11 @@ public class MoveTool extends SceneEditTool {
                     pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XZ, getTransformType(), camera, screenCoord);
                 } else if (pickedMarker.equals(QUAD_YZ)) {
                     pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_YZ, getTransformType(), camera, screenCoord);
-                } else if (pickedMarker.equals(ARROW_X)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XY, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_X; // move only X
-                } else if (pickedMarker.equals(ARROW_Y)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_YZ, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_Y; // move only Y
-                } else if (pickedMarker.equals(ARROW_Z)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XZ, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_Z; // move only Z
+                } else {
+                    Vector3f axis = pickedMarker.equals(ARROW_X) ? Vector3f.UNIT_X
+                            : pickedMarker.equals(ARROW_Y) ? Vector3f.UNIT_Y : Vector3f.UNIT_Z;
+                    axisDrag = new AxisTranslationDrag(camera, axisMarker.getWorldTranslation(),
+                            axisMarker.getWorldRotation().mult(axis), screenCoord);
                 }
                 duplicateGesture = toolController.isRotationSnapEnabled();
                 startPosition = toolController.getSelectedSpatial().getLocalTranslation().clone();
@@ -231,7 +225,7 @@ public class MoveTool extends SceneEditTool {
 
         if (pickedMarker == null) {
             highlightAxisMarker(camera, screenCoord, axisPickType);
-        } else {
+        } else if (!wasDragging) {
             pickedMarker = null;
             pickManager.reset();
         }
@@ -242,19 +236,17 @@ public class MoveTool extends SceneEditTool {
         if (!pressed) {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
-            constraintAxis = Vector3f.UNIT_XYZ; // no constraint
+            axisDrag = null;
             finishMove();
             pickManager.reset();
-        } else if (wasDragging == true) {
-            if (!pickManager.updatePick(camera, screenCoord)) {
-                return;
-            }
-            Vector3f diff = Vector3f.ZERO;
-            if (pickedMarker.equals(QUAD_XY) || pickedMarker.equals(QUAD_XZ) || pickedMarker.equals(QUAD_YZ)) {
+        } else if (wasDragging) {
+            Vector3f diff;
+            if (axisDrag != null) {
+                diff = axisDrag.translation(screenCoord);
+            } else if (pickManager.updatePick(camera, screenCoord)) {
                 diff = pickManager.getTranslation();
-
-            } else if (pickedMarker.equals(ARROW_X) || pickedMarker.equals(ARROW_Y) || pickedMarker.equals(ARROW_Z)) {
-                diff = pickManager.getTranslation(constraintAxis);
+            } else {
+                return;
             }
             if (groupMove != null) {
                 if (diff.lengthSquared() > 1e-10f) {
@@ -309,7 +301,7 @@ public class MoveTool extends SceneEditTool {
             toolController.selectedSpatialTransformed();
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
-            constraintAxis = Vector3f.UNIT_XYZ; // no constraint
+            axisDrag = null;
             pickManager.reset();
         }
     }

@@ -14,6 +14,13 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Collect precompiled ufbx libraries
+      uses: actions/download-artifact@v8
+      with:
+        pattern: ufbx-jni-*
+        path: build/ufbx-jni/bundles
+        merge-multiple: true
+
     - name: Set up JDK 25
       uses: actions/setup-java@v5
       with:
@@ -29,12 +36,12 @@ runs:
 
     - name: Build the SDK (with tag)
       if: inputs.tag != ''
-      run: ./gradlew buildSdk -Ptag_name=${{ inputs.tag }}
+      run: ./gradlew buildSdk -PrequireUfbxNatives=true -Ptag_name=${{ inputs.tag }}
       shell: bash
 
     - name: Build the SDK
       if: inputs.tag == ''
-      run: ./gradlew buildSdk
+      run: ./gradlew buildSdk -PrequireUfbxNatives=true
       shell: bash
 
     - name: Override Harness (custom icon)

@@ -8,7 +8,7 @@
 代理端口 7897 可连接时自动使用；JSON 设置 proxyHost 为空字符串可禁用自动代理。
 此脚本由 BAT 在独立 PowerShell 子进程调用，不写系统或用户环境，不改变 UE5 JDK。
 #>
-param([ValidateSet('build','run','sdk','check')][string]$Mode = 'build')
+param([ValidateSet('build','run','sdk','check','jdk')][string]$Mode = 'build')
 $ErrorActionPreference = 'Stop'
 # This child process only: never change user/system JAVA_HOME or PATH (UE Android).
 $root = Split-Path $PSScriptRoot -Parent
@@ -42,6 +42,10 @@ try {
         if ($java) { $candidates += Split-Path (Split-Path $java.Source -Parent) -Parent }
         $jdk = $candidates | Where-Object { Is-Jdk25 $_ } | Select-Object -First 1
         if (!$jdk) { throw 'JDK 25 not found. Install it, or set javaHome in sdk-local.json (see sdk-local.example.json).' }
+    }
+    if ($Mode -eq 'jdk') {
+        Write-Output (Resolve-Path -LiteralPath $jdk).Path
+        exit 0
     }
     $engine = $env:SDK_ENGINE_DIR
     if (!$engine) { $engine = $config['engineDir'] }
@@ -101,6 +105,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "SDK build failed: $LASTEXITCODE" }
     exit 0
 } catch {
-    Write-Host "ERROR: $_" -ForegroundColor Red
+    if ($Mode -eq 'jdk') {
+        [Console]::Error.WriteLine("ERROR: $_")
+    } else {
+        Write-Host "ERROR: $_" -ForegroundColor Red
+    }
     exit 1
 }

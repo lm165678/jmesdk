@@ -57,11 +57,6 @@ public final class CompressedTextureDataObject extends MultiDataObject {
     }
 
     @Override
-    public boolean isDeleteAllowed() {
-        return !generated() && super.isDeleteAllowed();
-    }
-
-    @Override
     public boolean isCopyAllowed() {
         return !generated() && super.isCopyAllowed();
     }

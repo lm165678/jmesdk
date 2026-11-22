@@ -52,7 +52,7 @@ public class LightPositionUpdate extends AbstractControl {
     private Light light;
     private NodeCallback gizmo;
     private Method getPosition = null;
-    private final Vector3f lastPos = new Vector3f();
+    private final Vector3f localPosition = new Vector3f();
     private Vector3f lightPos;
 
     public LightPositionUpdate(Light l, NodeCallback g) {
@@ -81,11 +81,17 @@ public class LightPositionUpdate extends AbstractControl {
     @Override
     protected void controlUpdate(float f) {
         updateLightPosition();
-        
-        if (!lightPos.equals(lastPos)) {
-            lastPos.set(lightPos);
-            gizmo.getParent().worldToLocal(lastPos, lastPos);
-            gizmo.silentLocalTranslation(lastPos);
+        if (lightPos == null) {
+            return;
+        }
+        var parent = gizmo.getParent();
+        if (parent == null) {
+            localPosition.set(lightPos);
+        } else {
+            parent.worldToLocal(lightPos, localPosition);
+        }
+        if (!localPosition.equals(gizmo.getLocalTranslation())) {
+            gizmo.silentLocalTranslation(localPosition);
         }
     }
 

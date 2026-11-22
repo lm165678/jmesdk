@@ -1,0 +1,28 @@
+MaterialDef EditorSelectionMask {
+    MaterialParameters {
+        Texture2D ColorMap
+        Float AlphaDiscardThreshold
+        Int NumberOfBones
+        Matrix4Array BoneMatrices
+        FloatArray MorphWeights
+        Int NumberOfMorphTargets
+        Int NumberOfTargetsBuffers
+    }
+    Technique {
+        VertexShader GLSL330 GLSL150 GLSL100: Common/MatDefs/Misc/Unshaded.vert
+        FragmentShader GLSL330 GLSL150 GLSL100: com/jme3/gde/scenecomposer/SelectionHighlight.frag
+        WorldParameters {
+            WorldViewProjectionMatrix
+        }
+        Defines {
+            HAS_COLORMAP : ColorMap
+            NUM_BONES : NumberOfBones
+            NUM_MORPH_TARGETS : NumberOfMorphTargets
+            NUM_TARGETS_BUFFERS : NumberOfTargetsBuffers
+        }
+        RenderState {
+            DepthWrite Off
+            PolyOffset -1 -1
+        }
+    }
+}

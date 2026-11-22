@@ -33,6 +33,7 @@ package com.jme3.gde.core.dnd;
 
 import com.jme3.gde.core.assets.AssetDataNode;
 import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
+import com.jme3.gde.core.sceneexplorer.nodes.actions.SceneSpawnTransfer;
 import com.jme3.math.Vector2f;
 import java.awt.Cursor;
 import java.awt.datatransfer.DataFlavor;
@@ -91,6 +92,12 @@ public class SceneViewerDropTargetListener implements DropTargetListener {
             dtde.acceptDrop(java.awt.dnd.DnDConstants.ACTION_COPY);
             accepted = true;
             Transferable transfer = dtde.getTransferable();
+            if (transfer.isDataFlavorSupported(SceneSpawnTransfer.FLAVOR)) {
+                SceneSpawnTransfer spawn = (SceneSpawnTransfer) transfer.getTransferData(SceneSpawnTransfer.FLAVOR);
+                dtde.dropComplete(rootPanel.spawnObject(spawn, dtde.getDropTargetContext().getComponent(),
+                        dtde.getLocation()));
+                return;
+            }
             String asset = null;
             org.openide.filesystems.FileObject source = null;
             for (DataFlavor candidate : transfer.getTransferDataFlavors()) {
@@ -104,6 +111,18 @@ public class SceneViewerDropTargetListener implements DropTargetListener {
                     asset = node.getAssetName();
                     source = node.getLookup().lookup(org.openide.filesystems.FileObject.class);
                     break;
+                }
+            }
+            if (asset == null) {
+                org.openide.nodes.Node node = org.openide.nodes.NodeTransfer.node(transfer,
+                        org.openide.nodes.NodeTransfer.DND_COPY_OR_MOVE);
+                if (node != null) {
+                    var object = node.getLookup().lookup(org.openide.loaders.DataObject.class);
+                    source = object == null ? node.getLookup().lookup(org.openide.filesystems.FileObject.class)
+                            : object.getPrimaryFile();
+                    if (source != null) {
+                        asset = source.getNameExt();
+                    }
                 }
             }
             var request = com.jme3.gde.core.scene.SceneApplication.getApplication().getCurrentSceneRequest();
@@ -123,7 +142,30 @@ public class SceneViewerDropTargetListener implements DropTargetListener {
                     instanceof com.jme3.gde.core.assets.SpatialAssetDataObject;
             Vector2f position = new Vector2f(dtde.getLocation().x, dtde.getLocation().y);
             if (model) {
-                rootPanel.addModel(asset, position);
+                String selectedAsset = asset;
+                var dropComponent = dtde.getDropTargetContext().getComponent();
+                var menuPoint = dtde.getLocation();
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    if (request != com.jme3.gde.core.scene.SceneApplication.getApplication().getCurrentSceneRequest()) {
+                        return;
+                    }
+                    javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+                    javax.swing.JMenuItem link = new javax.swing.JMenuItem("Link");
+                    javax.swing.JMenuItem add = new javax.swing.JMenuItem("AddTo");
+                    link.addActionListener(event -> {
+                        if (request == com.jme3.gde.core.scene.SceneApplication.getApplication().getCurrentSceneRequest()) {
+                            rootPanel.addModel(selectedAsset, position, true);
+                        }
+                    });
+                    add.addActionListener(event -> {
+                        if (request == com.jme3.gde.core.scene.SceneApplication.getApplication().getCurrentSceneRequest()) {
+                            rootPanel.addModel(selectedAsset, position, false);
+                        }
+                    });
+                    menu.add(link);
+                    menu.add(add);
+                    menu.show(dropComponent, menuPoint.x, menuPoint.y);
+                });
             } else if (isMaterialExtension(asset)) {
                 rootPanel.applyMaterial(asset, position);
             } else {

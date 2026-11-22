@@ -38,8 +38,8 @@ public class GElementNode extends AbstractNode implements java.util.Observer{
     }
 
     /**
-     * Creates a property node with a callback that restores/synchronizes the
-     * visual editor after both successful and rejected property edits.
+     * Creates a property node and calls back after an accepted or rejected edit
+     * so the visual editor can show the current value.
      */
     public GElementNode(GElement element, Runnable afterEdit) {
         super(Children.create(new GElementChildFactory(element), false));

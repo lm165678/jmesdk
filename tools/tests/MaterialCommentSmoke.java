@@ -68,7 +68,7 @@ public final class MaterialCommentSmoke {
 
         @Override
         public void deleteSelectedItems() {
-            // Bypass only the confirmation dialog; consume the actual deletion selection.
+            // Skip the confirmation so deletion receives the scene editor's actual selection.
             for (var item : new ArrayList<>(getSelectedItems())) {
                 require(item instanceof ShaderCommentPanel, "Node accidentally selected for deletion");
                 removeCustomSelectable(item);

@@ -17,7 +17,7 @@ import org.openide.modules.ModuleInstall;
 import org.openide.util.Lookup;
 import org.openide.util.datatransfer.PasteType;
 
-/** Separate test-only NetBeans cluster: real module loaders, clipboard and undo. */
+/** Runs module loading, clipboard and undo against a separate NetBeans test cluster. */
 public final class SdkModuleSmoke extends ModuleInstall {
     private static void require(boolean value, String message) {
         if (!value) {

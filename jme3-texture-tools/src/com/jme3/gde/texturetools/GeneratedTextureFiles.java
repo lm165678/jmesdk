@@ -81,9 +81,9 @@ public final class GeneratedTextureFiles extends BaseAnnotationProvider {
                     store.delete(target.toPath());
                     return true;
                 } catch (IOException failure) {
-                    // Returning false lets masterfs attempt recursive fallback
+                    // If this returns false, masterfs tries to delete the tree itself
                     // deletion, potentially removing unrelated children first.
-                    // Abort the whole operation before that fallback can run.
+                    // Stop the operation before masterfs can try that fallback.
                     throw new java.io.UncheckedIOException(failure.getMessage(), failure);
                 }
             };

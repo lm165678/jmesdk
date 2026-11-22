@@ -114,7 +114,7 @@ public class TextureDropTargetListener implements DropTargetListener {
 
     public interface TextureDropTarget {
 
-        /** Reject foreign-project paths instead of resolving them against the wrong asset root. */
+        /** Checks that the asset belongs to the project whose root will resolve the path. */
         boolean acceptsTexture(AssetNameHolder texture);
 
         void setTexture(String texture);

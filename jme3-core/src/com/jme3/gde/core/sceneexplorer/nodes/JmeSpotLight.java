@@ -71,10 +71,42 @@ public class JmeSpotLight extends JmeLight{
         }
 
         createFields(SpotLight.class, set, obj);
+        set.remove("Spot Inner Angle");
+        set.remove("Spot Outer Angle");
+        ConeAngles angles = new ConeAngles(obj);
+        set.put(makeEmbedProperty(angles, ConeAngles.class, float.class,
+                "getInnerDegrees", "setInnerDegrees", "Spot Inner Angle (°)"));
+        set.put(makeEmbedProperty(angles, ConeAngles.class, float.class,
+                "getOuterDegrees", "setOuterDegrees", "Spot Outer Angle (°)"));
 
         sheet.put(set);
         return sheet;
 
+    }
+
+    /** Degrees in the property sheet, radians in the serialized light. */
+    public static final class ConeAngles {
+        private final SpotLight light;
+
+        ConeAngles(SpotLight light) {
+            this.light = light;
+        }
+
+        public float getInnerDegrees() {
+            return (float) Math.toDegrees(light.getSpotInnerAngle());
+        }
+
+        public void setInnerDegrees(float degrees) {
+            light.setSpotInnerAngle((float) Math.toRadians(degrees));
+        }
+
+        public float getOuterDegrees() {
+            return (float) Math.toDegrees(light.getSpotOuterAngle());
+        }
+
+        public void setOuterDegrees(float degrees) {
+            light.setSpotOuterAngle((float) Math.toRadians(degrees));
+        }
     }
 
     @Override

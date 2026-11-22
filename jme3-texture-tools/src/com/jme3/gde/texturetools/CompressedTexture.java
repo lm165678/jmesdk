@@ -177,7 +177,7 @@ public final class CompressedTexture {
         return format;
     }
 
-    /** Returns explicit sRGB metadata; raw ASTC and legacy DDS do not carry it. */
+    /** Returns the stored sRGB flag, if present. Raw ASTC and legacy DDS lack this metadata. */
     public boolean srgb() {
         return srgb;
     }
@@ -207,6 +207,9 @@ public final class CompressedTexture {
 
     /** Decodes a selected mip using the bundled CPU tools, without a GPU context. */
     public BufferedImage preview(int level, TextureToolchain tools) throws IOException, InterruptedException {
+        if (tools.useNativeCodec()) {
+            return decodeNative(level, srgb);
+        }
         Path source = Files.createTempFile("texture-mip-", astc ? ".astc" : ".dds");
         Path output = Files.createTempFile("texture-preview-", ".png");
         try {
@@ -221,6 +224,13 @@ public final class CompressedTexture {
             Files.deleteIfExists(source);
             Files.deleteIfExists(output);
         }
+    }
+
+    BufferedImage decodeNative(int level, boolean srgbProfile) throws IOException, InterruptedException {
+        int offset = offsets.get(level);
+        byte[] blocks = Arrays.copyOfRange(data, offset, offset + sizes.get(level));
+        return NativeTextureCodec.decode(blocks, mipWidth(level), mipHeight(level),
+                astc ? 0 : NativeTextureCodec.bcId(format), block, srgbProfile);
     }
 
     private byte[] singleLevel(int level) {
@@ -255,6 +265,20 @@ public final class CompressedTexture {
         if (image == null || image.getWidth() != mipWidth(level) || image.getHeight() != mipHeight(level)) {
             throw new IOException("Replacement image must match selected mip dimensions");
         }
+        if (tools.useNativeCodec()) {
+            byte[] replacement = NativeTextureCodec.encode(image,
+                    astc ? 0 : NativeTextureCodec.bcId(format), block, srgb);
+            if (replacement.length != sizes.get(level)) {
+                throw new IOException("Replacement payload size mismatch");
+            }
+            tools.writeNative(destination, stream -> {
+                int offset = offsets.get(level);
+                stream.write(data, 0, offset);
+                stream.write(replacement);
+                stream.write(data, offset + replacement.length, data.length - offset - replacement.length);
+            });
+            return;
+        }
         Path encoded = Files.createTempFile("texture-replacement-", astc ? ".astc" : ".dds");
         try {
             if (astc) {
@@ -279,7 +303,7 @@ public final class CompressedTexture {
      * a box over the source footprint in linear light for sRGB RGB channels;
      * alpha remains linear. Odd dimensions include the final source row/column.
      * This generic filter does not renormalize normal maps or preserve alpha coverage.
-     * Zero levels requests the complete chain. Raw ASTC intermediates are temporary.
+     * Zero levels requests the complete chain.
      */
     public static void encodeAstcKtx(Path source, Path destination, boolean srgb, String block,
             int levels, TextureToolchain tools) throws IOException, InterruptedException {
@@ -301,12 +325,29 @@ public final class CompressedTexture {
             case "12x12" -> 13;
             default -> throw new IOException("Unsupported ASTC block size");
         };
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteBuffer head = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
         head.put(KTX).putInt(0x04030201).putInt(0).putInt(1).putInt(0)
                 .putInt((srgb ? 0x93d0 : 0x93b0) + index).putInt(0x1908)
                 .putInt(original.getWidth()).putInt(original.getHeight()).putInt(0).putInt(0)
                 .putInt(1).putInt(count).putInt(0);
+        if (tools.useNativeCodec()) {
+            int blockSize = Integer.parseInt(block.substring(0, block.indexOf('x')));
+            tools.writeNative(destination, stream -> {
+                stream.write(head.array());
+                BufferedImage current = original;
+                for (int level = 0; level < count; level++) {
+                    byte[] payload = NativeTextureCodec.encode(current, 0, blockSize, srgb);
+                    stream.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+                            .putInt(payload.length).array());
+                    stream.write(payload);
+                    if (level + 1 < count) {
+                        current = downsample(current, srgb);
+                    }
+                }
+            });
+            return;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(head.array());
         Path png = Files.createTempFile("texture-level-", ".png");
         Path encoded = Files.createTempFile("texture-level-", ".astc");
@@ -330,7 +371,7 @@ public final class CompressedTexture {
         }
     }
 
-    private static BufferedImage downsample(BufferedImage input, boolean srgb) {
+    static BufferedImage downsample(BufferedImage input, boolean srgb) {
         BufferedImage output = new BufferedImage(Math.max(1, input.getWidth() / 2),
                 Math.max(1, input.getHeight() / 2), BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < output.getHeight(); y++) {
@@ -369,7 +410,7 @@ public final class CompressedTexture {
         return (bytes[offset] & 255) | ((bytes[offset + 1] & 255) << 8) | ((bytes[offset + 2] & 255) << 16);
     }
 
-    private static void put24(byte[] bytes, int offset, int value) {
+    static void put24(byte[] bytes, int offset, int value) {
         bytes[offset] = (byte) value;
         bytes[offset + 1] = (byte) (value >> 8);
         bytes[offset + 2] = (byte) (value >> 16);

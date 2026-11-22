@@ -1,23 +1,29 @@
 package com.jme3.gde.texturetools;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 import org.openide.modules.InstalledFileLocator;
 
 /**
- * Host-side CPU texture encoders. This class never selects a binary based on the
- * game target. Compressonator is supported on Windows/Linux x86-64 only; ASTC
- * also supports ARM64 and macOS. x86-64 uses SSE2, without assuming AVX support.
- * Calls block and must run off the Swing EDT and engine rendering thread.
- * No subprocess survives interruption or timeout. Tools are not game assets.
- * A native access violation is retried once with fresh temporary output. Other
- * failures are not retried; existing destinations remain unchanged on failure.
+ * Host-side CPU codecs. Use the installed JNI library when present. Hosts
+ * without a JNI build use the bundled command-line tools. Set
+ * {@code jme.sdk.texture.backend=jni} to require in-process operation, or
+ * {@code cli} to run the legacy tools. Calls block; run them off the EDT and
+ * the render thread. Java checks cancellation between JNI calls and before
+ * publishing a file. A JNI timeout takes effect once the codec returns.
+ * CLI timeouts can terminate the subprocess immediately.
  * <pre>
  * // 第一步：在后台线程定位 SDK 随附工具；独立构建也可以传入工具根目录。
  * TextureToolchain tools = TextureToolchain.installed();
@@ -27,31 +33,35 @@ import org.openide.modules.InstalledFileLocator;
  * tools.astc(Path.of("source.png"), Path.of("output.astc"), true, "6x6");
  * // 第四步：ASTC 单文件只有一层；多层 KTX 由 CompressedTexture 编排。
  * // 第五步：切换目标只改变输出，源图始终保留；失败时不会替换已有输出。
- * // 第六步：原生访问冲突仅重试一次；再次失败时按异常中的 Source 定位纹理。
+ * // 第六步：禁止启动子进程的环境可在 SDK 启动参数加 -J-Djme.sdk.texture.backend=jni。
  * </pre>
  */
 public final class TextureToolchain {
     private final Path root;
     private final Duration timeout;
+    private final String backend;
 
     /** Uses a ten-minute timeout per invocation and an unpacked tool root. */
     public TextureToolchain(Path root) {
         this(root, Duration.ofMinutes(10));
     }
 
-    /** Allows build systems to specify a positive timeout. */
+    /** Sets the tool timeout. The supplied duration must be positive. */
     public TextureToolchain(Path root, Duration timeout) {
         if (timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("Timeout must be positive");
         }
         this.root = root.toAbsolutePath().normalize();
         this.timeout = timeout;
+        backend = System.getProperty("jme.sdk.texture.backend", "auto");
+        if (!List.of("auto", "jni", "cli").contains(backend)) {
+            throw new IllegalArgumentException("Unknown texture backend: " + backend);
+        }
     }
 
     /**
-     * Locates installed module resources. The Gradle {@code prepareTextureTools}
-     * task downloads the official encoders before the SDK is built. Missing tools
-     * cause an explicit error rather than silently skipping texture conversion.
+     * Locates codecs shipped with the module. JNI is loaded from the cluster
+     * directory, so loading it does not extract a library or start a helper.
      */
     public static TextureToolchain installed() throws IOException {
         var location = InstalledFileLocator.getDefault().locate(
@@ -63,27 +73,142 @@ public final class TextureToolchain {
         return new TextureToolchain(location.toPath());
     }
 
-    /** Encodes BC1 through BC5 or BC7 DDS using CPU encoding and explicit mip count. */
+    /** Encodes BC1 through BC5 or BC7 on the CPU with the requested DDS mip count. */
     public void dds(Path input, Path output, String format, int levels) throws IOException, InterruptedException {
         if (!List.of("BC1", "BC2", "BC3", "BC4", "BC5", "BC7").contains(format) || levels < 1 || levels > 20) {
             throw new IllegalArgumentException("Unsupported BC format or mip count");
+        }
+        if (useNativeCodec()) {
+            BufferedImage image = readSource(input, output);
+            writeNative(output, stream -> NativeTextureCodec.writeDds(
+                    image, NativeTextureCodec.bcId(format), levels, stream));
+            return;
         }
         encodeWithCrashRetry(false, input, output, List.of("-fd", format, "-EncodeWith", "CPU",
                 "-miplevels", Integer.toString(levels)), List.of());
     }
 
-    /** Encodes one ASTC level, with medium quality and an explicit color profile. */
+    /** Encodes one ASTC mip level at medium quality using the supplied color profile. */
     public void astc(Path input, Path output, boolean srgb, String block) throws IOException, InterruptedException {
         if (!List.of("4x4", "5x5", "6x6", "8x8", "10x10", "12x12").contains(block)) {
             throw new IllegalArgumentException("Unsupported ASTC block size");
         }
+        if (useNativeCodec()) {
+            BufferedImage image = readSource(input, output);
+            int blockSize = Integer.parseInt(block.substring(0, block.indexOf('x')));
+            writeNative(output, stream -> {
+                byte[] payload = NativeTextureCodec.encode(image, 0, blockSize, srgb);
+                byte[] header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(0x5ca1ab13)
+                        .put((byte) blockSize).put((byte) blockSize).put((byte) 1).array();
+                CompressedTexture.put24(header, 7, image.getWidth());
+                CompressedTexture.put24(header, 10, image.getHeight());
+                CompressedTexture.put24(header, 13, 1);
+                stream.write(header);
+                stream.write(payload);
+            });
+            return;
+        }
         encodeWithCrashRetry(true, input, output, List.of(srgb ? "-cs" : "-cl"), List.of(block, "-medium"));
     }
 
-    /** CPU-decodes a single level to PNG. Retries a native access violation once;
-     * other failures and interruption propagate immediately. */
+    /** Decodes the base level to PNG on the CPU. */
     public void decode(Path input, Path output, boolean astc, boolean srgb) throws IOException, InterruptedException {
+        if (useNativeCodec()) {
+            checkSource(input, output);
+            BufferedImage image = CompressedTexture.read(input).decodeNative(0, srgb);
+            writeNative(output, stream -> {
+                if (!ImageIO.write(image, "png", stream)) {
+                    throw new IOException("PNG writer unavailable");
+                }
+            });
+            return;
+        }
         encodeWithCrashRetry(astc, input, output, astc ? List.of(srgb ? "-ds" : "-dl") : List.of(), List.of());
+    }
+
+    /**
+     * Reports whether the configured DDS encoder should be used. An explicit
+     * backend stays strict. Automatic mode lets the model exporter choose a
+     * portable encoder when no installed codec supports the current host.
+     *
+     * <pre>
+     * // 第一步：调用 hasConfiguredDdsEncoder() 查询本机编码能力。
+     * // 第二步：有编码器时使用 dds()。仅自动模式缺少编码器时采用跨平台回退。
+     * </pre>
+     *
+     * @return whether to use this toolchain
+     */
+    public boolean hasConfiguredDdsEncoder() {
+        if (!"auto".equals(backend) || Files.isRegularFile(NativeTextureCodec.library(root))) {
+            return true;
+        }
+        try {
+            executable(false);
+            return true;
+        } catch (IOException unavailable) {
+            return false;
+        }
+    }
+
+    boolean useNativeCodec() throws IOException {
+        if ("cli".equals(backend)) {
+            return false;
+        }
+        Path library = NativeTextureCodec.library(root);
+        if (Files.isRegularFile(library)) {
+            NativeTextureCodec.load(library);
+            return true;
+        }
+        if ("jni".equals(backend)) {
+            throw new IOException("Required SDK JNI texture codec is missing: " + library);
+        }
+        return false;
+    }
+
+    private static void checkSource(Path source, Path target) throws IOException {
+        if (!Files.isRegularFile(source) || source.toAbsolutePath().normalize().equals(target.toAbsolutePath().normalize())
+                || (Files.exists(target) && Files.isSameFile(source, target))) {
+            throw new IOException("Source must exist and differ from destination");
+        }
+    }
+
+    private static BufferedImage readSource(Path source, Path target) throws IOException, InterruptedException {
+        NativeTextureCodec.checkInterrupted();
+        checkSource(source, target);
+        BufferedImage image = ImageIO.read(source.toFile());
+        if (image == null) {
+            throw new IOException("Unreadable source image: " + source);
+        }
+        return image;
+    }
+
+    @FunctionalInterface
+    interface NativeOutput {
+        void write(OutputStream stream) throws IOException, InterruptedException;
+    }
+
+    void writeNative(Path output, NativeOutput encoder) throws IOException, InterruptedException {
+        NativeTextureCodec.checkInterrupted();
+        long start = System.nanoTime();
+        Path target = output.toAbsolutePath().normalize();
+        Files.createDirectories(target.getParent());
+        Path temporary = Files.createTempFile(target.getParent(), ".texture-", ".tmp");
+        try {
+            try (OutputStream stream = Files.newOutputStream(temporary)) {
+                encoder.write(stream);
+            }
+            NativeTextureCodec.checkInterrupted();
+            if (Duration.ofNanos(System.nanoTime() - start).compareTo(timeout) >= 0) {
+                throw new IOException("Texture encoder timed out after " + timeout);
+            }
+            try {
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
     }
 
     private void encodeWithCrashRetry(boolean astc, Path input, Path output,

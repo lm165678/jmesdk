@@ -8,18 +8,12 @@ package com.jme3.gde.scenecomposer.gizmo.audio;
 import com.jme3.asset.AssetManager;
 import com.jme3.audio.AudioNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeAudioNode;
-import com.jme3.material.Material;
-import com.jme3.material.RenderState;
+import com.jme3.gde.scenecomposer.gizmo.GizmoIcon;
 import com.jme3.math.Vector3f;
-import com.jme3.renderer.RenderManager;
-import com.jme3.renderer.ViewPort;
-import com.jme3.renderer.queue.RenderQueue;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
 import com.jme3.scene.control.BillboardControl;
-import com.jme3.scene.shape.Quad;
-import com.jme3.texture.Texture;
 
 /**
  *
@@ -32,18 +26,8 @@ public class AudioGizmoFactory {
         if (audio == null) {
             return null;
         }
-        
-        return createAudioGizmo(assetManager, node, audio);
-
-        // This marker is not part of the scene, but is part of the tools node. 
-        //return audio;
-    }
-
-    private static Spatial createAudioGizmo(AssetManager assetManager, JmeAudioNode node, AudioNode audio) {
         Node gizmo = new Node("Audio node Gizmo");
-        Spatial marker = createAudioMarker(assetManager);
-        gizmo.attachChild(marker);
-        
+        gizmo.attachChild(createAudioMarker(assetManager));
         gizmo.addControl(new AudioMarkerControl(audio));
         return gizmo;
     }
@@ -55,29 +39,22 @@ public class AudioGizmoFactory {
     protected static class AudioMarkerControl extends BillboardControl {
 
         private final AudioNode audio;
-        private final Vector3f lastPos = new Vector3f();
-        private final Vector3f audioPos;
+        private final Vector3f position = new Vector3f();
 
-        AudioMarkerControl(AudioNode a) {
-            super();
-            audio = a;
-            audioPos = audio.getPosition();
+        AudioMarkerControl(AudioNode audio) {
+            this.audio = audio;
         }
 
         @Override
         protected void controlUpdate(float f) {
             super.controlUpdate(f);
             Spatial marker = getSpatial();
-            if (marker != null && !audioPos.equals(lastPos)) {
-                lastPos.set(audioPos);
-                marker.getParent().worldToLocal(lastPos, lastPos);
-                marker.setLocalTranslation(lastPos);
+            if (marker != null && marker.getParent() != null) {
+                marker.getParent().worldToLocal(audio.getWorldTranslation(), position);
+                if (!marker.getLocalTranslation().equals(position)) {
+                    marker.setLocalTranslation(position);
+                }
             }
-        }
-
-        @Override
-        protected void controlRender(RenderManager rm, ViewPort vp) {
-            super.controlRender(rm, vp);
         }
     }
 
@@ -85,17 +62,7 @@ public class AudioGizmoFactory {
      * A marker on the screen that shows where an audio node is.
      */
     protected static Geometry createAudioMarker(AssetManager assetManager) {
-        Quad q = new Quad(0.5f, 0.5f);
-        Geometry audioMarker = new Geometry("light bulb", q);
-        audioMarker.move(-q.getHeight() / 2f, -q.getWidth() / 2f, 0);
-
-        Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
-        Texture tex = assetManager.loadTexture("com/jme3/gde/scenecomposer/audionode.gif");
-        mat.setTexture("ColorMap", tex);
-        mat.getAdditionalRenderState().setBlendMode(RenderState.BlendMode.Alpha);
-        audioMarker.setMaterial(mat);
-        audioMarker.setQueueBucket(RenderQueue.Bucket.Transparent);
-
-        return audioMarker;
+        return GizmoIcon.create(assetManager, "Audio source", "volume-2.svg",
+                "com/jme3/gde/scenecomposer/audionode.gif", true);
     }
 }

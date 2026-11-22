@@ -4,6 +4,11 @@ import com.jme3.bounding.BoundingBox;
 import com.jme3.bounding.BoundingVolume;
 import com.jme3.bullet.collision.shapes.*;
 import com.jme3.math.Transform;
+import com.jme3.math.Quaternion;
+import com.jme3.scene.shape.Cylinder;
+import com.jme3.scene.shape.Line;
+import com.jme3.scene.shape.Sphere;
+import com.jme3.scene.debug.WireSphere;
 import com.jme3.math.Vector3f;
 import com.jme3.scene.*;
 
@@ -62,6 +67,40 @@ public final class ModelCollisionShapes {
         CompoundCollisionShape compound = new CompoundCollisionShape(1);
         compound.addChildShape(primitive, box.getCenter());
         return compound;
+    }
+
+    /**
+     * Builds the local collision shape for a newly created editor primitive.
+     * Thin wire lines and quads have small finite thickness. Wrapped cylinders
+     * use their actual triangles, including taper.
+     */
+    public static CollisionShape createPrimitive(Geometry geometry) {
+        Mesh mesh = geometry.getMesh();
+        if (mesh instanceof Sphere sphere) {
+            return new MultiSphere(Math.max(.001f, sphere.getRadius()));
+        }
+        if (mesh instanceof WireSphere) {
+            BoundingBox bounds = bounds(geometry);
+            return new MultiSphere(Math.max(.001f, Math.max(bounds.getXExtent(),
+                    Math.max(bounds.getYExtent(), bounds.getZExtent()))));
+        }
+        if (mesh instanceof Cylinder) {
+            return new MeshCollisionShape(mesh);
+        }
+        if (mesh instanceof Line line) {
+            Vector3f direction = line.getEnd().subtract(line.getStart());
+            float length = direction.length();
+            direction = length > 0f ? direction.divideLocal(length) : Vector3f.UNIT_Z;
+            Vector3f up = Math.abs(direction.y) > .99f ? Vector3f.UNIT_X : Vector3f.UNIT_Y;
+            Quaternion rotation = new Quaternion().lookAt(direction, up);
+            Vector3f center = line.getStart().add(line.getEnd()).multLocal(.5f);
+            BoxCollisionShape segment = new BoxCollisionShape(new Vector3f(.005f, .005f,
+                    Math.max(.005f, length * .5f)));
+            CompoundCollisionShape compound = new CompoundCollisionShape(1);
+            compound.addChildShape(segment, center, rotation.toRotationMatrix());
+            return compound;
+        }
+        return create(geometry, false);
     }
 
     public static int simpleType(CollisionShape shape) {

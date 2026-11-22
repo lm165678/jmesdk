@@ -144,7 +144,7 @@ public final class EditorUiStyle {
 
     private static void compactIcons(AbstractButton button) {
         // NetBeans dropdowns decorate icons in setIcon; wrapping their decorated
-        // result recursively would duplicate arrows. Keep their native renderer.
+        // Reuse their renderer so the popup arrow is drawn once.
         if (button.getClass().getName().contains("DropDown")
                 || Boolean.TRUE.equals(button.getClientProperty("sdk.updatingIcon"))) {
             return;

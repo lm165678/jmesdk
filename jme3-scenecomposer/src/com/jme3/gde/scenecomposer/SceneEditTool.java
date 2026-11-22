@@ -33,6 +33,7 @@ import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeSpatial;
 import com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit;
 import com.jme3.gde.core.undoredo.SceneUndoRedoManager;
+import com.jme3.gde.scenecomposer.gizmo.GizmoFactory;
 import com.jme3.input.event.KeyInputEvent;
 import com.jme3.material.Material;
 import com.jme3.material.RenderState.BlendMode;
@@ -48,15 +49,10 @@ import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
-import com.jme3.scene.VertexBuffer.Type;
-import com.jme3.scene.debug.Arrow;
 import com.jme3.scene.shape.Box;
+import com.jme3.scene.shape.Cylinder;
 import com.jme3.scene.shape.Quad;
 import com.jme3.scene.shape.Torus;
-import com.jme3.util.BufferUtils;
-import com.jme3.util.TempVars;
-import java.nio.FloatBuffer;
-import java.nio.ShortBuffer;
 import org.openide.loaders.DataObject;
 import org.openide.util.Lookup;
 
@@ -83,6 +79,7 @@ public abstract class SceneEditTool {
     protected Node axisMarker;
     private static final float AXIS_MARKER_RADIUS = 2f;
     private static final float AXIS_MARKER_SCREEN_RADIUS = 80f;
+    private static final float HANDLE_PICK_MARGIN = 4f;
     protected Material redMat, blueMat, greenMat, yellowMat, cyanMat, magentaMat, orangeMat;
     protected Geometry quadXY, quadXZ, quadYZ;
     protected Geometry arrowX, arrowY, arrowZ;
@@ -135,6 +132,10 @@ public abstract class SceneEditTool {
      * Remove the marker from it's parent (the tools node)
      */
     public void hideMarker() {
+        detachMarker();
+    }
+
+    final void detachMarker() {
         if (axisMarker != null) {
             axisMarker.removeFromParent();
         }
@@ -163,7 +164,12 @@ public abstract class SceneEditTool {
     }
 
     public void doUpdateToolsTransformation() {
-        if (toolController.getSelectedSpatial() != null) {
+        boolean hasSelection = toolController.getSelectedSpatial() != null;
+        Spatial.CullHint visibility = hasSelection ? Spatial.CullHint.Inherit : Spatial.CullHint.Always;
+        if (axisMarker.getLocalCullHint() != visibility) {
+            axisMarker.setCullHint(visibility);
+        }
+        if (hasSelection) {
             axisMarker.setLocalTranslation(toolController.getSelectedSpatial().getWorldTranslation());
             switch (transformType) {
                 case local ->
@@ -400,11 +406,17 @@ public abstract class SceneEditTool {
      * @return null if it did not intersect the marker
      */
     protected Vector3f pickAxisMarker(Camera cam, Vector2f mouseLoc, AxisMarkerPickType pickType) {
-        if (axisMarker == null) {
+        if (pickType == null || axisMarker == null || axisMarker.getParent() == null
+                || toolController.getSelectedSpatial() == null) {
             return null;
         }
 
-        CollisionResult cr = pick(cam, mouseLoc, axisMarker);
+        CollisionResult cr = pickMarker(cam, mouseLoc, pickType);
+        if (cr == null) {
+            // Keep exact hits first. A small screen-space margin also helps when
+            // a ring is viewed edge-on or the pointer is just outside a shaft.
+            cr = pickNearMarker(cam, mouseLoc, pickType);
+        }
         if (cr == null || cr.getGeometry() == null) {
             return null;
         }
@@ -446,7 +458,41 @@ public abstract class SceneEditTool {
         return null;
     }
 
+    private CollisionResult pickNearMarker(Camera cam, Vector2f mouseLoc, AxisMarkerPickType pickType) {
+        CollisionResult closest = null;
+        Vector2f sample = new Vector2f();
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                if (x == 0 && y == 0) {
+                    continue;
+                }
+                float margin = x != 0 && y != 0 ? HANDLE_PICK_MARGIN * .70710677f : HANDLE_PICK_MARGIN;
+                sample.set(mouseLoc.x + x * margin, mouseLoc.y + y * margin);
+                CollisionResult hit = pickMarker(cam, sample, pickType);
+                if (hit != null && (closest == null || hit.getDistance() < closest.getDistance())) {
+                    closest = hit;
+                }
+            }
+        }
+        return closest;
+    }
+
+    private CollisionResult pickMarker(Camera cam, Vector2f mouseLoc, AxisMarkerPickType pickType) {
+        for (CollisionResult hit : pickResults(cam, mouseLoc, axisMarker)) {
+            String name = hit.getGeometry().getName();
+            boolean plane = name.startsWith("quad") || name.startsWith("circle");
+            if (plane ? pickType != AxisMarkerPickType.axisOnly : pickType != AxisMarkerPickType.planeOnly) {
+                return hit;
+            }
+        }
+        return null;
+    }
+
     private static CollisionResult pick(Camera cam, Vector2f mouseLoc, Node node) {
+        return pickResults(cam, mouseLoc, node).getClosestCollision();
+    }
+
+    private static CollisionResults pickResults(Camera cam, Vector2f mouseLoc, Node node) {
         CollisionResults results = new CollisionResults();
         Ray ray = new Ray();
         Vector3f pos = cam.getWorldCoordinates(mouseLoc, 0).clone();
@@ -455,8 +501,7 @@ public abstract class SceneEditTool {
         ray.setOrigin(pos);
         ray.setDirection(dir);
         node.collideWith(ray, results);
-        CollisionResult result = results.getClosestCollision();
-        return result;
+        return results;
     }
 
     /**
@@ -576,10 +621,16 @@ public abstract class SceneEditTool {
 
         Node axis = new Node();
 
-        // create arrows
-        arrowX = new Geometry("arrowX", new Arrow(new Vector3f(arrowSize, 0, 0)));
-        arrowY = new Geometry("arrowY", new Arrow(new Vector3f(0, arrowSize, 0)));
-        arrowZ = new Geometry("arrowZ", new Arrow(new Vector3f(0, 0, arrowSize)));
+        // Solid shafts keep the rendered width and mouse collision on the same mesh.
+        Mesh shaft = new Cylinder(2, 12, arrowSize / 36f, arrowSize, true);
+        arrowX = new Geometry("arrowX", shaft);
+        arrowX.setLocalRotation(YAW090);
+        arrowX.setLocalTranslation(arrowSize / 2, 0, 0);
+        arrowY = new Geometry("arrowY", shaft);
+        arrowY.setLocalRotation(PITCH090);
+        arrowY.setLocalTranslation(0, arrowSize / 2, 0);
+        arrowZ = new Geometry("arrowZ", shaft);
+        arrowZ.setLocalTranslation(0, 0, arrowSize / 2);
         axis.attachChild(arrowX);
         axis.attachChild(arrowY);
         axis.attachChild(arrowZ);
@@ -592,8 +643,8 @@ public abstract class SceneEditTool {
         quadYZ.setLocalRotation(YAW090);
 
         // create circles
-        float s = arrowSize / 80f; // s = 2/80 = 0.025
-        Mesh circle = new Torus(64, 4, s, arrowSize);
+        float s = arrowSize / 30f;
+        Mesh circle = new Torus(64, 8, s, arrowSize);
         circleXY = new Geometry("circleXY", circle);
         circleXZ = new Geometry("circleXZ", circle);
         circleXZ.setLocalRotation(PITCH090);
@@ -602,8 +653,8 @@ public abstract class SceneEditTool {
 
         // create cones
         float h = arrowSize / 8f;
-        float r = arrowSize / 16f;
-        Mesh cone = createCone(16, r, h);
+        float r = arrowSize / 13f;
+        Mesh cone = GizmoFactory.createCone(16, r, h);
 
         coneX = new Geometry("coneX", cone);
         coneX.move(-h, 0, 0);
@@ -622,7 +673,7 @@ public abstract class SceneEditTool {
         coneZ.move(ARROW_Z.mult(arrowSize));
 
         //create boxes
-        float ext = arrowSize / 16f;
+        float ext = arrowSize / 13f;
         Mesh box = new Box(ext, ext, ext);
         boxX = new Geometry("boxX", box);
         boxX.move(-ext, 0, 0);
@@ -737,64 +788,5 @@ public abstract class SceneEditTool {
 
     public void setTransformType(SceneComposerToolController.TransformationType transformType) {
         this.transformType = transformType;
-    }
-
-    private static Mesh createCone(int radialSamples, float radius, float height) {
-        Mesh cone = new Mesh();
-
-        float fInvRS = 1.0f / radialSamples;
-
-        // Generate points on the unit circle to be used in computing the mesh
-        // points on a dome slice.
-        float[] afSin = new float[radialSamples];
-        float[] afCos = new float[radialSamples];
-        for (int i = 0; i < radialSamples; i++) {
-            float fAngle = FastMath.TWO_PI * fInvRS * i;
-            afCos[i] = FastMath.cos(fAngle);
-            afSin[i] = FastMath.sin(fAngle);
-        }
-
-        FloatBuffer vb = BufferUtils.createVector3Buffer(radialSamples + 2);
-        cone.setBuffer(Type.Position, 3, vb);
-
-        TempVars vars = TempVars.get();
-        Vector3f tempVa = vars.vect1;
-
-        for (int i = 0; i < radialSamples; i++) {
-            Vector3f kRadial = tempVa.set(afCos[i], 0, afSin[i]);
-            kRadial.mult(radius, tempVa);
-            vb.put(tempVa.x).put(tempVa.y).put(tempVa.z);
-
-            BufferUtils.populateFromBuffer(tempVa, vb, i);
-
-        }
-        vars.release();
-
-        // top of the cone
-        vb.put(0).put(height).put(0);
-        // base of the cone
-        vb.put(0).put(0).put(0);
-
-        ShortBuffer ib = BufferUtils.createShortBuffer(3 * (radialSamples) * 2);
-        cone.setBuffer(Type.Index, 3, ib);
-
-        short top = (short) radialSamples;
-        short bot = (short) (radialSamples + 1);
-
-        for (int i = 0; i < radialSamples; i++) {
-            short a = (short) i;
-            short b = (short) ((i + 1) % radialSamples);
-            ib.put(top);
-            ib.put(b);
-            ib.put(a);
-
-            ib.put(a);
-            ib.put(b);
-            ib.put(bot);
-        }
-
-        cone.updateBound();
-
-        return cone;
     }
 }

@@ -116,7 +116,7 @@ public final class TextureEditorSmoke {
             action.run();
             throw new RuntimeException(message);
         } catch (IOException expected) {
-            // Expected explicit, user-reportable failure.
+            // The UI should receive an explicit error for this input.
         }
     }
 

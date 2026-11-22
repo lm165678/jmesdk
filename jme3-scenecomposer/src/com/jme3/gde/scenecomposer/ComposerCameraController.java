@@ -148,6 +148,9 @@ public class ComposerCameraController extends AbstractCameraController {
                 }
                 boolean click = !pressed && buttonDownL && !primaryOrbit
                         && toolController != null && toolController.allowsPrimaryOrbit();
+                if (click) {
+                    toolController.finishSelectionClick();
+                }
                 primaryOrbit = false;
                 buttonDownL = pressed;
                 checkClick(0, pressed);

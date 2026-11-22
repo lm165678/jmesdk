@@ -99,8 +99,8 @@ public class LightDirectionUpdate extends AbstractControl {
         Quaternion current = gizmo.getLocalRotation().clone();
         Vector3f forward = current.mult(Vector3f.UNIT_Y).normalizeLocal();
         float dot = FastMath.clamp(forward.dot(target), -1f, 1f);
-        // Gizmo drags already wrote this direction. Keep their full orientation,
-        // including roll, instead of reconstructing a new frame from UNIT_Y.
+        // A gizmo drag already set the direction. Reuse its orientation so roll is preserved,
+        // since rebuilding from UNIT_Y would discard it.
         if (dot >= 1f - 1e-6f) {
             return;
         }

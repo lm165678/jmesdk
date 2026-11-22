@@ -16,7 +16,7 @@ import org.openide.util.lookup.ServiceProvider;
 
 /**
 
- * GI volume inspector. Creation, drag/reparent and transform tools use JmeNode's
+ * GI volume properties. Creation, reparenting and transforms use JmeNode's
 
  * existing undoable workflow. Coverage/count property setters invalidate old data.
 
@@ -77,7 +77,7 @@ public final class JmeGiProbeVolume extends JmeNode {
             properties.put(makeProperty(volume, Vector3f.class, "getProbeCounts", "setProbeCounts", "Probe counts"));
 
             properties.put(makeProperty(volume, float.class, "getIntensity", "setIntensity", "GI intensity"));
-            // Render-thread property polling; old GI remains visible until manual rebake succeeds.
+            // Poll on the render thread and keep using the last bake until the new one succeeds.
             properties.put(makeProperty(volume, String.class, "getSkyBakeStatus", null, "Sky bake status"));
 
             org.openide.nodes.Node.Property<?> blending = makeProperty(volume, boolean.class,

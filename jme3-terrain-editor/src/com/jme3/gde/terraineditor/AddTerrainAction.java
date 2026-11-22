@@ -6,6 +6,8 @@ package com.jme3.gde.terraineditor;
 
 import com.jme3.asset.TextureKey;
 import com.jme3.bounding.BoundingBox;
+import com.jme3.bullet.control.RigidBodyControl;
+import com.jme3.bullet.util.CollisionShapeFactory;
 import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.core.scene.SceneApplication;
 import com.jme3.gde.core.sceneexplorer.nodes.actions.AbstractNewSpatialWizardAction;
@@ -188,7 +190,10 @@ public class AddTerrainAction extends AbstractNewSpatialWizardAction {
         control.setLodCalculator(new DistanceLodCalculator(patchSize, 2.7f));
 	((Node)terrain).addControl(control);
 
-        parent.attachChild((Node)terrain);
+        // Terrain uses the same static collision and edit lifecycle as primitives.
+        Node terrainNode = (Node) terrain;
+        terrainNode.addControl(new RigidBodyControl(CollisionShapeFactory.createMeshShape(terrainNode), 0f));
+        parent.attachChild(terrainNode);
 
         //setNeedsSave(true);
         //addSpatialUndo(parent, (Node)terrain, jmeNodeParent);

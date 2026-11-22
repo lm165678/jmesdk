@@ -44,7 +44,7 @@ import java.awt.image.BufferedImage;
  */
 public class PreviewRequest {
 
-    // Null retains legacy preview lighting for other requesters.
+    // With no override, use the existing lighting for this preview request.
     Vector3f materialLightDirection;
     boolean materialEnvironment;
 

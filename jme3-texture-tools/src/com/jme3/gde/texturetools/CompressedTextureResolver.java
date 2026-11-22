@@ -8,7 +8,7 @@ import org.openide.filesystems.FileObject;
 import org.openide.filesystems.MIMEResolver;
 import org.openide.util.lookup.ServiceProvider;
 
-/** Resolves DDS/ASTC and only ASTC-compressed KTX1; leaves other KTX types alone. */
+/** Recognizes DDS, ASTC and ASTC-compressed KTX1 files. */
 @ServiceProvider(service = MIMEResolver.class, position = 150)
 public final class CompressedTextureResolver extends MIMEResolver {
     public static final String MIME = "image/x-jme-compressed-texture";
@@ -41,7 +41,7 @@ public final class CompressedTextureResolver extends MIMEResolver {
                 return MIME;
             }
         } catch (IOException exception) {
-            // Leave inaccessible files to the platform's normal fallback handling.
+            // Let the platform handle files we cannot open.
         }
         return null;
     }

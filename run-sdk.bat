@@ -4,14 +4,16 @@ cd /d "%~dp0"
 if errorlevel 1 goto failed
 
 rem Run existing build only. Uses the same profile as build-and-run-sdk.bat.
-rem Override SDK_JAVA_HOME to use another compatible JDK (25 or later).
-if not defined SDK_JAVA_HOME set "SDK_JAVA_HOME=C:\Users\JohnKkk\.gradle\jdks\eclipse_adoptium-25-amd64-windows.2"
+rem Resolve JDK 25 using the same configuration as the SDK build.
+set "SDK_RESOLVED_JDK="
+for /f "usebackq delims=" %%J in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build-local-sdk.ps1" jdk`) do set "SDK_RESOLVED_JDK=%%J"
+if not defined SDK_RESOLVED_JDK goto failed
 set "SDK_LAUNCHER=%~dp0netbeans\platform\lib\nbexec64.exe"
 set "SDK_USERDIR=%~dp0build\testuserdir"
 set "SDK_CLUSTERS=%~dp0build\cluster;%~dp0netbeans\extide;%~dp0netbeans\groovy;%~dp0netbeans\harness;%~dp0netbeans\ide;%~dp0netbeans\java;%~dp0netbeans\nb;%~dp0netbeans\platform"
 
-if not exist "%SDK_JAVA_HOME%\bin\java.exe" (
-    echo ERROR: JDK not found at "%SDK_JAVA_HOME%". Set SDK_JAVA_HOME first.
+if not exist "%SDK_RESOLVED_JDK%\bin\java.exe" (
+    echo ERROR: JDK not found at "%SDK_RESOLVED_JDK%". Check SDK_JAVA_HOME or sdk-local.json.
     goto failed
 )
 if not exist "%SDK_LAUNCHER%" (
@@ -33,14 +35,14 @@ rem JVM access flags match nbproject/project.properties run.args.extra.
 set "SDK_RUN_ARGS=-J-Dsun.java2d.noddraw=true -J--add-opens=java.base/java.net=ALL-UNNAMED -J--add-exports=java.desktop/sun.awt=ALL-UNNAMED -J--add-opens=java.desktop/javax.swing.text=ALL-UNNAMED -J--add-opens=java.desktop/javax.swing=ALL-UNNAMED -J--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED -J--add-opens=java.base/java.security=ALL-UNNAMED -J--add-exports=java.base/sun.reflect.annotation=ALL-UNNAMED -J--add-opens=java.desktop/javax.swing.plaf.basic=ALL-UNNAMED -J--add-opens=java.desktop/java.awt=ALL-UNNAMED -J--add-opens=java.desktop/java.awt.event=ALL-UNNAMED -J--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED -J--add-opens=java.desktop/javax.swing.plaf.synth=ALL-UNNAMED -J--add-opens=java.desktop/com.sun.java.swing.plaf.gtk=ALL-UNNAMED -J--add-opens=java.desktop/sun.awt.shell=ALL-UNNAMED -J--add-opens=java.desktop/sun.awt.im=ALL-UNNAMED -J--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED -J--add-exports=java.desktop/com.sun.beans.editors=ALL-UNNAMED -J--add-exports=java.desktop/sun.swing=ALL-UNNAMED -J--add-exports=java.desktop/sun.awt.im=ALL-UNNAMED -J--add-exports=java.desktop/com.sun.java.swing.plaf.motif=ALL-UNNAMED -J--add-exports=java.desktop/com.apple.eio=ALL-UNNAMED -J--add-opens=java.base/java.io=ALL-UNNAMED -J--add-opens=java.base/java.lang=ALL-UNNAMED -J--add-exports=jdk.internal.opt/jdk.internal.opt=ALL-UNNAMED"
 if /i "%~1"=="--check" (
     echo SDK launcher and compiled core found.
-    echo JDK: "%SDK_JAVA_HOME%"
+    echo JDK: "%SDK_RESOLVED_JDK%"
     echo Profile: "%SDK_USERDIR%"
     echo No build or launch performed.
     exit /b 0
 )
 
 echo Starting compiled jMonkeyEngine SDK - no build...
-"%SDK_LAUNCHER%" --jdkhome "%SDK_JAVA_HOME%" --userdir "%SDK_USERDIR%" --branding jmonkeyplatform --clusters "%SDK_CLUSTERS%" -J-Dnetbeans.logger.console=true -J-ea %SDK_RUN_ARGS% %*
+"%SDK_LAUNCHER%" --jdkhome "%SDK_RESOLVED_JDK%" --userdir "%SDK_USERDIR%" --branding jmonkeyplatform --clusters "%SDK_CLUSTERS%" -J-Dnetbeans.logger.console=true -J-ea %SDK_RUN_ARGS% %*
 if errorlevel 1 goto failed
 endlocal
 exit /b 0

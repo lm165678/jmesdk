@@ -167,7 +167,7 @@ void main() {
             gl_FragColor = vec4(color, 1.0);
             return;
         }
-        // Debug reconstruction only: interpolated samples are not exact distances.
+        // Interpolation is useful for the debug view but does not recover exact distances.
         // The relaxed step and finite hit band are NOT a certified DDGI ray query.
         float advance = max((distance - m_HitDistance) * 0.7, epsilon * 0.25);
 #ifdef GLOBAL_PREVIEW

@@ -90,7 +90,8 @@ public class SpatialAssetDataObject extends AssetDataObject {
         closeAsset();
         try {
             listListener.start();
-            Spatial spatial = mgr.loadModel(getAssetKey());
+            Spatial spatial = this instanceof BinaryModelDataObject
+                    ? mgr.loadModelForEditing(getAssetKey()) : mgr.loadModel(getAssetKey());
             listListener.stop();
             if (!(this instanceof BinaryModelDataObject)) {
                 SpatialUtil.storeOriginalPathUserData(spatial);

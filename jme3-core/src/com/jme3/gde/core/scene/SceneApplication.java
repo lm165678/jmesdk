@@ -134,6 +134,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private EditorToolDepth editorToolDepth;
     boolean useCanvas = false;
     private BulletAppState physicsState;
+    private PhysicsPreview physicsPreview;
+    private volatile DataObject physicsPreviewAsset;
+    private boolean savingSceneBeforeClose;
+    private final EditorCollisionSync editorCollisionSync = new EditorCollisionSync(rootNode);
     private Thread thread;
     private NodeSyncAppState nodeSync;
     private FakeApplication fakeApp;
@@ -174,9 +178,9 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private volatile boolean giVolumesVisible = true;
     private volatile boolean giPreviewEnabled = true;
 
-    /** Last GI preview diagnostic; an empty string means no atlas error. */
-    /** Render-thread diagnostic borrow; never retain/dispose across frames.
-     * Includes streamed external data. Returns null until the payload is resident.
+    /** Returns the last atlas error, or an empty string. */
+    /** Returns the resident bake, including streamed data, or null until it is
+     * ready. Use it on the render thread for this frame without disposing it.
      */
     public com.jme3.environment.gi.GiProbeData getGiProbePreviewData(
             com.jme3.environment.gi.GiProbeVolume volume) {
@@ -187,17 +191,17 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         return giPreview.getStatus();
     }
 
-    /** Preview-only helper visibility, independent of GI lighting; default true. */
+    /** Shows preview helpers by default. This does not affect GI lighting. */
     public boolean isGiVolumesVisible() {
         return giVolumesVisible;
     }
 
-    /** EDT-safe; hide/show volume bounds and probe markers without changing the scene. */
+    /** Shows or hides probe markers and volume bounds in the editor. Safe to call from the EDT. */
     public void setGiVolumesVisible(boolean visible) {
         giVolumesVisible = visible;
     }
 
-    /** Whether completed, valid GI bakes are applied to preview materials (default true). */
+    /** Returns whether the preview applies completed GI bakes. Enabled by default. */
     public boolean isGiPreviewEnabled() {
         return giPreviewEnabled;
     }
@@ -229,7 +233,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         sdfPreviewSelection = selected;
     }
 
-    /** Returns the selected subtree; consumers must reject detached/stale selections. */
+    /** Returns the selected subtree. It may have been detached since selection. */
     public Spatial getSdfPreviewSelection() {
         return sdfPreviewSelection;
     }
@@ -237,7 +241,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private volatile float editorFlySpeed = Math.max(0.01f, Math.min(10000f,
             NbPreferences.forModule(SceneApplication.class).getFloat("editorFlySpeed", 10f)));
 
-    /** Returns editor flight speed in world units/second, default 10; Shift multiplies by four. */
+    /** Returns flight speed in world units per second. The default is 10; Shift multiplies it by four. */
     public float getEditorFlySpeed() {
         return editorFlySpeed;
     }
@@ -290,21 +294,44 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
 
-    /** Render-thread-only presentation selection for the main editor panel. */
-    void setShaderSrgbPresentation(boolean enabled) {
+    /** Selects the main preview's output path. Call on the render thread. */
+    void setPreviewPresentation(boolean shaderSrgb, boolean dither, boolean hdr) {
         if (panel != null) {
-            panel.setShaderSrgbOutput(enabled ? getAssetManager() : null);
+            boolean hdrPanel = panel instanceof com.jme3.system.lwjgl.WindowsHdrAwtPanel;
+            if (hdrPanel) {
+                ((com.jme3.system.lwjgl.WindowsHdrAwtPanel) panel).setHdrPreviewEnabled(hdr);
+            }
+            panel.setSrgbOutputDithering(dither);
+            panel.setShaderSrgbOutput(shaderSrgb || (hdr && hdrPanel) ? getAssetManager() : null);
+        } else if (useCanvas && getContext() != null) {
+            getContext().getSettings().setSrgbOutputDithering(shaderSrgb && dither);
         }
     }
 
     private final EditorPostProcessing editorPostProcessing = new EditorPostProcessing(this);
 
-    /** Queues scene-owned settings; transient diagnostic options are never saved. */
+    /**
+     * Stores the active scene's display choice before export, on the render thread.
+     * 第一步：保存场景前调用此方法；未操作过下拉框的新场景也会保存默认 HDR。
+     * 第二步：导出 J3O，游戏加载并挂载后由 SimpleApplication 自动应用。
+     * Other assets and existing post-processing filters are left unchanged.
+     *
+     * @param asset the asset being saved
+     * @throws java.io.IOException if settings cannot be stored
+     */
+    public void saveEditorDisplayOutput(org.openide.loaders.DataObject asset) throws java.io.IOException {
+        SceneRequest request = currentSceneRequest;
+        if (request != null && request.getDataObject() == asset) {
+            editorPostProcessing.saveSettings(request, true);
+        }
+    }
+
+    /** Queues settings for the scene. Temporary diagnostic options stay in the editor. */
     public void configureEditorPostProcessing(String option, double value) {
         final SceneRequest owner = currentSceneRequest;
         if (owner != null && owner.getDataObject() != null
                 && !option.equals("Lit") && !option.equals("ResetExposure")) {
-            // Mark before the render queue runs so an immediate close asks to save.
+            // Mark dirty now so closing before the render task still prompts for a save.
             if (java.awt.EventQueue.isDispatchThread()) {
                 owner.getDataObject().setModified(true);
             } else {
@@ -318,7 +345,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             editorPostProcessing.configure(option, value);
             if (!option.equals("Lit") && !option.equals("ResetExposure")) {
                 try {
-                    editorPostProcessing.saveSettings(owner);
+                    editorPostProcessing.saveSettings(owner, option.equals("GameDisplayOutput"));
                     java.awt.EventQueue.invokeLater(() -> {
                         if (owner.getDataObject() != null) {
                             owner.getDataObject().setModified(true);
@@ -332,7 +359,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
 
-    /** Delivers a scene-scoped UI snapshot on EDT; stale requests are discarded. */
+    /** Sends the snapshot on the EDT if the request still belongs to the open scene. */
     public void readEditorPostProcessing(java.util.function.Consumer<java.util.Map<String, Double>> receive) {
         final SceneRequest owner = currentSceneRequest;
         enqueue(() -> {
@@ -351,8 +378,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     }
 
     private void renderPreviewFrame(float tpf) {
-        // Editor-only geometry must never enter managed shadow caster queues.
-        // Visit descendants as imported gizmo meshes can have explicit Cast set.
+        // Editor helpers must stay out of the shadow caster queue.
+        // Check descendants too: an imported mesh can set Cast explicitly.
         toolsNode.depthFirstTraversal(spatial -> {
             if (spatial.getLocalShadowMode() != com.jme3.renderer.queue.RenderQueue.ShadowMode.Off) {
                 spatial.setShadowMode(com.jme3.renderer.queue.RenderQueue.ShadowMode.Off);
@@ -369,8 +396,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             }
         }
         editorPostProcessing.sync();
-        // Copy final scene depth after every FPP, then draw editor-only geometry
-        // in its own unfiltered viewport. Preserve occlusion for non-overlay tools.
+        // Copy scene depth after FPP so tools in the unfiltered viewport
+        // can still be occluded by scene geometry.
         if (editorToolDepth != null && (viewPort.getProcessors().isEmpty()
                 || viewPort.getProcessors().get(viewPort.getProcessors().size() - 1) != editorToolDepth)) {
             viewPort.removeProcessor(editorToolDepth);
@@ -378,8 +405,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         }
         giPreview.render(this, () -> renderPreviewLodFrame(tpf));
         if (gBufferPreview != null && context.isRenderable()) {
-            // The GUI target is the AWT presentation target, not the scene FPP's
-            // temporary HDR framebuffer. Draw only after all viewports finish.
+            // Draw the GUI to the AWT presentation target once viewports finish.
+            // The scene FPP's temporary HDR target is no longer the output at this point.
             gBufferPreview.drawOverlay(guiViewPort.getOutputFrameBuffer());
         }
     }
@@ -425,11 +452,13 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private Spatial.CullHint savedToolCull;
     private Spatial.CullHint savedStatsCull;
     private boolean savedOverlayEnabled;
+    private boolean savedToolsViewEnabled;
 
     /**
-     * Whether editor helpers are visible (default true). This is preview state,
-     * not scene data. G hides the tool root, handle viewport and statistics;
-     * application GUI nodes and scene lighting are unaffected. Individual grid
+     * Editor helpers are visible by default. G hides the tool root, handle
+     * viewport and statistics without affecting the game's GUI or lighting. The tools
+     * viewport is disabled too: screen-sized markers use Never culling and can bypass
+     * ancestor culling in flattened render queues. Individual grid
      * and selection settings are preserved. Called from any thread; mutations
      * are queued on the render thread. Closing the scene restores visibility.
      * <pre>
@@ -456,6 +485,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             savedToolCull = toolsNode.getLocalCullHint();
             savedStatsCull = statsGuiNode.getLocalCullHint();
             savedOverlayEnabled = overlayView != null && overlayView.isEnabled();
+            savedToolsViewEnabled = editorToolsView != null && editorToolsView.isEnabled();
+            if (editorToolsView != null) {
+                editorToolsView.setEnabled(false);
+            }
             toolsNode.setCullHint(Spatial.CullHint.Always);
             statsGuiNode.setCullHint(Spatial.CullHint.Always);
             if (overlayView != null) {
@@ -463,6 +496,9 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             }
         } else {
             toolsNode.setCullHint(savedToolCull);
+            if (editorToolsView != null) {
+                editorToolsView.setEnabled(savedToolsViewEnabled);
+            }
             statsGuiNode.setCullHint(savedStatsCull);
             if (overlayView != null) {
                 overlayView.setEnabled(savedOverlayEnabled);
@@ -477,9 +513,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private int fpsSampleFrames;
 
     /**
-     * Sets the editor preview limit without recreating the GL context. Default 60;
-     * -1 disables the software cap. Renderer VSync is disabled at startup; driver
-     * overrides/AWT presentation may still limit FPS. Hidden previews still throttle.
+     * Changes the preview frame limit without recreating its GL context. The
+     * default is 60 FPS. Use -1 to remove this cap. Driver overrides and AWT
+     * can still limit FPS even though renderer VSync starts disabled. Hidden
+     * previews still throttle.
      * FPS includes editor rendering and AWT transfer, not isolated GPU throughput.
      * Safe from Swing: settings changes are queued on the render thread.
      * <pre>{@code
@@ -525,7 +562,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         return (hiddenLightGizmos & (1 << type.ordinal())) == 0;
     }
 
-    /** Snapshot used to avoid traversing editor markers when nothing changed. */
+    /** Last applied helper visibility, used to skip unchanged marker trees. */
     public int getHiddenLightGizmos() {
         return hiddenLightGizmos;
     }
@@ -539,8 +576,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     }
 
     public SceneApplication() {
-        // Initialize Java desktop DPI handling before SDL creates its native window.
-        // Keep the OS per-monitor scale; never force a fixed 100% or 125% override.
+        // Initialize AWT's DPI handling before SDL creates a window.
+        // Use the OS scale for the monitor showing the SDK.
         java.awt.Toolkit.getDefaultToolkit();
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             var configuration = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
@@ -555,13 +592,16 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         try {
             SdkNativeLibraries.configure();
             AppSettings newSetting = new AppSettings(true);
+            // The embedded 3DViewer owns its drawable and readback independently of game settings.
+            newSetting.setBitsPerPixel(32);
+            newSetting.setAlphaBits(8);
             newSetting.setFrameRate(60);
-            // The preview cap is controlled by the toolbar, not monitor refresh.
-            // Driver overrides and AWT presentation can still bound observed FPS.
+            // Use the frame limit selected in the toolbar.
+            // AWT presentation and driver settings can impose a lower limit.
             newSetting.setVSync(false);
             newSetting.setGammaCorrection(true);
             // RenderDoc injection does not implicitly enable engine debug markers.
-            // Enable FrameGraph groups only while the configured integration is active.
+            // Enable FrameGraph groups for active captures.
             newSetting.setGraphicsDebug(com.jme3.gde.core.renderdoc.RenderDocSupport.available());
             newSetting.setRenderer(com.jme3.gde.core.scene.PreviewPanelsContext.previewRenderer());
             if (!useCanvas) {
@@ -587,12 +627,26 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         }
     }
 
+    /**
+     * Returns the main preview component. Select the AWT paint mode before the
+     * panel is first created. Repaint mode draws the same readback image on the
+     * EDT, bypassing the accelerated path's BufferStrategy.
+     *
+     * <pre>
+     * 第一步：保留 Windows HDR，退出 SDK。
+     * 第二步：用 run-sdk.bat "-J-Djme.sdk.preview.repaint=true" 启动，
+     * 打开同一场景和视角，对比预览。此参数仅作用于本次 SDK 进程。
+     * 第三步：省略参数并重启，恢复默认的 Accelerated 模式。
+     * </pre>
+     */
     public Component getMainPanel() {
         if (useCanvas) {
             return ((JmeCanvasContext) getContext()).getCanvas();
         } else {
             if (panel == null) {
-                panel = ((AwtPanelsContext) getContext()).createPanel(PaintMode.Accelerated, true);
+                PaintMode paintMode = Boolean.getBoolean("jme.sdk.preview.repaint")
+                        ? PaintMode.Repaint : PaintMode.Accelerated;
+                panel = ((AwtPanelsContext) getContext()).createPanel(paintMode, true);
                 ((AwtPanelsContext) getContext()).setInputSource(panel);
                 attachPanel();
             }
@@ -609,6 +663,11 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     public ViewPort getOverlayView() {
         return overlayView;
+    }
+
+    /** Forward viewport for editor tools that need the scene depth. Use on the render thread. */
+    public ViewPort getEditorToolsView() {
+        return editorToolsView;
     }
 
     private void loadFPSText() {
@@ -648,7 +707,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                 }
                 
                 // Default inherited scene geometry participates in engine-managed shadows.
-                // Explicit per-spatial Off/Cast/Receive settings remain authoritative.
+                // Leave explicit Off, Cast and Receive settings in place.
                 rootNode.setShadowMode(com.jme3.renderer.queue.RenderQueue.ShadowMode.CastAndReceive);
                 renderManager.getShadowManager(viewPort).setEnabled(true);
                 viewPort.setBackgroundColor(backgroundColor);
@@ -738,16 +797,17 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                     fpsText.setText("Frames per second: " + fps);
                     secondCounter = 0.0f;
                 }
+                flushEditorCollision();
                 getStateManager().update(tpf);
                 toolsNode.updateLogicalState(tpf);
                 if (fakap != null) {
                     fakap.updateFake(tpf);
-                    fakap.updateExternalLogicalState(rootNode, tpf);
+                    editorCollisionSync.updateControls(() -> fakap.updateExternalLogicalState(rootNode, tpf));
                     fakap.updateExternalLogicalState(guiNode, tpf);
                     fakap.updateExternalGeometricState(rootNode);
                     fakap.updateExternalGeometricState(guiNode);
                 } else {
-                    rootNode.updateLogicalState(tpf);
+                    editorCollisionSync.updateControls(() -> rootNode.updateLogicalState(tpf));
                     guiNode.updateLogicalState(tpf);
                     rootNode.updateGeometricState();
                     guiNode.updateGeometricState();
@@ -757,16 +817,16 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                     fakap.renderFake();
                 }
                 getStateManager().render(renderManager);
-                // Tool controllers may change selection bounds in render callbacks.
-                // Updating their child nodes alone leaves the top-level Tools Node
-                // dirty. Finalize the complete helper/HUD roots after ALL callbacks,
-                // before any viewport culling. Do not tick logical controls again.
+                // Render callbacks can change bounds beneath the Tools Node.
+                // Update the complete helper and HUD roots after the callbacks
+                // so culling sees the new bounds.
+                // Do not run logical controls a second time.
                 toolsNode.updateGeometricState();
                 guiNode.updateGeometricState();
-                // Overlay roots are not children of rootNode/toolsNode. Finalize
-                // them after every app-state callback, even on frames where a
-                // tool controller is being attached, detached or reordered.
-                // This updates bounds/transforms only; controls must not tick twice.
+                // Overlay roots are outside rootNode and toolsNode. Update them
+                // after app-state callbacks because a tool controller can be attached,
+                // removed or reordered during those callbacks.
+                // Update transforms and bounds without ticking the controls again.
                 if (overlayView != null) {
                     for (Spatial overlayRoot : overlayView.getScenes()) {
                         overlayRoot.updateGeometricState();
@@ -844,50 +904,54 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             if (request == null || !closeSceneOnEdt(currentSceneRequest, request)) {
                 return;
             }
-            currentSceneRequest = request;
-            if (request.getDataNode() != null) {
-                setCurrentFileNode(request.getDataNode());
-            } else {
-                setCurrentFileNode(null);
-            }
-            //TODO: handle this differently (no opened file)
-            if (request.getRootNode() == null && request.getJmeNode() == null) {
-                DataObject dobj = request.getDataObject();
-                if (dobj != null) {
-                    request.setJmeNode(NodeUtility.createNode(rootNode, dobj));
-                } else {
-                    request.setJmeNode(NodeUtility.createNode(rootNode, false));
-                }
-            }
-            setHelpContext(request.getHelpCtx());
-            setWindowTitle(request.getWindowTitle());
-            if (request.getRequester() instanceof SceneApplication) {
-                camController.enable();
-            } else {
-                camController.disable();
-            }
-            final AssetManager manager = request.getManager();
-            request.setFakeApp(fakeApp);
-            fakeApp.newAssetManager(manager);
-            enqueue(() -> {
-                if (manager != null) {
-                    assetManager = manager;
-                }
-                Spatial model = request.getRootNode();
-                //TODO: use FakeApp internal root node, don't handle model vs clean scene here
-                if (model != null && model != rootNode) {
-                    rootNode.attachChild(model);
-                }
-                if (request.getToolNode() != null) {
-                    toolsNode.attachChild(request.getToolNode());
-                }
-                editorPostProcessing.open(request);
-                request.setDisplayed(true);
-                return null;
-            });
-            com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance().resetSceneLightingButtons();
-            notifyOpen(request);
+            showSceneOnEdt(request);
         });
+    }
+
+    private void showSceneOnEdt(SceneRequest request) {
+        currentSceneRequest = request;
+        if (request.getDataNode() != null) {
+            setCurrentFileNode(request.getDataNode());
+        } else {
+            setCurrentFileNode(null);
+        }
+        //TODO: handle this differently (no opened file)
+        if (request.getRootNode() == null && request.getJmeNode() == null) {
+            DataObject dobj = request.getDataObject();
+            if (dobj != null) {
+                request.setJmeNode(NodeUtility.createNode(rootNode, dobj));
+            } else {
+                request.setJmeNode(NodeUtility.createNode(rootNode, false));
+            }
+        }
+        setHelpContext(request.getHelpCtx());
+        setWindowTitle(request.getWindowTitle());
+        if (request.getRequester() instanceof SceneApplication) {
+            camController.enable();
+        } else {
+            camController.disable();
+        }
+        final AssetManager manager = request.getManager();
+        request.setFakeApp(fakeApp);
+        fakeApp.newAssetManager(manager);
+        enqueue(() -> {
+            if (manager != null) {
+                assetManager = manager;
+            }
+            Spatial model = request.getRootNode();
+            //TODO: use FakeApp internal root node, don't handle model vs clean scene here
+            if (model != null && model != rootNode) {
+                rootNode.attachChild(model);
+            }
+            if (request.getToolNode() != null) {
+                toolsNode.attachChild(request.getToolNode());
+            }
+            editorPostProcessing.open(request);
+            request.setDisplayed(true);
+            return null;
+        });
+        com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance().resetSceneLightingButtons();
+        notifyOpen(request);
     }
 
     /**
@@ -907,14 +971,14 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
 
-    // Keep close/open in one EDT continuation. A modal save dialog runs a nested
-    // event loop, so separately queued opening can otherwise precede old cleanup.
+    // Close and open in one EDT task. A modal save dialog pumps the event queue
+    // and could otherwise let the new scene open before cleanup finishes.
     private boolean closeSceneOnEdt(final SceneRequest oldRequest, final SceneRequest newRequest) {
         if (oldRequest == null) {
             return true;
         }
         if (newRequest == null || newRequest.getDataObject() != oldRequest.getDataObject()) {
-            if (!checkSave(oldRequest)) {
+            if (!checkSave(oldRequest, newRequest)) {
                 return false;
             }
             SceneUndoRedoManager manager = Lookup.getDefault().lookup(SceneUndoRedoManager.class);
@@ -937,11 +1001,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         //TODO: state list is not thread safe..
         fakeApp.removeCurrentStates();
         enqueue(() -> {
-            if (physicsState != null) {
-                physicsState.getPhysicsSpace().removeAll(rootNode);
-                getStateManager().detach(physicsState);
-                physicsState = null;
-            }
+            resetPhysicsInThread();
             //TODO: possibly dangerous (new var is created in EDT
             if (fakeApp != null) {
                 fakeApp.cleanupFakeApp();
@@ -963,7 +1023,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         return true;
     }
 
-    private boolean checkSave(SceneRequest request) {
+    private boolean checkSave(SceneRequest request, SceneRequest next) {
+        if (savingSceneBeforeClose) {
+            return false;
+        }
         if ((request != null) && request.getDataObject() != null
                 && request.getDataObject().isModified()) {
             final DataObject req = request.getDataObject();
@@ -972,12 +1035,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                     NotifyDescriptor.YES_NO_CANCEL_OPTION);
             DialogDisplayer.getDefault().notify(mesg);
             if (mesg.getValue() == Confirmation.YES_OPTION) {
-                try {
-                    req.getLookup().lookup(AssetData.class).saveAsset();
-                } catch (IOException ex) {
-                    Exceptions.printStackTrace(ex);
-                    return false;
-                }
+                saveBeforeClose(request, next);
+                return false;
             } else if (mesg.getValue() == Confirmation.NO_OPTION) {
                 req.setModified(false);
             } else {
@@ -989,6 +1048,30 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             obj.closeAsset();
         }
         return true;
+    }
+
+    private void saveBeforeClose(SceneRequest request, SceneRequest next) {
+        savingSceneBeforeClose = true;
+        enqueue(() -> {
+            Throwable failure = null;
+            try {
+                flushEditorCollision();
+                saveEditorDisplayOutput(request.getDataObject());
+                request.getDataObject().getLookup().lookup(AssetData.class).saveAsset();
+            } catch (IOException | RuntimeException ex) {
+                failure = ex;
+            }
+            Throwable saveFailure = failure;
+            java.awt.EventQueue.invokeLater(() -> {
+                savingSceneBeforeClose = false;
+                if (saveFailure != null) {
+                    Exceptions.printStackTrace(saveFailure);
+                } else if (currentSceneRequest == request && closeSceneOnEdt(request, next) && next != null) {
+                    showSceneOnEdt(next);
+                }
+            });
+            return null;
+        });
     }
 
 
@@ -1032,7 +1115,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     public void enableStats(final boolean enabled) {
         enqueue(() -> {
             if (enabled) {
-                // An explicit Stats click overrides a previous G-key hide.
+                // Show Stats again after it was hidden with G.
                 statsGuiNode.setCullHint(Spatial.CullHint.Never);
                 savedStatsCull = Spatial.CullHint.Never;
                 statsGuiNode.depthFirstTraversal(spatial -> {
@@ -1060,9 +1143,9 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
     }
     
-    // All preview environment state belongs to the render thread. A disabled
-    // request never loads or creates lighting. Thumbnail and scene lights are
-    // separate instances; queued clicks cannot affect a replacement scene.
+    // The render thread owns the preview environment. A disabled request
+    // loads no lighting. Thumbnails own separate lights, and a queued click
+    // applies only to the scene that issued it.
     private com.jme3.light.SkyLight loadPreviewEnvironment() {
         Spatial environment = assetManager.loadModel("com/jme3/gde/core/sceneviewer/pbrenv.j3o");
         return com.jme3.light.SkyLight.fromEnvironment(
@@ -1132,23 +1215,73 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         }
     }
 
+    /** Synchronizes pending editor transforms on the render thread before exporting the scene. */
+    public void flushEditorCollision() {
+        editorCollisionSync.flush(physicsState == null ? null : physicsState.getPhysicsSpace(), physicsPreview);
+    }
+
+    /**
+     * Controls scene physics preview on the render thread.
+     * <pre>
+     * 第一步：点 Play 开始。在本次预览中，Pause 保留停下时的姿态，Play 从该处继续。
+     * 第二步：点 Reset physics 恢复播放前的姿态和物理状态。
+     * 第三步：保存场景时也会先 Reset。J3O 保留碰撞形体和其他编辑设置。
+     * </pre>
+     */
     public void setPhysicsEnabled(final boolean enabled) {
+        SceneRequest request = currentSceneRequest;
         enqueue(() -> {
-            if (enabled) {
-                if (physicsState == null) {
-                    physicsState = new BulletAppState();
-                    getStateManager().attach(physicsState);
-                    physicsState.getPhysicsSpace().addAll(rootNode);
-                }
-            } else {
-                if (physicsState != null) {
-                    physicsState.getPhysicsSpace().removeAll(rootNode);
-                    getStateManager().detach(physicsState);
-                    physicsState = null;
-                }
+            if (request == null || request != currentSceneRequest) {
+                return null;
+            }
+            if (enabled && physicsState == null) {
+                flushEditorCollision();
+                physicsPreview = new PhysicsPreview(rootNode);
+                physicsPreviewAsset = request.getDataObject();
+                physicsState = new BulletAppState();
+                getStateManager().attach(physicsState);
+                physicsState.getPhysicsSpace().addAll(rootNode);
+            }
+            if (physicsState != null) {
+                physicsState.setEnabled(enabled);
             }
             return null;
         });
+    }
+
+    public void resetPhysicsPreview() {
+        enqueue(() -> {
+            resetPhysicsInThread();
+            return null;
+        });
+    }
+
+    private void resetPhysicsInThread() {
+        if (physicsState != null) {
+            physicsState.setEnabled(false);
+            physicsPreview.restore(physicsState.getPhysicsSpace());
+            getStateManager().detach(physicsState);
+            physicsState = null;
+            physicsPreview = null;
+            flushEditorCollision();
+            physicsPreviewAsset = null;
+        }
+    }
+
+    /**
+     * Restores a playing or paused scene before its asset is serialized.
+     * Scene saves use the render queue, including Save on Close.
+     *
+     * @throws IOException if a caller tries to serialize the preview from another thread
+     */
+    public static void resetPhysicsBeforeSave(DataObject asset) throws IOException {
+        SceneApplication app = application;
+        if (app != null && asset != null && app.physicsPreviewAsset == asset) {
+            if (!app.isOgl()) {
+                throw new IOException("Save the scene from the editor to reset its physics preview.");
+            }
+            app.resetPhysicsInThread();
+        }
     }
 
     /**

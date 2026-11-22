@@ -81,8 +81,12 @@ public abstract class AbstractNewSpatialAction implements NewSpatialAction {
                     SceneApplication.getApplication().enqueue(new Callable<Void>() {
                         @Override
                         public Void call() throws Exception {
+                            if (!SceneSpawnEvent.canCreate(e)) {
+                                return null;
+                            }
                             final Spatial attachSpatial = doCreateSpatial(node);
                             if (node != null && attachSpatial != null) {
+                                SceneSpawnEvent.place(e, node, attachSpatial);
                                 node.attachChild(attachSpatial);
                                 Lookup.getDefault().lookup(SceneUndoRedoManager.class).addEdit(this, new AbstractUndoableSceneEdit() {
 
@@ -108,7 +112,12 @@ public abstract class AbstractNewSpatialAction implements NewSpatialAction {
                                         rootNode.refresh(true);
                                     }
                                 });
-                                setModified();
+                                java.awt.EventQueue.invokeLater(() -> {
+                                    dataObject.setModified(true);
+                                    rootNode.refresh(true);
+                                    com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                                            .selectAddedObject(rootNode, attachSpatial);
+                                });
                             }
                             return null;
                         }
@@ -116,12 +125,6 @@ public abstract class AbstractNewSpatialAction implements NewSpatialAction {
                 }
             }
 
-            protected void setModified() {
-                java.awt.EventQueue.invokeLater(() -> {
-                    dataObject.setModified(true);
-                    rootNode.refresh(true);
-                });
-            }
         };
     }
 

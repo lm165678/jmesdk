@@ -208,7 +208,7 @@ public final class RenderDocSmoke extends SimpleApplication {
                 }
                 System.out.println("RENDERDOC_AWT_CAPTURE_PASS " + capture);
             }
-            Thread.sleep(5000); // Allow asynchronous replay launch before ending JVM.
+            Thread.sleep(5000); // Give the background replay launcher time to start before exiting.
             boolean replay = ProcessHandle.allProcesses().anyMatch(p -> p.info().command()
                     .map(c -> c.toLowerCase(java.util.Locale.ROOT).endsWith("qrenderdoc.exe")).orElse(false));
             if (!replay) {

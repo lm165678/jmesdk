@@ -1,6 +1,14 @@
 /**
  * Host-side compression and standalone mip inspection for the SDK.
  *
+ * <p>The editor first looks for an installed JNI codec in
+ * {@code release/texture-tools/jni}. This path encodes and decodes on the current
+ * worker thread, without opening a child process or extracting DLLs at runtime.
+ * Set {@code jme.sdk.texture.backend=jni} to require the installed library or
+ * {@code jme.sdk.texture.backend=cli} to use the command-line tools explicitly.
+ * Build and stage the Windows x64 library with {@code tools/build-texture-jni.ps1}
+ * before building the Texture Tools module.</p>
+ *
  * <p>The module bundles Compressonator 4.6.0 for Windows/Linux x86-64 and
  * astcenc 5.7.1 for Windows/Linux x86-64/ARM64 and universal macOS. Original
  * archive layouts and runtime dependencies are retained under
@@ -15,7 +23,8 @@
  * profile metadata; they are displayed as linear/unspecified. Encoding defaults
  * to BC3 and one mip; ASTC uses 6x6 medium-quality blocks and sRGB. Mip counts
  * include the base level. Preview decoding is on the CPU, independent of GPU
- * compression support. Choose RGBA/RGB/R/G/B/A and 25..400 percent zoom.</p>
+ * compression support. Choose RGBA/RGB/R/G/B/A; previews open fitted to the
+ * viewport. The wheel zooms, dragging pans, and Fit restores automatic sizing.</p>
  *
  * <pre>
  * 第一步：构建模块，双击 DDS、ASTC 或 ASTC KTX；也可使用 Tools 菜单打开。
@@ -32,15 +41,16 @@
  * their sibling dds directory. The registry at the primary asset root stores
  * source/output SHA-256 and encoder profile. SDK ProjectAssetManager resolves
  * these variants before selecting loaders while retaining logical material keys.
- * Missing/stale variants fall back to source and are rebuilt on reconversion.
- * Registry-owned DDS cannot be copied or deleted separately through SDK file
- * operations. Moving them within the asset root updates the registry; deleting
- * a source cleans up its output. Imported DDS files remain ordinary resources.</p>
+ * Opening a J3O in the SDK repairs missing DDS files when the source is available.
+ * Stale variants fall back to source and are rebuilt on reconversion.
+ * SDK file operations protect generated directories. Deleting a single generated
+ * DDS retains its source mapping. Deleting the source also clears its generated DDS.
+ * Imported DDS files remain ordinary resources.</p>
  * <pre>
  * 第一步：转换源模型，自动生成 DDS；重复转换校验哈希，不重复生成有效输出。
- * 第二步：移动 DDS 或其目录时保留资源根目录范围，映射随操作更新。
- * 第三步：删除源 PNG/JPG 会清理对应 DDS；不能单独删除/复制生成的 DDS。
- * 第四步：操作系统文件管理器不受 SDK 保护；外部删除输出后重新转换即可恢复。
+ * 第二步：在 SDK 内移动原始贴图，更新映射；按源图路径管理的 DDS 随源图移动。
+ * 第三步：删除单张 DDS 后重新打开引用它的 J3O，有原图时会补齐。
+ * 第四步：删除源 PNG/JPG 会清理对应 DDS；生成目录禁止单独删除、复制和改名。
  * 第五步：验证命令：powershell -File tools/verify-generated-textures.ps1。
  * </pre>
  * <p>Standalone mip editing still uses Save As and does not rewrite the generated

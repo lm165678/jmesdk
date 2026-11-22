@@ -24,7 +24,7 @@ import javax.imageio.ImageIO;
 import org.openide.filesystems.FileObject;
 import org.openide.filesystems.FileUtil;
 
-/** CPU-only integration: conversion preparation, mapped J3M and embedded J3O materials. */
+/** Checks conversion preparation and both linked J3M and embedded J3O materials without a GPU. */
 public final class ModelTextureMappingSmoke {
     public static void main(String[] args) {
         try {

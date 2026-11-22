@@ -1,0 +1,103 @@
+name: Build ufbx JNI libraries
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x86_64
+            runner: windows-2022
+            cmake_args: -A x64
+            library: jme-ufbx.dll
+          - target: windows-arm64
+            runner: windows-2022
+            cmake_args: -A ARM64
+            library: jme-ufbx.dll
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+            library: libjme-ufbx.so
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+            library: libjme-ufbx.so
+          - target: macos-x86_64
+            runner: macos-26-intel
+            cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+            library: libjme-ufbx.dylib
+          - target: macos-arm64
+            runner: macos-15
+            cmake_args: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+            library: libjme-ufbx.dylib
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: ufbx/ufbx
+          # ufbx v0.23.1
+          ref: 26a482ae66871d7de36eb722aa060bce95bce274
+          path: build/ufbx-jni/source
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Build and stage native library
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          CMAKE_ARGS: ${{ matrix.cmake_args }}
+          LIBRARY: ${{ matrix.library }}
+        run: |
+          set -euo pipefail
+          read -r -a platform_args <<< "$CMAKE_ARGS"
+          cmake -S jme3-autodesk/native -B build/ufbx-jni/compile \
+            -DUFBX_SOURCE_DIR="$PWD/build/ufbx-jni/source" \
+            -DCMAKE_BUILD_TYPE=Release "${platform_args[@]}"
+          cmake --build build/ufbx-jni/compile --config Release --parallel
+          cmake --install build/ufbx-jni/compile --config Release \
+            --prefix "$PWD/build/ufbx-jni/stage/$TARGET"
+          test -s "build/ufbx-jni/stage/$TARGET/$LIBRARY"
+          test -s "build/ufbx-jni/stage/$TARGET/LICENSE-ufbx.txt"
+      - name: Load the JNI library and parse an FBX fixture
+        # This artifact is cross-compiled on an x64 host.
+        if: matrix.target != 'windows-arm64'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          LIBRARY: ${{ matrix.library }}
+        run: |
+          set -euo pipefail
+          cat > build/ufbx-jni/UfbxLoader.java <<'JAVA'
+          package com.jme3.gde.autodesk;
+          import java.nio.ByteBuffer;
+          import java.nio.file.Files;
+          import java.nio.file.Path;
+          public class UfbxLoader {
+              private static native byte[] readScene(byte[] source) throws java.io.IOException;
+              public static void main(String[] args) throws Exception {
+                  System.load(Path.of(args[0]).toAbsolutePath().toString());
+                  byte[] scene = readScene(Files.readAllBytes(Path.of(args[1])));
+                  var packet = ByteBuffer.wrap(scene);
+                  if (packet.getInt() != 0x55464231 || packet.getInt() < 2) {
+                      throw new IllegalStateException("Unexpected ufbx scene packet");
+                  }
+              }
+          }
+          JAVA
+          javac -d build/ufbx-jni/smoke build/ufbx-jni/UfbxLoader.java
+          java --enable-native-access=ALL-UNNAMED -cp build/ufbx-jni/smoke com.jme3.gde.autodesk.UfbxLoader \
+            "build/ufbx-jni/stage/$TARGET/$LIBRARY" \
+            build/ufbx-jni/source/data/blender_272_cube_7400_binary.fbx
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ufbx-jni-${{ matrix.target }}
+          path: build/ufbx-jni/stage/
+          if-no-files-found: error

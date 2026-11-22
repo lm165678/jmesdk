@@ -131,7 +131,7 @@ final class UnitySceneBuilder {
             Node node = createGameObject(gameObject, parts);
             result.objects.put(gameObject.fileId(), node);
             for (UnityYaml.Document part : parts) {
-                // Component overrides (for example MeshRenderer materials) target the same node.
+                // Overrides for a component, such as MeshRenderer materials, apply to its existing node.
                 result.objects.put(part.fileId(), node);
             }
         }
@@ -264,7 +264,7 @@ final class UnitySceneBuilder {
             }
             Spatial copy = selected.clone();
             if (selected != loaded) {
-                // Bake the selected subnode's ancestor chain, including the model root.
+                // Include the model root when baking the selected child's ancestor transforms.
                 loaded.updateGeometricState();
                 Transform baked = selected.getWorldTransform().clone();
                 copy.setLocalTransform(baked);
@@ -447,7 +447,7 @@ final class UnitySceneBuilder {
                         UnityYaml.floatValue(entry.get("value"), 0));
             }
         }
-        // Apply all raw Unity components before one conversion/normalization pass.
+        // Apply all Unity components before converting and normalizing the result.
         for (Map.Entry<Long, Map<String, Float>> override : rotations.entrySet()) {
             Node target = prefab.objects.get(override.getKey());
             if (target == null) {
@@ -481,7 +481,7 @@ final class UnitySceneBuilder {
                         UnityYaml.floatValue(value, 1), false);
                 target.setLocalScale(current);
             } else if (path.startsWith("m_LocalRotation.")) {
-                // Already handled as a complete quaternion above.
+                // The full quaternion was already applied above.
             } else if ("m_Name".equals(path)) {
                 target.setName(UnityYaml.stringValue(value, target.getName()));
             } else if ("m_IsActive".equals(path)) {

@@ -26,7 +26,10 @@ import org.openide.awt.ActionRegistration;
 /**
  * Opens the shared compressed texture tool from Tools / Textures.
  * Encoding and CPU preview run in a SwingWorker, never on the EDT.
+ * An activity bar remains visible while the worker runs; codecs do not expose percentages.
  * Decoded mips are cached up to 128 MiB per window; reopening clears the cache.
+ * Fit shows the whole mip and follows window resizing. Wheel zoom leaves Fit mode;
+ * drag to pan, or click Fit to restore it.
  * <pre>
  * 第一步：Tools → Textures → Compressed Texture Editor，打开 DDS、ASTC 或 ASTC KTX。
  * 第二步：选择 Mip 查看该层 CPU 解码预览，不要求 GPU 支持 ASTC。
@@ -69,7 +72,12 @@ public final class TextureToolsAction implements ActionListener {
 
     private static final class Editor extends JFrame {
         private final JLabel image = new JLabel("Open a compressed texture", JLabel.CENTER);
+        private final JScrollPane scroller = new JScrollPane(image);
+        private boolean fitView = true;
+        private double viewScale = 1;
+        private boolean updatingZoom;
         private final JLabel status = new JLabel("CPU preview; DDS / ASTC / ASTC KTX1 (2D)");
+        private final javax.swing.JProgressBar progress = new javax.swing.JProgressBar();
         private final JComboBox<Integer> mip = new JComboBox<>();
         private final JButton open = new JButton("Open");
         private final JButton encode = new JButton("Encode image");
@@ -106,12 +114,73 @@ public final class TextureToolsAction implements ActionListener {
             buttons.add(replace);
             buttons.add(channel);
             buttons.add(zoom);
-            zoom.setSelectedItem("100%");
+            JButton fit = new JButton("Fit");
+            buttons.add(fit);
+            fit.addActionListener(event -> {
+                fitView = true;
+                renderPreview();
+            });
             channel.addActionListener(event -> renderPreview());
-            zoom.addActionListener(event -> renderPreview());
+            zoom.addActionListener(event -> {
+                if (updatingZoom) {
+                    return;
+                }
+                fitView = "Fit".equals(zoom.getSelectedItem());
+                if (!fitView) {
+                    viewScale = Double.parseDouble(zoom.getSelectedItem().toString().replace("%", "")) / 100;
+                }
+                renderPreview();
+            });
             add(buttons, BorderLayout.NORTH);
-            add(new JScrollPane(image), BorderLayout.CENTER);
-            add(status, BorderLayout.SOUTH);
+            add(scroller, BorderLayout.CENTER);
+            scroller.setWheelScrollingEnabled(false);
+            scroller.getViewport().addComponentListener(new java.awt.event.ComponentAdapter() {
+                @Override
+                public void componentResized(java.awt.event.ComponentEvent event) {
+                    if (fitView) {
+                        renderPreview();
+                    }
+                }
+            });
+            java.awt.event.MouseAdapter navigation = new java.awt.event.MouseAdapter() {
+                private java.awt.Point last;
+
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent event) {
+                    last = event.getPoint();
+                }
+
+                @Override
+                public void mouseReleased(java.awt.event.MouseEvent event) {
+                    last = null;
+                }
+
+                @Override
+                public void mouseDragged(java.awt.event.MouseEvent event) {
+                    if (last != null) {
+                        java.awt.Point position = scroller.getViewport().getViewPosition();
+                        position.translate(last.x - event.getX(), last.y - event.getY());
+                        setViewPosition(position);
+                    }
+                }
+
+                @Override
+                public void mouseWheelMoved(java.awt.event.MouseWheelEvent event) {
+                    fitView = false;
+                    viewScale = Math.max(.01, Math.min(16, viewScale * Math.pow(1.15, -event.getPreciseWheelRotation())));
+                    renderPreview();
+                    event.consume();
+                }
+            };
+            image.addMouseListener(navigation);
+            image.addMouseMotionListener(navigation);
+            scroller.addMouseWheelListener(navigation);
+            image.setToolTipText("Wheel: zoom | Drag: pan | Fit: show entire texture");
+            JPanel footer = new JPanel(new BorderLayout());
+            footer.add(status, BorderLayout.CENTER);
+            footer.add(progress, BorderLayout.SOUTH);
+            progress.setVisible(false);
+            add(footer, BorderLayout.SOUTH);
             setSize(new Dimension(960, 700));
             setLocationByPlatform(true);
             replace.setEnabled(false);
@@ -153,6 +222,7 @@ public final class TextureToolsAction implements ActionListener {
                 previews.clear();
                 previewBytes = 0;
                 decoded = null;
+                fitView = true;
                 image.setIcon(null);
                 current = file;
                 busy = true;
@@ -194,13 +264,20 @@ public final class TextureToolsAction implements ActionListener {
                 return;
             }
             String selected = (String) channel.getSelectedItem();
-            double scale = Integer.parseInt(((String) zoom.getSelectedItem()).replace("%", "")) / 100.0;
+            if (fitView) {
+                Dimension extent = scroller.getViewport().getExtentSize();
+                if (extent.width <= 0 || extent.height <= 0) {
+                    return;
+                }
+                viewScale = Math.min((extent.width - 4.0) / decoded.getWidth(),
+                        (extent.height - 4.0) / decoded.getHeight());
+            }
+            double scale = Math.max(.001, viewScale);
+            updatingZoom = true;
+            zoom.getModel().setSelectedItem(fitView ? "Fit" : String.format(java.util.Locale.ROOT, "%.1f%%", scale * 100));
+            updatingZoom = false;
             int width = Math.max(1, (int) (decoded.getWidth() * scale));
             int height = Math.max(1, (int) (decoded.getHeight() * scale));
-            if ((long) width * height > 32L * 1024 * 1024) {
-                status.setText("Preview too large at this zoom; choose a smaller zoom or mip.");
-                return;
-            }
             // The icon paints channels and checkerboard without allocating a second full-size image.
             image.setText(null);
             image.setIcon(new javax.swing.Icon() {
@@ -265,6 +342,14 @@ public final class TextureToolsAction implements ActionListener {
             });
             image.revalidate();
             image.repaint();
+        }
+
+        private void setViewPosition(java.awt.Point position) {
+            Dimension extent = scroller.getViewport().getExtentSize();
+            Dimension size = scroller.getViewport().getViewSize();
+            position.x = Math.max(0, Math.min(position.x, size.width - extent.width));
+            position.y = Math.max(0, Math.min(position.y, size.height - extent.height));
+            scroller.getViewport().setViewPosition(position);
         }
 
         private void encode() {
@@ -359,6 +444,8 @@ public final class TextureToolsAction implements ActionListener {
 
         private void setBusy(boolean value) {
             busy = value;
+            progress.setIndeterminate(value);
+            progress.setVisible(value);
             open.setEnabled(!value);
             encode.setEnabled(!value);
             mip.setEnabled(!value && texture != null);

@@ -95,6 +95,17 @@ public class ProjectAssetManager extends DesktopAssetManager {
     private final List<FileObject> jarItems = new LinkedList<>();
     private URLClassLoader loader;
     private volatile boolean useGeneratedTextures = true;
+    private final ThreadLocal<Set<AssetKey<?>>> modelDependencies = new ThreadLocal<>();
+
+    com.jme3.scene.Spatial loadModelForEditing(com.jme3.asset.ModelKey key) {
+        modelDependencies.set(new HashSet<>());
+        try {
+            deleteFromCache(key);
+            return loadModel(key);
+        } finally {
+            modelDependencies.remove();
+        }
+    }
     private final java.util.Map<com.jme3.asset.TextureKey, String> textureRevisions = new java.util.HashMap<>();
 
     /**
@@ -127,15 +138,28 @@ public class ProjectAssetManager extends DesktopAssetManager {
      */
     @Override
     public <T> T loadAsset(AssetKey<T> key) {
+        Set<AssetKey<?>> dependencies = modelDependencies.get();
+        if (dependencies != null && key instanceof com.jme3.asset.MaterialKey && dependencies.add(key)) {
+            // A cached J3M would bypass its texture lookups on the first editor open.
+            deleteFromCache(key);
+        }
         if (project != null && key != null && key.getClass() == com.jme3.asset.TextureKey.class
                 && ((com.jme3.asset.TextureKey) key).getTextureTypeHint() == com.jme3.texture.Texture.Type.TwoDimensional) {
             com.jme3.asset.TextureKey logical = (com.jme3.asset.TextureKey) key;
             try {
                 FileObject assetFolder = getAssetFolder();
                 File directory = assetFolder == null ? null : FileUtil.toFile(assetFolder);
-                if (directory != null && java.nio.file.Files.isRegularFile(directory.toPath()
-                        .resolve(com.jme3.gde.texturetools.GeneratedTextures.MANIFEST))) {
+                boolean repair = dependencies != null && dependencies.add(key);
+                if (directory != null && (repair || java.nio.file.Files.isRegularFile(directory.toPath()
+                        .resolve(com.jme3.gde.texturetools.GeneratedTextures.MANIFEST)))) {
                     var store = new com.jme3.gde.texturetools.GeneratedTextures(directory.toPath());
+                    if (repair) {
+                        if ("dds".equalsIgnoreCase(logical.getExtension())) {
+                            store.restoreMissingOutput(logical.getName(), PortableModelDds::write);
+                        } else if (useGeneratedTextures) {
+                            store.ensureMissingPortableBc3(logical.getName(), PortableModelDds::write);
+                        }
+                    }
                     java.nio.file.Path source = store.source(logical.getName());
                     if (source != null) {
                         java.nio.file.Path generated = useGeneratedTextures ? store.resolve(logical.getName()) : null;
@@ -151,6 +175,9 @@ public class ProjectAssetManager extends DesktopAssetManager {
                 }
             } catch (IOException exception) {
                 logger.log(Level.WARNING, "Unable to resolve generated texture; using original key: " + key, exception);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                logger.log(Level.FINE, "DDS repair was interrupted: " + key, exception);
             }
         }
         return super.loadAsset(key);

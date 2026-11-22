@@ -74,9 +74,13 @@ public final class AnimationPreviewSmoke {
                                     new float[]{0, 1, 2}, true, 0, 0)), List.of());
                     Method install = type.getDeclaredMethod("install", com.jme3.scene.Spatial.class, AnimationGraph.class);
                     install.setAccessible(true);
-                    install.invoke(app, copy, graph);
                     Field field = type.getDeclaredField("player");
                     field.setAccessible(true);
+                    install.invoke(app, copy, null);
+                    if (field.get(app) != null || copy.getParent() == null) {
+                        throw new AssertionError("A model with no active clips must remain visible without a player");
+                    }
+                    install.invoke(app, copy, graph);
                     AnimationGraphPlayer player = (AnimationGraphPlayer) field.get(app);
                     player.setFloat("Speed", 0.5f);
                     copy.updateLogicalState(0.1f);
@@ -204,6 +208,44 @@ public final class AnimationPreviewSmoke {
                         throw new AssertionError("Hidden overlay must stop updating and rendering");
                     }
                     System.out.println("ANIMATION_SKELETON_TARGET_OVERLAY_PASS");
+                    Class<?> trackType = Class.forName("com.jme3.gde.core.assets.AnimationEditorTopComponent$RootTrack");
+                    var trackConstructor = trackType.getDeclaredConstructor(String.class, boolean.class);
+                    trackConstructor.setAccessible(true);
+                    Method focusTrack = type.getDeclaredMethod("focusRootTrack", trackType);
+                    focusTrack.setAccessible(true);
+                    var focusJoint = copyArmature.getJointList().stream()
+                            .filter(joint -> !joint.getChildren().isEmpty()).findFirst().orElseThrow();
+                    String focusPath = AnimationGraph.jointPath(focusJoint);
+                    focusTrack.invoke(app, trackConstructor.newInstance(focusPath, true));
+                    Method focused = AnimationTargetOverlay.class.getDeclaredMethod("focused", Object.class);
+                    focused.setAccessible(true);
+                    if (!(boolean) focused.invoke(overlay, focusJoint)
+                            || !(boolean) focused.invoke(overlay, focusJoint.getChildren().get(0))) {
+                        throw new AssertionError("Root selection must highlight the entire descendant branch");
+                    }
+                    app.getRootNode().updateGeometricState();
+                    app.getRenderManager().renderViewPort(view, 0.016f);
+                    pixels.clear();
+                    app.getRenderer().readFrameBufferWithFormat(buffer, pixels, com.jme3.texture.Image.Format.BGRA8);
+                    com.jme3.util.Screenshots.convertScreenShot(pixels, capture);
+                    int yellowPixels = 0;
+                    for (int y = 0; y < capture.getHeight(); y++) {
+                        for (int x = 0; x < capture.getWidth(); x++) {
+                            int rgb = capture.getRGB(x, y);
+                            if (((rgb >> 16) & 255) > 180 && ((rgb >> 8) & 255) > 180 && (rgb & 255) < 70) {
+                                yellowPixels++;
+                            }
+                        }
+                    }
+                    if (yellowPixels == 0) {
+                        throw new AssertionError("Focused root branch must be visible in the small viewport");
+                    }
+                    javax.imageio.ImageIO.write(capture, "png", new java.io.File("build/animation-smoke/root-focus.png"));
+                    focusTrack.invoke(app, new Object[]{null});
+                    if (overlay.isEnabled()) {
+                        throw new AssertionError("Closing root selection must restore hidden skeleton");
+                    }
+                    System.out.println("ROOT_MOTION_BRANCH_HIGHLIGHT_PASS pixels=" + yellowPixels);
                     Method fullInstall = type.getDeclaredMethod("install", com.jme3.scene.Spatial.class,
                             com.jme3.scene.Spatial.class, AnimationGraph.class);
                     fullInstall.setAccessible(true);

@@ -5,11 +5,14 @@ on:
     tags:
       - "*"
 jobs:
+  ufbx-natives:
+    uses: ./.github/workflows/ufbx-jni.yml
 
   # -------------------------------
   # 1. Build + bundle (Linux only)
   # -------------------------------
   build:
+    needs: ufbx-natives
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

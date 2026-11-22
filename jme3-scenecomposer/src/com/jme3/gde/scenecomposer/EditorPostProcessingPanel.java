@@ -5,7 +5,13 @@ import com.jme3.gde.core.util.EditorMessages;
 import com.jme3.gde.core.util.InspectorColumns;
 import javax.swing.*;
 
-/** Scene settings controls; updates are serialized with the scene root WorldSettings. */
+/**
+ * Scene settings controls; updates are serialized with the scene root WorldSettings.
+ * 第一步：在 Post processing 选择 Game display output，新场景默认 HDR (scRGB)。
+ * 已保存的场景恢复原有选择；不支持 HDR 时自动使用 SDR。
+ * 第二步：保存 J3O。游戏加载并挂载场景后，自动应用所选输出。
+ * 第三步：Windows 兼容视口选 HDR 时直接预览。选 SDR 或跟随应用设置恢复 SDR 预览。
+ */
 final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.core.scene.SceneListener {
     private final java.util.Map<String, JComponent> inputs = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Double> defaults = new java.util.LinkedHashMap<>();
@@ -30,6 +36,17 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         toggle(global, "Enabled", true);
         toggle(global, "LegacyPipeline", false);
         toggle(global, "ShaderSrgbOutput", true);
+        toggle(global, "SrgbOutputDithering", false);
+        JComboBox<String> gameOutput = new JComboBox<>(new String[]{
+            EditorMessages.text("PostGameDisplayOutputApplication"),
+            EditorMessages.text("PostGameDisplayOutputSdr"),
+            EditorMessages.text("PostGameDisplayOutputHdr")
+        });
+        inputs.put("GameDisplayOutput", gameOutput);
+        defaults.put("GameDisplayOutput", 2d);
+        gameOutput.setSelectedIndex(2);
+        row(global, "GameDisplayOutput", gameOutput);
+        gameOutput.addActionListener(event -> send("GameDisplayOutput", gameOutput.getSelectedIndex()));
         stack.add(global);
         JPanel upscaling = section(stack, "Upscaling");
         JComboBox<String> upscaleMode = new JComboBox<>(new String[]{EditorMessages.text("PostAAOff"), "FSR1", "FSR2"});
@@ -41,7 +58,7 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         number(upscaling, "UpscalingSharpness", .2, 0, 1, .05);
         JPanel exposure = section(stack, "Exposure");
         toggle(exposure, "AutomaticExposure", true);
-        toggle(exposure, "UE4Exposure", false);
+        toggle(exposure, "HistogramExposure", false);
         number(exposure, "MinBrightness", .03, .00001, 65504, .01);
         number(exposure, "MaxBrightness", 2, .00001, 65504, .1);
         number(exposure, "HistogramMin", -8, -16, 23, .25);
@@ -66,7 +83,7 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         JPanel tonemap = section(stack, "ToneMap");
         toggle(tonemap, "ToneMap", true);
         toggle(tonemap, "FilmicCurve", false);
-        toggle(tonemap, "UE4Tonemap", false);
+        toggle(tonemap, "FilmLutTonemap", false);
         number(tonemap, "FilmSlope", .88, .05, 1, .01);
         number(tonemap, "FilmToe", .55, 0, .95, .01);
         number(tonemap, "FilmShoulder", .26, 0, .95, .01);
@@ -210,7 +227,8 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
     }
 
     private void updateModeControls() {
-        if (!inputs.containsKey("UE4Tonemap")) {
+        inputs.get("SrgbOutputDithering").setEnabled(((JCheckBox) inputs.get("ShaderSrgbOutput")).isSelected());
+        if (!inputs.containsKey("FilmLutTonemap")) {
             return;
         }
         int aaMode = ((JComboBox<?>) inputs.get("AntiAliasing")).getSelectedIndex();
@@ -229,8 +247,8 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
             parent = parent.getParent();
         }
         aaCards.repaint();
-        boolean exposure = ((JCheckBox) inputs.get("UE4Exposure")).isSelected();
-        boolean film = ((JCheckBox) inputs.get("UE4Tonemap")).isSelected();
+        boolean exposure = ((JCheckBox) inputs.get("HistogramExposure")).isSelected();
+        boolean film = ((JCheckBox) inputs.get("FilmLutTonemap")).isSelected();
         for (var entry : inputs.entrySet()) {
             String key = entry.getKey();
             if (java.util.Set.of("MinBrightness", "MaxBrightness", "HistogramMin", "HistogramMax", "TransitionDistance").contains(key)) {
@@ -239,6 +257,8 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
                 entry.getValue().setEnabled(!exposure);
             } else if (key.equals("FilmicCurve") || key.equals("WhitePoint")) {
                 entry.getValue().setEnabled(!film);
+            } else if (key.equals("FilmLutTonemap")) {
+                entry.getValue().setEnabled(true);
             } else if (key.startsWith("Film") || key.equals("Temperature") || key.equals("Tint") || key.equals("BlueCorrection") || key.equals("ExpandGamut")
                     || key.startsWith("Grading") || key.startsWith("ShadowGain") || key.startsWith("MidtoneGain") || key.startsWith("HighlightGain")) {
                 entry.getValue().setEnabled(film);

@@ -17,7 +17,7 @@ import tgaimageplugin.TGAImageReaderSpi;
 import tgaimageplugin.TGAImageWriter;
 import tgaimageplugin.TGAImageWriterSpi;
 
-/** Image-file I/O for the texture editor; HDR is decoded for read-only preview only. */
+/** Image I/O for the texture editor. HDR images are decoded for read-only previews. */
 public class IOModule {
 
     public static IOModule create() {
@@ -80,12 +80,25 @@ public class IOModule {
                 reader.dispose();
             }
         }
-        try (InputStream input = file.getInputStream()) {
-            BufferedImage result = ImageIO.read(input);
-            if (result == null) {
+        try (InputStream stream = file.getInputStream();
+                ImageInputStream input = new MemoryCacheImageInputStream(stream)) {
+            // Probe the requested format first. Optional readers for unrelated
+            // formats do not need to inspect every JPEG and PNG.
+            String format = "jpg".equalsIgnoreCase(extension) ? "JPEG" : extension;
+            var readers = ImageIO.getImageReadersByFormatName(format);
+            if (!readers.hasNext()) {
+                readers = ImageIO.getImageReaders(input);
+            }
+            if (!readers.hasNext()) {
                 throw new IOException("Unsupported or corrupt image: " + file.getNameExt());
             }
-            return result;
+            var reader = readers.next();
+            try {
+                reader.setInput(input);
+                return reader.read(0);
+            } finally {
+                reader.dispose();
+            }
         } catch (RuntimeException failure) {
             throw new IOException("Cannot decode image " + file.getNameExt(), failure);
         }

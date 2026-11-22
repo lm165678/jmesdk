@@ -159,7 +159,7 @@ public class ProbeRadiusShape extends Mesh {
         mat.setColor("Color", ColorRGBA.Orange);
         mat.getAdditionalRenderState().setLineWidth(2f);
         geom.setQueueBucket(RenderQueue.Bucket.Transparent);
-        // Keep the real influence radius; only line thickness is screen-sized.
+        // Scale the line thickness on screen and keep the light's influence radius in world units.
         geom.setCullHint(com.jme3.scene.Spatial.CullHint.Never);
         
         

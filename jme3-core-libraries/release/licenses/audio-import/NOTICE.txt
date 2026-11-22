@@ -1,0 +1,23 @@
+Audio import native dependencies
+
+JavaCV 1.5.12 and JavaCPP 1.5.12 (Apache-2.0 option).
+FFmpeg 7.1.1 / JavaCPP presets 1.5.12 (default LGPL build, NOT -gpl).
+The SDK calls JNI libraries directly, not ffmpeg/ffprobe executables.
+JavaCPP extracts matching libraries from packaged JARs; no runtime download or compiler.
+
+Targets: Windows x86_64; Linux x86_64/arm64; macOS x86_64/arm64.
+Other architectures fail import and preserve the original file.
+
+Sources and upstream build instructions:
+https://github.com/bytedeco/javacv/tree/1.5.12
+https://github.com/bytedeco/javacpp/tree/1.5.12
+https://github.com/bytedeco/javacpp-presets/tree/1.5.12/ffmpeg
+https://github.com/bytedeco/javacpp-presets/blob/1.5.12/ffmpeg/cppbuild.sh
+https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
+https://github.com/xiph/vorbis/tree/v1.3.7
+https://github.com/xiph/ogg/tree/v1.3.5
+
+See accompanying upstream license texts. FFmpeg's document also describes optional
+GPL configurations; this SDK explicitly selects default LGPL artifacts. Modified
+builds may replace corresponding native/class-path JARs; no SDK signature check
+prevents replacement. Libraries are dynamically loaded into the JVM.

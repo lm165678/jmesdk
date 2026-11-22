@@ -9,7 +9,11 @@ on:
   pull_request:
 
 jobs:
+  UfbxNatives:
+    uses: ./.github/workflows/ufbx-jni.yml
+
   BuildSDK:
+    needs: UfbxNatives
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

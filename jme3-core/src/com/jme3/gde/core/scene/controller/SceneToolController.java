@@ -64,6 +64,10 @@ public class SceneToolController extends AbstractAppState {
     protected Geometry grid;
     protected Spatial selected;
     protected Spatial selectionShape;
+    private Spatial collisionSelection;
+    private com.jme3.bullet.collision.shapes.CollisionShape displayedCollisionShape;
+    private final Vector3f displayedCollisionScale = new Vector3f();
+    private final Vector3f currentCollisionScale = new Vector3f();
     private Geometry boundsSelection;
     private final Vector3f boundsExtent = new Vector3f(-1, -1, -1);
     protected AssetManager manager;
@@ -235,6 +239,10 @@ public class SceneToolController extends AbstractAppState {
     protected void attachSelectionShape(Spatial spat) {
         if (selectionShape != null) {
             selectionShape.removeFromParent();
+            if (selectionShape == collisionSelection) {
+                collisionSelection = null;
+                displayedCollisionShape = null;
+            }
             selectionShape = null;
         }
         if (spat instanceof ParticleEmitter) {
@@ -311,6 +319,17 @@ public class SceneToolController extends AbstractAppState {
     @Override
     public void render(com.jme3.renderer.RenderManager manager) {
         super.render(manager);
+        if (selected != null && selectionShape != null && selectionShape == collisionSelection) {
+            PhysicsCollisionObject object = collisionObject(selected);
+            if (object != null) {
+                var shape = object.getCollisionShape();
+                if (shape != displayedCollisionShape || !shape.getScale(currentCollisionScale).equals(displayedCollisionScale)) {
+                    attachPhysicsSelection(selected);
+                } else {
+                    updateCollisionSelectionPose(selected);
+                }
+            }
+        }
         if (selected == null || selectionShape == null || selectionShape != boundsSelection) {
             return;
         }
@@ -326,7 +345,7 @@ public class SceneToolController extends AbstractAppState {
             boundsSelection.setLocalRotation(com.jme3.math.Quaternion.IDENTITY);
             boundsSelection.setLocalScale(1);
             // SceneApplication finalizes the entire Tools Node after all callbacks.
-            // Finalizing only this controller subtree leaves its parent dirty.
+            // Finalize the parent too when a tool leaves its subtree dirty.
         }
     }
 
@@ -337,32 +356,44 @@ public class SceneToolController extends AbstractAppState {
         return mat;
     }
 
-    protected void attachPhysicsSelection(Spatial geom) {
-        PhysicsCollisionObject control = geom.getControl(RigidBodyControl.class);
-        if (control == null) {
-            control = geom.getControl(VehicleControl.class);
+    private static PhysicsCollisionObject collisionObject(Spatial spatial) {
+        PhysicsCollisionObject object = spatial.getControl(RigidBodyControl.class);
+        if (object == null) {
+            object = spatial.getControl(GhostControl.class);
         }
-        if (control == null) {
-            control = geom.getControl(GhostControl.class);
+        if (object == null) {
+            CharacterControl character = spatial.getControl(CharacterControl.class);
+            if (character != null) {
+                object = character.getCharacter();
+            }
         }
-        if (control == null) {
-            control = geom.getControl(CharacterControl.class).getCharacter();
-        }
-        if (control == null) {
+        return object;
+    }
+
+    private void updateCollisionSelectionPose(Spatial owner) {
+        // DebugShapeFactory has already applied the native collision-shape scale.
+        collisionSelection.setLocalTranslation(owner.getWorldTranslation());
+        collisionSelection.setLocalRotation(owner.getWorldRotation());
+    }
+
+    protected void attachPhysicsSelection(Spatial owner) {
+        PhysicsCollisionObject object = collisionObject(owner);
+        if (object == null) {
             return;
         }
-        final Spatial selectionGeometry = DebugShapeFactory.getDebugShape(control.getCollisionShape());
-        if (selectionGeometry != null) {
-            selectionGeometry.setMaterial(blueMat);
-            selectionGeometry.setLocalTransform(geom.getWorldTransform());
-            selectionShape = selectionGeometry;
-            SceneApplication.getApplication().enqueue(new Callable<Object>() {
-                @Override
-                public Object call() throws Exception {
-                    toolsNode.attachChild(selectionGeometry);
-                    return null;
-                }
-            });
+        var shape = object.getCollisionShape();
+        Spatial replacement = DebugShapeFactory.getDebugShape(shape);
+        if (replacement != null) {
+            if (collisionSelection != null) {
+                collisionSelection.removeFromParent();
+            }
+            replacement.setMaterial(blueMat);
+            collisionSelection = replacement;
+            selectionShape = replacement;
+            displayedCollisionShape = shape;
+            shape.getScale(displayedCollisionScale);
+            updateCollisionSelectionPose(owner);
+            toolsNode.attachChild(replacement);
         }
     }
 
@@ -370,6 +401,10 @@ public class SceneToolController extends AbstractAppState {
         if (selectionShape != null) {
             final Spatial shape = selectionShape;
             selectionShape = null;
+            if (shape == collisionSelection) {
+                collisionSelection = null;
+                displayedCollisionShape = null;
+            }
             SceneApplication.getApplication().enqueue(new Callable<Void>() {
                 @Override
                 public Void call() throws Exception {
@@ -454,7 +489,7 @@ public class SceneToolController extends AbstractAppState {
             return;
         }
 
-        if (selectionShape == boundsSelection) {
+        if (selectionShape == boundsSelection || selectionShape == collisionSelection) {
             return;
         }
         selectionShape.setLocalTranslation(selected.getWorldTranslation());

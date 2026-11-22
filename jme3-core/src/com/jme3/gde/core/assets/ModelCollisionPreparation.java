@@ -9,9 +9,12 @@ import com.jme3.bullet.control.PhysicsControl;
 import com.jme3.bullet.control.RigidBodyControl;
 import com.jme3.bullet.util.CollisionShapeFactory;
 import com.jme3.scene.Geometry;
+import com.jme3.scene.Mesh;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
+import com.jme3.scene.UserData;
 import com.jme3.scene.VertexBuffer;
+import com.jme3.terrain.Terrain;
 import java.util.logging.Logger;
 
 /**
@@ -30,6 +33,33 @@ final class ModelCollisionPreparation {
     }
 
     static void addMissing(Spatial spatial, ModelConversionOptions.Collision type) {
+        addMissing(spatial, type, false);
+    }
+
+    static void addMissing(Spatial spatial, ModelConversionOptions.Collision type, boolean separate) {
+        if (separate) {
+            addSeparate(spatial, type);
+        } else {
+            addCombined(spatial, type);
+        }
+    }
+
+    private static void addSeparate(Spatial spatial, ModelConversionOptions.Collision type) {
+        if (hasPhysics(spatial) || Boolean.TRUE.equals(spatial.getUserData(UserData.JME_PHYSICSIGNORE))) {
+            return;
+        }
+        if (isSkinned(spatial) || spatial instanceof Terrain) {
+            addCombined(spatial, type);
+        } else if (spatial instanceof Geometry geometry && hasTriangles(geometry)) {
+            addStatic(geometry, type);
+        } else if (spatial instanceof Node node) {
+            for (Spatial child : node.getChildren()) {
+                addSeparate(child, type);
+            }
+        }
+    }
+
+    private static void addCombined(Spatial spatial, ModelConversionOptions.Collision type) {
         if (hasPhysics(spatial)) {
             return;
         }
@@ -52,25 +82,32 @@ final class ModelCollisionPreparation {
         });
         if (specialChild[0] && spatial instanceof Node node) {
             for (Spatial child : node.getChildren()) {
-                addMissing(child, type);
+                addCombined(child, type);
             }
             return;
         }
         boolean[] triangles = {false};
         spatial.depthFirstTraversal(child -> {
-            if (child instanceof Geometry geometry && geometry.getMesh() != null
-                    && (geometry.getMesh().getMode() == com.jme3.scene.Mesh.Mode.Triangles
-                    || geometry.getMesh().getMode() == com.jme3.scene.Mesh.Mode.TriangleStrip
-                    || geometry.getMesh().getMode() == com.jme3.scene.Mesh.Mode.TriangleFan)
-                    && geometry.getMesh().getTriangleCount() > 0) {
+            if (child instanceof Geometry geometry && hasTriangles(geometry)) {
                 triangles[0] = true;
             }
         });
         if (triangles[0]) {
-            spatial.addControl(new RigidBodyControl(type == ModelConversionOptions.Collision.MESH
-                    ? CollisionShapeFactory.createMeshShape(spatial)
-                    : ModelCollisionShapes.create(spatial, type == ModelConversionOptions.Collision.SPHERE), 0));
-            LOG.info("Generated static/terrain collision: " + spatial.getName());
+            addStatic(spatial, type);
+        }
+    }
+
+    private static boolean hasTriangles(Geometry geometry) {
+        Mesh mesh = geometry.getMesh();
+        return mesh != null && (mesh.getMode() == Mesh.Mode.Triangles || mesh.getMode() == Mesh.Mode.TriangleStrip
+                || mesh.getMode() == Mesh.Mode.TriangleFan) && mesh.getTriangleCount() > 0;
+    }
+
+    private static void addStatic(Spatial spatial, ModelConversionOptions.Collision type) {
+        var shape = type == ModelConversionOptions.Collision.MESH ? CollisionShapeFactory.createMeshShape(spatial)
+                : ModelCollisionShapes.create(spatial, type == ModelConversionOptions.Collision.SPHERE);
+        if (shape != null) {
+            spatial.addControl(new RigidBodyControl(shape, 0));
         }
     }
 

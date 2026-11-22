@@ -58,6 +58,11 @@ import org.openide.nodes.Children;
 import org.openide.nodes.Node;
 import org.openide.util.lookup.InstanceContent;
 
+/**
+ * EDT-owned image editor. Fit follows viewport resizing until manual zoom.
+ * 第一步：打开纹理，默认完整显示；第二步：滚轮缩放，中键或右键拖动平移。
+ * 第三步：点击 Fit 恢复全图；取色用左键，Shift+左键设置背景色。
+ */
 public class ImageEditorComponent implements EditorToolTarget {
     
 
@@ -73,11 +78,12 @@ public class ImageEditorComponent implements EditorToolTarget {
     private BufferedImage editedImage;
     private float scaleX = 1;
     private float scaleY = 1;
+    private boolean fitView = true;
     private JPanel imageScreen = new JPanel() {
 
         @Override
-        public void paint(Graphics graphics) {
-            super.paint(graphics);
+        protected void paintComponent(Graphics graphics) {
+            super.paintComponent(graphics);
             doPaint((Graphics2D) graphics);
         }
     };
@@ -119,6 +125,7 @@ public class ImageEditorComponent implements EditorToolTarget {
         lim.gridx = lim.gridy = 0;
         imageContainer.add(imageScreen, lim);
         scroller = new JScrollPane(imageContainer);
+        installNavigation();
         COMPONENT.add(scroller);
         COMPONENT.add(topContainer, BorderLayout.NORTH);
         COMPONENT.add(bottomBar, BorderLayout.SOUTH);
@@ -142,7 +149,8 @@ public class ImageEditorComponent implements EditorToolTarget {
     }
 
     public void setScaleFactor(float value) {
-        value = Math.max(value, 0.01f);
+        fitView = false;
+        value = Math.max(0.01f, Math.min(value, 16));
         scaleX = value;
         scaleY = value;
         resizeDisplay();
@@ -182,7 +190,7 @@ public class ImageEditorComponent implements EditorToolTarget {
             disableSaving();
         }
         updateReadOnlyState();
-        resizeDisplay();
+        fitImage();
     }
 
     /** Enters a non-editable loading state before file I/O starts on a worker thread. */
@@ -199,7 +207,7 @@ public class ImageEditorComponent implements EditorToolTarget {
         resizeDisplay();
     }
 
-    /** Keeps editing disabled after a decode failure instead of exposing a null image. */
+    /** Leaves image editing disabled when decoding fails. */
     public void setLoadFailed(String message) {
         loading = false;
         readOnly = false;
@@ -231,21 +239,82 @@ public class ImageEditorComponent implements EditorToolTarget {
     }
 
     private void resizeDisplay() {
-        if (editedImage == null) {
-            imageScreen.setPreferredSize(new Dimension(0, 0));
-            COMPONENT.revalidate();
-            COMPONENT.repaint();
-            return;
+        if (editedImage != null && fitView) {
+            Dimension extent = scroller.getViewport().getExtentSize();
+            if (extent.width > 4 && extent.height > 4) {
+                scaleX = scaleY = Math.min((extent.width - 4f) / editedImage.getWidth(),
+                        (extent.height - 4f) / editedImage.getHeight());
+            }
         }
-        Dimension s = new Dimension(
-                (int) (editedImage.getWidth() * scaleX),
-                (int) (editedImage.getHeight() * scaleY));
-        imageScreen.setPreferredSize(s);
-        imageScreen.setMinimumSize(s);
-        imageScreen.setMaximumSize(s);
-        COMPONENT.revalidate();
-        COMPONENT.repaint();
-        scroller.setViewportView(imageContainer);
+        Dimension size = editedImage == null ? new Dimension() : new Dimension(
+                Math.max(1, (int) (editedImage.getWidth() * scaleX)),
+                Math.max(1, (int) (editedImage.getHeight() * scaleY)));
+        imageScreen.setPreferredSize(size);
+        imageScreen.setMinimumSize(size);
+        imageScreen.setMaximumSize(size);
+        // The image can arrive after the scroll pane has validated its empty view.
+        // Revalidate from the canvas so GridBagLayout and the viewport lay it out again.
+        imageScreen.revalidate();
+        scroller.getViewport().repaint();
+    }
+
+    private void fitImage() {
+        fitView = true;
+        resizeDisplay();
+        scroller.getViewport().setViewPosition(new java.awt.Point());
+    }
+
+    private void installNavigation() {
+        scroller.setWheelScrollingEnabled(false);
+        scroller.getViewport().addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent event) {
+                if (fitView) {
+                    resizeDisplay();
+                }
+            }
+        });
+        java.awt.event.MouseAdapter navigation = new java.awt.event.MouseAdapter() {
+            private java.awt.Point last;
+
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent event) {
+                if (!javax.swing.SwingUtilities.isLeftMouseButton(event) || currentTool == null) {
+                    last = javax.swing.SwingUtilities.convertPoint(event.getComponent(), event.getPoint(), imageContainer);
+                }
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent event) {
+                last = null;
+            }
+
+            @Override
+            public void mouseDragged(java.awt.event.MouseEvent event) {
+                if (last != null) {
+                    java.awt.Point point = javax.swing.SwingUtilities.convertPoint(event.getComponent(), event.getPoint(), imageContainer);
+                    java.awt.Point position = scroller.getViewport().getViewPosition();
+                    position.translate(last.x - point.x, last.y - point.y);
+                    Dimension extent = scroller.getViewport().getExtentSize();
+                    Dimension size = scroller.getViewport().getViewSize();
+                    position.x = Math.max(0, Math.min(position.x, size.width - extent.width));
+                    position.y = Math.max(0, Math.min(position.y, size.height - extent.height));
+                    scroller.getViewport().setViewPosition(position);
+                }
+            }
+
+            @Override
+            public void mouseWheelMoved(java.awt.event.MouseWheelEvent event) {
+                setScaleFactor((float) (scaleX * Math.pow(1.15, -event.getPreciseWheelRotation())));
+                event.consume();
+            }
+        };
+        for (JComponent surface : Arrays.asList(imageScreen, imageContainer)) {
+            surface.addMouseListener(navigation);
+            surface.addMouseMotionListener(navigation);
+        }
+        scroller.addMouseWheelListener(navigation);
+        imageScreen.setToolTipText("Wheel: zoom | Middle/right drag: pan | Fit: show entire texture");
     }
 
     @SuppressWarnings("unchecked")
@@ -260,6 +329,9 @@ public class ImageEditorComponent implements EditorToolTarget {
         JToolBar toolbar1 = new JToolBar();
         toolbar1.add(zoomIn);
         toolbar1.add(zoomOut);
+        JButton fit = new JButton("Fit");
+        fit.addActionListener(event -> fitImage());
+        toolbar1.add(fit);
         toolbar1.addSeparator();
         toolbar1.add(resize);
         toolbar1.add(rotateLeft);

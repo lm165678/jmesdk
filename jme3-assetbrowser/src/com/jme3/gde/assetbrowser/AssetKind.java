@@ -13,7 +13,7 @@ enum AssetKind {
             case "j3o", "obj", "gltf", "glb", "meshxml", "blend", "fbx" -> MODEL;
             case "j3m", "j3md" -> MATERIAL;
             case "vert", "frag", "geom", "comp", "glsl", "glsllib", "tesc", "tese" -> SHADER;
-            case "wav", "ogg", "mp3", "flac" -> AUDIO;
+            case "wav", "ogg", "mp3", "mp4", "m4a", "aac", "flac" -> AUDIO;
             case "j3f" -> FILTER;
             case "xml", "gui" -> GUI;
             default -> OTHER;

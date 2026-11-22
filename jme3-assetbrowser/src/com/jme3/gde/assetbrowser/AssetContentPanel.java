@@ -1,7 +1,5 @@
 package com.jme3.gde.assetbrowser;
 
-import com.jme3.audio.AudioData;
-import com.jme3.audio.AudioNode;
 import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.core.assets.SpatialAssetDataObject;
 import com.jme3.gde.core.assets.FilterDataObject;
@@ -25,6 +23,8 @@ import org.netbeans.api.project.ProjectUtils;
 import org.netbeans.api.project.ui.OpenProjects;
 import org.openide.DialogDisplayer;
 import org.openide.NotifyDescriptor;
+import org.openide.filesystems.FileUtil;
+import java.io.IOException;
 import org.openide.cookies.EditCookie;
 import org.openide.cookies.OpenCookie;
 import org.openide.filesystems.*;
@@ -69,6 +69,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
     }
     private final JComboBox<ProjectItem> projects = new JComboBox<>();
+    private final JCheckBox hideOriginals = new JCheckBox(text("HideOriginals"), true);
     private final JTextField search = new JTextField(18);
     private final JComboBox<String> types = new JComboBox<>();
     private final JTree folders = new JTree(new DefaultMutableTreeNode(new Folder("")));
@@ -85,9 +86,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
 
     private final DefaultListModel<Entry> entries = new DefaultListModel<>();
     private final JList<Entry> grid = new JList<>(entries);
-    private final JLabel preview = new JLabel("", SwingConstants.CENTER);
-    private final JLabel details = new JLabel(" ");
     private final JLabel status = new JLabel(" ");
+    private final JLabel heap = new JLabel(" ");
+    private final AssetInspector inspector = new AssetInspector(this::updateSelectionStatus);
+    private final javax.swing.Timer heapTimer = new javax.swing.Timer(1500, event -> updateHeap());
+    private String catalogStatus = " ";
     private final RequestProcessor io = new RequestProcessor("Asset catalog", 1, true);
     private final javax.swing.Timer refreshTimer = new javax.swing.Timer(350, event -> scan());
     private final javax.swing.Timer searchTimer = new javax.swing.Timer(180, event -> filter());
@@ -103,6 +106,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     private long generation;
     private boolean active;
     private boolean changingProjects;
+    private boolean rebuildingGrid;
     private int tileSize = 96;
     private final PropertyChangeListener projectListener = event -> SwingUtilities.invokeLater(this::reloadProjects);
     private final FileChangeListener filesListener = new FileChangeAdapter() {
@@ -145,7 +149,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         com.jme3.gde.core.util.OverflowToolbar.install(bar,
                 new Component[]{projects}, new Component[]{new JLabel(text("Search")), search},
                 new Component[]{types}, new Component[]{refresh}, new Component[]{size},
-                new Component[]{showPreview});
+                new Component[]{showPreview}, new Component[]{hideOriginals});
+        hideOriginals.addActionListener(event -> filter());
         add(bar, BorderLayout.NORTH);
         grid.setLayoutOrientation(JList.HORIZONTAL_WRAP);
         grid.setVisibleRowCount(-1);
@@ -154,7 +159,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         grid.setFixedCellHeight(tileSize + 39);
         grid.setCellRenderer(new Cell());
         grid.addListSelectionListener(event -> {
-            if (!event.getValueIsAdjusting()) {
+            if (!event.getValueIsAdjusting() && !rebuildingGrid) {
                 folderMenuTarget = null;
                 showSelected();
                 syncAssetSelection();
@@ -166,7 +171,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             @Override public void mouseReleased(MouseEvent event) { popup(event); }
             @Override public void mouseClicked(MouseEvent event) {
                 int index = grid.locationToIndex(event.getPoint());
-                if (event.getClickCount() == 2 && index >= 0
+                if (SwingUtilities.isLeftMouseButton(event) && event.getClickCount() == 2 && index >= 0
                         && grid.getCellBounds(index, index).contains(event.getPoint())) {
                     open(entries.get(index));
                 }
@@ -178,6 +183,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         });
         ToolTipManager.sharedInstance().registerComponent(grid);
         JScrollPane gridScroll = new JScrollPane(grid);
+        gridScroll.setTransferHandler(grid.getTransferHandler());
+        gridScroll.getViewport().setTransferHandler(grid.getTransferHandler());
         gridScroll.getVerticalScrollBar().setUnitIncrement(28);
         folders.setRootVisible(true);
         folders.addTreeSelectionListener(event -> {
@@ -208,15 +215,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         JScrollPane treeScroll = new JScrollPane(folders);
         treeScroll.setMinimumSize(new Dimension(0, 0));
         treeScroll.setPreferredSize(new Dimension(170, 160));
-        JPanel inspector = new JPanel(new BorderLayout(2, 2));
-        inspector.setMinimumSize(new Dimension(0, 0));
-        inspector.setPreferredSize(new Dimension(210, 160));
-        inspector.add(preview, BorderLayout.CENTER);
-        inspector.add(details, BorderLayout.SOUTH);
         JSplitPane content = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, gridScroll, inspector);
         content.setResizeWeight(1);
-        // Do not reserve an empty inspector strip. The asset grid fills all
-        // remaining width until the user explicitly opens the preview pane.
+        // Give the asset grid the full width while the preview is closed.
+        // Reserve inspector space only when the user opens the preview.
         inspector.setVisible(false);
         content.setDividerSize(0);
         showPreview.addActionListener(event -> {
@@ -224,7 +226,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             inspector.setVisible(visible);
             content.setDividerSize(visible ? 5 : 0);
             if (visible) {
-                content.setDividerLocation(Math.max(0, content.getWidth() - 215));
+                content.setDividerLocation(Math.max(0, content.getWidth() - 305));
+                showSelected();
+            } else {
+                inspector.clear();
+                updateSelectionStatus();
             }
             content.revalidate();
             content.repaint();
@@ -234,7 +240,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         split.setDividerSize(5);
         split.setDividerLocation(170);
         add(split, BorderLayout.CENTER);
-        add(status, BorderLayout.SOUTH);
+        JPanel footer = new JPanel(new BorderLayout(10, 0));
+        footer.add(status, BorderLayout.CENTER);
+        footer.add(heap, BorderLayout.EAST);
+        add(footer, BorderLayout.SOUTH);
         projects.addActionListener(event -> { if (!changingProjects) { chooseProject(); } });
         types.addActionListener(event -> filter());
         search.getDocument().addDocumentListener(new DocumentListener() {
@@ -252,6 +261,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         if (active) { return; }
         active = true;
         thumbnails = new AssetThumbnails();
+        updateHeap();
+        heapTimer.start();
         OpenProjects.getDefault().addPropertyChangeListener(projectListener);
         reloadProjects();
     }
@@ -261,6 +272,8 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         generation++;
         refreshTimer.stop();
         searchTimer.stop();
+        heapTimer.stop();
+        inspector.clear();
         OpenProjects.getDefault().removePropertyChangeListener(projectListener);
         unwatch();
         if (thumbnails != null) { thumbnails.close(); }
@@ -295,8 +308,13 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
 
     private void chooseProject() {
         unwatch();
+        inspector.clear();
+        grid.clearSelection();
         ProjectItem item = (ProjectItem) projects.getSelectedItem();
         manager = item == null ? null : item.manager();
+        if (manager != null) {
+            com.jme3.gde.core.assets.ExternalAssetImport.watch(manager);
+        }
         directory = "";
         FileObject root = manager == null ? null : manager.getAssetFolder();
         if (root != null) {
@@ -315,10 +333,12 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             all = List.of();
             entries.clear();
             folders.setModel(new DefaultTreeModel(new DefaultMutableTreeNode(new Folder(""))));
-            status.setText(text("NoProject"));
+            catalogStatus = text("NoProject");
+            updateSelectionStatus();
             return;
         }
-        status.setText(text("Scanning"));
+        catalogStatus = text("Scanning");
+        updateSelectionStatus();
         io.post(() -> {
             List<Entry> found = new ArrayList<>();
             SortedSet<String> dirs = new TreeSet<>();
@@ -329,23 +349,23 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             long stamp = 17;
             long objStamp = 17;
             for (Entry entry : found) {
-                // Directory timestamps change when sidecars are written or files are
-                // enumerated by other tools; only asset files determine validity.
+                // Sidecar writes or directory scans can change folder timestamps.
+                // Check the asset file itself to decide whether its thumbnail is stale.
                 if (entry.file().isFolder()) {
                     continue;
                 }
                 stamp = stamp * 31 + entry.path().hashCode();
                 stamp = stamp * 31 + entry.file().lastModified().getTime();
                 stamp = stamp * 31 + entry.file().getSize();
-                // OBJ can depend on MTL/textures, but never on a converted J3O.
-                // Saving a scene must not reload every unchanged raw OBJ thumbnail.
+                // An OBJ thumbnail depends on its MTL and textures.
+                // Saving the converted J3O should not invalidate the OBJ thumbnail.
                 if (!entry.file().getExt().equalsIgnoreCase("j3o")) {
                     objStamp = objStamp * 31 + entry.path().hashCode();
                     objStamp = objStamp * 31 + entry.file().lastModified().getTime();
                     objStamp = objStamp * 31 + entry.file().getSize();
                 }
             }
-            // Sidecars affect models but are not standalone browser items.
+            // Sidecars are model dependencies, so leave them out of the asset list.
             found.removeIf(entry -> !entry.file().isFolder()
                     && (entry.file().getExt().equalsIgnoreCase("j3odata")
                     || entry.file().getExt().equalsIgnoreCase("bin")));
@@ -400,8 +420,20 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
     }
 
+    /**
+     * 第一步：默认隐藏外部图片和模型源文件，文件夹仍可导航。
+     * 第二步：取消 Hide original assets 可查看源文件；此开关不删除文件。
+     */
+    private static boolean isOriginalAsset(String extension) {
+        return switch (extension.toLowerCase(Locale.ROOT)) {
+            case "png", "jpg", "jpeg", "bmp", "tga", "gif", "tif", "tiff",
+                    "mp3", "mp4", "m4a", "aac", "flac", "hdr", "exr", "fbx", "gltf", "glb", "bin", "obj", "mtl", "dae", "blend", "3ds" -> true;
+            default -> false;
+        };
+    }
     private void filter() {
         Entry selected = grid.getSelectedValue();
+        rebuildingGrid = true;
         entries.clear();
         String query = search.getText().trim().toLowerCase(Locale.ROOT);
         int type = types.getSelectedIndex() - 1;
@@ -410,14 +442,20 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             String parent = slash < 0 ? "" : entry.path().substring(0, slash);
             boolean location = query.isEmpty() ? parent.equals(directory)
                     : directory.isEmpty() || entry.path().startsWith(directory + "/");
+            if (hideOriginals.isSelected() && !entry.file().isFolder()
+                    && isOriginalAsset(entry.file().getExt())) {
+                continue;
+            }
             if (location && entry.path().toLowerCase(Locale.ROOT).contains(query)
                     && (entry.file().isFolder() || type < 0 || entry.kind().ordinal() == type)) {
                 entries.addElement(entry);
             }
         }
         if (selected != null) { grid.setSelectedValue(selected, false); }
-        status.setText("Assets/" + directory + "  —  " + entries.size() + " " + text("Assets"));
+        rebuildingGrid = false;
+        catalogStatus = "Assets/" + directory + "  —  " + entries.size() + " " + text("Assets");
         showSelected();
+        syncAssetSelection();
     }
 
     /** Standalone images/audio/source only depend on themselves; composite assets
@@ -451,19 +489,37 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
 
     private void showSelected() {
         Entry entry = grid.getSelectedValue();
-        if (entry == null) {
-            preview.setIcon(null);
-            details.setText(" ");
+        updateSelectionStatus();
+        if (!active || !inspector.isVisible()) {
             return;
         }
-        AssetThumbnails.Result result = image(entry);
-        preview.setIcon(entry.file().isFolder() ? new FolderThumb(180)
-                : new Thumb(result == null ? pendingImage : result.image(), 180));
-        details.setText(entry.file().getNameExt());
-        String tip = entry.path() + " — " + (entry.file().isFolder() ? text("Folder") : entry.file().getSize() + " bytes");
-        if (result != null && !result.error().isEmpty()) { tip += " — " + result.error(); }
-        details.setToolTipText(tip);
-        preview.setToolTipText(tip);
+        if (entry == null) {
+            inspector.clear();
+            return;
+        }
+        inspector.select(manager, entry.file(), entry.path(), entry.kind(), thumbnailRevision(entry));
+        if (!entry.file().isFolder() && entry.kind() != AssetKind.TEXTURE) {
+            AssetThumbnails.Result result = image(entry);
+            inspector.poster(result == null ? pendingImage : result.image());
+        }
+    }
+
+    private void updateSelectionStatus() {
+        Entry entry = grid.getSelectedValue();
+        String message = catalogStatus;
+        if (entry != null && !entry.file().isFolder()) {
+            message += "  —  " + entry.file().getNameExt() + "  ·  " + text("PreviewFile")
+                    + " " + AssetInspector.units(entry.file().getSize());
+            long estimate = inspector.memoryBytes();
+            message += "  ·  " + text("PreviewMemory") + " " + (estimate < 0 ? "—" : AssetInspector.units(estimate));
+        }
+        status.setText(message);
+    }
+
+    private void updateHeap() {
+        Runtime runtime = Runtime.getRuntime();
+        heap.setText(text("PreviewHeap") + " " + AssetInspector.units(runtime.totalMemory() - runtime.freeMemory())
+                + " / " + AssetInspector.units(runtime.maxMemory()));
     }
 
     private final class Cell extends JPanel implements ListCellRenderer<Entry> {
@@ -488,7 +544,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
     }
 
-    /** Uses the current IDE theme's directory icon; folders never enter thumbnail rendering. */
+    /** Uses the IDE's folder icon without submitting a thumbnail job. */
     private record FolderThumb(int size) implements Icon {
         @Override public int getIconWidth() { return size; }
         @Override public int getIconHeight() { return size; }
@@ -578,7 +634,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         return grid.getSelectedValuesList();
     }
 
-    /** Creates only one child directory, never an arbitrary relative path. */
+    /** Creates a direct child of this folder. The name must be a single path component. */
     private void createFolder(FileObject parent) {
         NotifyDescriptor.InputLine input = new NotifyDescriptor.InputLine(
                 "Folder name", "New Folder");
@@ -605,7 +661,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         });
     }
 
-    /** True for registered DDS outputs and their containing folders; ordinary DDS files remain renameable. */
+    /** Keeps generated DDS files and their own folder fixed during rename. */
     private boolean isGeneratedRenameTarget(FileObject folder) {
         File local = FileUtil.toFile(folder);
         if (local == null) {
@@ -616,16 +672,17 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             return false;
         }
         try {
-            return store.containsGenerated(local.toPath());
+            return folder.isFolder()
+                    ? store.isGeneratedOutputDirectory(local.toPath()) : store.containsGenerated(local.toPath());
         } catch (java.io.IOException error) {
             DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
                     text("RenameFailed") + ": " + error.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
-            // Fail closed: an unreadable ownership registry must not permit renaming.
+            // Refuse the rename when we cannot verify ownership.
             return true;
         }
     }
 
-    /** Resolves the asset a rename command acts on; the asset root is never a target. */
+    /** Finds the asset to rename. The project asset root itself cannot be renamed here. */
     private FileObject renameAssetTarget() {
         FileObject target = folderMenuTarget;
         if (target == null) {
@@ -642,7 +699,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         return target;
     }
 
-    /** Renames one asset through its DataObject, preserving its extension and sidecars. Referenced paths are not rewritten. */
+    /** Renames the DataObject and its sidecars without changing the extension. Existing references keep their old paths. */
     private void renameAsset(FileObject folder) {
         if (isGeneratedRenameTarget(folder)) {
             DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
@@ -721,7 +778,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             }
         };
         pasteAsset = org.openide.explorer.ExplorerUtils.actionPaste(explorer);
-        // Thumbnail selection is authoritative; Explorer's async selection may lag.
+        // Use the thumbnail selection since the Explorer selection can update later.
         deleteAsset = new AbstractAction(text("Delete")) {
             @Override
             public boolean isEnabled() {
@@ -747,11 +804,21 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                     try {
                         for (Entry entry : selected) {
                             if (entry.file().isValid()) {
-                                DataObject.find(entry.file()).delete();
+                                var disk = FileUtil.toFile(entry.file());
+                                var store = disk == null ? null
+                                        : com.jme3.gde.texturetools.GeneratedTextures.containing(disk.toPath());
+                                if (entry.file().isFolder() && store != null && store.affects(disk.toPath())) {
+                                    // Validate the whole managed tree before DataFolder removes children.
+                                    store.delete(disk.toPath());
+                                    FileUtil.refreshFor(disk.getParentFile());
+                                } else {
+                                    DataObject.find(entry.file()).delete();
+                                }
                             }
                         }
                     } catch (Exception error) {
-                        SwingUtilities.invokeLater(() -> report(error));
+                        DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
+                                text("DeleteFailed") + ": " + error.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
                     } finally {
                         SwingUtilities.invokeLater(() -> scan());
                     }
@@ -775,8 +842,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                     if (contents == null) {
                         return;
                     }
-                    // Ask the destination directly. Explorer action enablement is
-                    // asynchronous and a selected asset is not the paste target.
+                    if (com.jme3.gde.core.assets.ExternalAssetImport.submit(manager, folder, contents)) {
+                        return;
+                    }
+                    // Ask the destination to accept the paste. NetBeans updates the global
+                    // action asynchronously and may still have another node selected.
                     var destination = org.openide.loaders.DataFolder.findFolder(folder).getNodeDelegate();
                     var choices = destination.getPasteTypes(contents);
                     if (choices.length == 0) {
@@ -805,7 +875,38 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         getActionMap().put("paste-from-clipboard", paste);
         bindAsset(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK, "paste", paste);
         grid.setDragEnabled(true);
-        grid.setTransferHandler(new TransferHandler() {
+        TransferHandler imports = new TransferHandler() {
+            @Override public boolean canImport(TransferSupport support) {
+                return manager != null && support.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.javaFileListFlavor);
+            }
+            @Override public boolean importData(TransferSupport support) {
+                if (!canImport(support)) {
+                    return false;
+                }
+                try {
+                    FileObject target = currentFolder();
+                    if (support.isDrop() && support.getComponent() == grid) {
+                        int index = grid.locationToIndex(support.getDropLocation().getDropPoint());
+                        if (index >= 0 && grid.getCellBounds(index, index).contains(support.getDropLocation().getDropPoint())
+                                && entries.get(index).file().isFolder()) {
+                            target = entries.get(index).file();
+                        }
+                    } else if (support.isDrop() && support.getComponent() == folders) {
+                        var location = (JTree.DropLocation) support.getDropLocation();
+                        if (location.getPath() != null) {
+                            var node = (DefaultMutableTreeNode) location.getPath().getLastPathComponent();
+                            var folder = (Folder) node.getUserObject();
+                            target = folder.path().isEmpty() ? manager.getAssetFolder()
+                                    : manager.getAssetFolder().getFileObject(folder.path());
+                        }
+                    }
+                    return com.jme3.gde.core.assets.ExternalAssetImport.submit(manager, target, support.getTransferable());
+                } catch (Exception error) {
+                    report(error);
+                    return false;
+                }
+            }
+
             @Override public int getSourceActions(JComponent component) { return COPY; }
             @Override protected java.awt.datatransfer.Transferable createTransferable(JComponent component) {
                 Entry entry = grid.getSelectedValue();
@@ -821,7 +922,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                                 : entry.kind() == AssetKind.TEXTURE ? com.jme3.gde.core.dnd.TextureDataFlavor.instance
                                 : com.jme3.gde.core.dnd.MaterialDataFlavor.instance);
             }
-        });
+        };
+        grid.setTransferHandler(imports);
+        folders.setTransferHandler(imports);
+        folders.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK), "importPaste");
+        folders.getActionMap().put("importPaste", paste);
     }
 
     private java.awt.datatransfer.Clipboard assetClipboard() {
@@ -891,6 +996,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         open.addActionListener(e -> open(grid.getSelectedValue()));
         menu.add(open);
         Entry selected = grid.getSelectedValue();
+        FileObject inspected = folderMenuTarget != null ? folderMenuTarget
+                : selected != null ? selected.file() : folder;
+        JMenuItem properties = new JMenuItem(text("Properties"));
+        properties.addActionListener(event -> showProperties(inspected));
+        menu.add(properties);
         if (selected != null && selected.file().getExt().equalsIgnoreCase("j3o")) {
             try {
                 if (DataObject.find(selected.file()) instanceof com.jme3.gde.core.assets.BinaryModelDataObject binary) {
@@ -904,6 +1014,20 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             }
         }
         menu.add(new JMenuItem(copyAsset)).setText(text("Copy"));
+        if (selected != null) {
+            var convertTexture = com.jme3.gde.core.assets.ExternalAssetImport.textureAction(manager, selected.file());
+            if (convertTexture != null) {
+                menu.add(convertTexture);
+            }
+            var convertAudio = com.jme3.gde.core.assets.ExternalAssetImport.audioAction(manager, selected.file());
+            if (convertAudio != null) {
+                menu.add(convertAudio);
+            }
+            var repairAudio = com.jme3.gde.core.assets.ExternalAssetImport.audioRepairAction(manager, selected.file());
+            if (repairAudio != null) {
+                menu.add(repairAudio);
+            }
+        }
         menu.add(new JMenuItem(getActionMap().get("pasteIntoFolder")));
         menu.add(new JMenuItem(deleteAsset)).setText(text("Delete"));
         java.util.List<SpatialAssetDataObject> models = new ArrayList<>();
@@ -928,8 +1052,17 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
 
     private void open(Entry entry) {
         if (entry == null || manager == null) { return; }
+        var convertAudio = com.jme3.gde.core.assets.ExternalAssetImport.audioAction(manager, entry.file());
+        if (convertAudio != null) {
+            convertAudio.actionPerformed(new ActionEvent(this, 0, "convertAudio"));
+            return;
+        }
         if (entry.file().isFolder()) {
             openFolder(entry);
+            return;
+        }
+        if (entry.kind() == AssetKind.TEXTURE && AssetPreviewTextures.usesImageEditor(entry.file())) {
+            openImageEditor(entry.file());
             return;
         }
         ProjectAssetManager assets = manager;
@@ -965,13 +1098,13 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                                 editor.requestActive();
                             }
                         } else if (entry.kind() == AssetKind.TEXTURE) {
-                            // Compressed textures use CPU mip preview, independent of GPU support.
+                            // Decode mipmaps on the CPU so preview also works without GPU format support.
                             OpenCookie textureOpen = object.getLookup().lookup(OpenCookie.class);
                             if ("image/x-jme-compressed-texture".equals(entry.file().getMIMEType())
                                     && textureOpen != null) {
                                 textureOpen.open();
                             } else {
-                                new ImageEditorTopComponent(entry.file());
+                                openImageEditor(entry.file());
                             }
                         } else if (object instanceof FilterDataObject filters) {
                             com.jme3.gde.core.filters.FilterExplorerTopComponent.findInstance().loadFile(filters);
@@ -994,10 +1127,91 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         });
     }
 
+    private void openImageEditor(FileObject file) {
+        var editor = new ImageEditorTopComponent(file);
+        editor.open();
+        editor.requestActive();
+    }
+
+    private void showProperties(FileObject file) {
+        Entry selected = grid.getSelectedValue();
+        long previewMemory = selected != null && selected.file().equals(file) ? inspector.memoryBytes() : -1;
+        io.post(() -> {
+            try {
+                long size = assetSize(file);
+                long memory = previewMemory;
+                if (memory < 0 && !file.isFolder() && AssetPreviewTextures.usesImageEditor(file)) {
+                    try {
+                        var image = AssetPreviewTextures.read(null, file, file.getNameExt());
+                        memory = (long) image.getWidth() * image.getHeight() * 4;
+                    } catch (Exception ignored) {
+                        // A damaged image still has a name, path and file size.
+                    }
+                }
+                long estimate = memory;
+                SwingUtilities.invokeLater(() -> {
+                    var details = new JPanel(new java.awt.GridLayout(0, 2, 8, 5));
+                    addProperty(details, text("PropertyName"), file.getNameExt());
+                    addProperty(details, text("PropertyPath"), FileUtil.getFileDisplayName(file));
+                    addProperty(details, text("PropertySize"), AssetInspector.units(size));
+                    if (!file.isFolder()) {
+                        addProperty(details, text("PreviewMemory"), estimate < 0 ? "—" : AssetInspector.units(estimate));
+                    }
+                    DialogDisplayer.getDefault().notify(new NotifyDescriptor(details, text("Properties"),
+                            NotifyDescriptor.DEFAULT_OPTION, NotifyDescriptor.PLAIN_MESSAGE,
+                            new Object[]{NotifyDescriptor.OK_OPTION}, NotifyDescriptor.OK_OPTION));
+                });
+            } catch (Exception error) {
+                SwingUtilities.invokeLater(() -> report(error));
+            }
+        });
+    }
+
+    static long assetSize(FileObject file) throws IOException {
+        if (file.isData()) {
+            return file.getSize();
+        }
+        var local = FileUtil.toFile(file);
+        if (local != null) {
+            long[] size = {0L};
+            java.nio.file.Files.walkFileTree(local.toPath(), new java.nio.file.SimpleFileVisitor<>() {
+                @Override
+                public java.nio.file.FileVisitResult visitFile(java.nio.file.Path path,
+                        java.nio.file.attribute.BasicFileAttributes attributes) {
+                    if (attributes.isRegularFile()) {
+                        size[0] += attributes.size();
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+            return size[0];
+        }
+        long total = 0;
+        var children = file.getChildren(true);
+        while (children.hasMoreElements()) {
+            FileObject child = children.nextElement();
+            if (child.isData()) {
+                total += child.getSize();
+            }
+        }
+        return total;
+    }
+
+    private static void addProperty(JPanel details, String name, String value) {
+        var field = new JTextField(value, 32);
+        field.setEditable(false);
+        field.setCaretPosition(0);
+        var label = new JLabel(name);
+        label.setLabelFor(field);
+        details.add(label);
+        details.add(field);
+    }
+
     private void openSound(ProjectAssetManager assets, Entry entry) {
         TopComponent inspector = new TopComponent() {
-            private AudioNode sound;
-            private boolean disposed;
+            private final AssetAudioPlayer player = new AssetAudioPlayer();
+            private volatile boolean disposed;
+            private volatile long audioRequest;
             {
                 setName(entry.file().getNameExt());
                 setLayout(new BorderLayout());
@@ -1010,26 +1224,28 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                 controls.add(play);
                 controls.add(stop);
                 add(controls, BorderLayout.SOUTH);
-                play.addActionListener(event -> SceneApplication.getApplication().enqueue(() -> {
+                play.addActionListener(event -> {
+                    long ticket = ++audioRequest;
+                    io.post(() -> {
                     if (!disposed) {
                         try {
-                            if (sound == null) {
-                                sound = new AudioNode(assets, entry.path(), AudioData.DataType.Buffer);
-                                sound.setPositional(false);
-                            }
-                            sound.stop();
-                            sound.play();
-                        } catch (RuntimeException error) { SwingUtilities.invokeLater(() -> report(error)); }
+                            var audio = AssetThumbnails.loadAudio(assets, entry.file(), entry.path());
+                            SwingUtilities.invokeLater(() -> {
+                                if (!disposed && ticket == audioRequest) {
+                                    player.play(audio, error -> SwingUtilities.invokeLater(() -> report(error)));
+                                }
+                            });
+                        } catch (Exception error) {
+                            SwingUtilities.invokeLater(() -> report(error));
+                        }
                     }
-                    return null;
-                }));
+                    });
+                });
                 stop.addActionListener(event -> stopSound());
             }
             private void stopSound() {
-                SceneApplication.getApplication().enqueue(() -> {
-                    if (sound != null) { sound.stop(); }
-                    return null;
-                });
+                audioRequest++;
+                player.stop();
             }
             @Override public void componentClosed() { disposed = true; stopSound(); }
             @Override public int getPersistenceType() { return PERSISTENCE_NEVER; }

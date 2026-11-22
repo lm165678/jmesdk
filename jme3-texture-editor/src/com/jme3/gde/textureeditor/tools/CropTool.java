@@ -38,6 +38,9 @@ public class CropTool extends MouseInputAdapter implements EditorTool {
 
     @Override
     public void mousePressed(MouseEvent e) {
+        if (!javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+            return;
+        }
         last = e.getPoint();
         track = new Rectangle(last.x, last.y, 1, 1);
         target.getImageCanvas().repaint();
@@ -45,6 +48,14 @@ public class CropTool extends MouseInputAdapter implements EditorTool {
 
     @Override
     public void mouseReleased(MouseEvent e) {
+        if (!javax.swing.SwingUtilities.isLeftMouseButton(e) || track == null) {
+            return;
+        }
+        if (track.width / target.getScaleX() < 1 || track.height / target.getScaleY() < 1) {
+            track = null;
+            target.getImageCanvas().repaint();
+            return;
+        }
         int x = (int) (track.x / target.getScaleX());
         int y = (int) (track.y / target.getScaleY());
         int w = (int) (track.width / target.getScaleX());
@@ -63,6 +74,9 @@ public class CropTool extends MouseInputAdapter implements EditorTool {
 
     @Override
     public void mouseDragged(MouseEvent e) {
+        if ((e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0 || track == null) {
+            return;
+        }
         Point current = e.getPoint();
         int x = Math.min(last.x, current.x);
         int y = Math.min(last.y, current.y);

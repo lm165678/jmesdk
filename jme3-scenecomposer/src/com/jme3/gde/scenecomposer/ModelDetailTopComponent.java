@@ -6,6 +6,7 @@ import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
 import com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit;
 import com.jme3.gde.core.undoredo.SceneUndoRedoManager;
 import com.jme3.scene.*;
+import com.jme3.scene.control.LodControl;
 import com.jme3.scene.plugins.sdf.*;
 import java.awt.BorderLayout;
 import java.awt.GridLayout;
@@ -33,7 +34,7 @@ import org.openide.windows.TopComponent;
  * <pre>
  * 第一步：在场景或树中选中真实模型，Properties 下半部分显示模型操作。
  * 第二步：LOD 页的 Preview level 选择 LOD 0/1/... 预览，Original / Auto 恢复。
- * 第三步：需要生成 LOD 时配置比例并点击 Bake，完成后可选择新级别预览。
+ * 第三步：配置比例后点击 Bake，自动给生成多个层级的几何体添加 LodControl。
  * 第四步：等待完成，Ctrl+Z 撤销，Ctrl+S 保存到当前 j3o。
  * 第五步：View 选择 SDF 查看已烘焙距离场表面；修改模型后重新烘焙并 Refresh。
  * </pre>
@@ -400,7 +401,7 @@ public final class ModelDetailTopComponent extends TopComponent {
         if (target == null || currentEditor == null || cancellation != null || !hasGeometry) {
             return;
         }
-        // Dispatch by the page identity, never its current visual position.
+        // Find the page by identity because users can reorder the tabs.
         Object pageOperation = ((JComponent) tabs.getSelectedComponent()).getClientProperty("bakeOperation");
         if (!(pageOperation instanceof Integer)) {
             status.setText("No bake operation selected.");
@@ -470,7 +471,7 @@ public final class ModelDetailTopComponent extends TopComponent {
                                     if (operation == 2) {
                                         applyData(target, SdfVolume.USER_DATA_KEY, result, currentEditor);
                                     } else {
-                                        applyMeshes(originalGeometries, ModelBakeSupport.geometries(copy), currentEditor);
+                                        applyMeshes(originalGeometries, ModelBakeSupport.geometries(copy), operation == 0, currentEditor);
                                     }
                                     finish(token, "Bake complete. Ctrl+S to save; Ctrl+Z to undo. Refresh diagnostic views after changes.");
                                 } catch (Exception error) {
@@ -538,11 +539,26 @@ public final class ModelDetailTopComponent extends TopComponent {
         commit(undo, redo, currentEditor);
     }
 
-    private void applyMeshes(List<Geometry> originals, List<Geometry> copies, SceneEditorController currentEditor) {
+    private void applyMeshes(List<Geometry> originals, List<Geometry> copies, boolean lod, SceneEditorController currentEditor) {
         List<Mesh> before = originals.stream().map(Geometry::getMesh).toList();
         List<Mesh> after = copies.stream().map(Geometry::getMesh).toList();
-        Runnable undo = () -> replaceMeshes(originals, before);
-        Runnable redo = () -> replaceMeshes(originals, after);
+        Map<Geometry, LodControl> added = new IdentityHashMap<>();
+        if (lod) {
+            for (int i = 0; i < originals.size(); i++) {
+                Geometry geometry = originals.get(i);
+                if (after.get(i).getNumLodLevels() > 1 && geometry.getControl(LodControl.class) == null) {
+                    added.put(geometry, new LodControl());
+                }
+            }
+        }
+        Runnable undo = () -> {
+            added.forEach(Geometry::removeControl);
+            replaceMeshes(originals, before);
+        };
+        Runnable redo = () -> {
+            replaceMeshes(originals, after);
+            added.forEach(Geometry::addControl);
+        };
         commit(undo, redo, currentEditor);
     }
 

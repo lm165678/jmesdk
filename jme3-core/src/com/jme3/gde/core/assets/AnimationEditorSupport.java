@@ -48,7 +48,7 @@ public final class AnimationEditorSupport {
 
     record PreviewModel(Spatial model, Spatial owner) { }
 
-    // Conservative diagnostic: unknown/Morph tracks are not labelled static.
+    // Unknown tracks and morph tracks are not safe to classify as static.
     static boolean constantTransformClip(com.jme3.anim.AnimClip clip) {
         for (var track : clip.getTracks()) {
             if (!(track instanceof com.jme3.anim.TransformTrack t)) {
@@ -72,7 +72,7 @@ public final class AnimationEditorSupport {
         return false;
     }
 
-    /** Beginner workflow and source metadata. Called on EDT for the loaded editor model. */
+    /** Shows the loading workflow and source metadata on the EDT. */
     static String guide(Spatial owner) {
         StringBuilder text = new StringBuilder(text("Animation.GuideBody"));
         text.append(text("Animation.TargetLinks")).append('\n');
@@ -97,9 +97,9 @@ public final class AnimationEditorSupport {
         return text.toString();
     }
 
-    // Clone the complete hierarchy so sibling meshes and animation targets remain
-    // available. Resolve by child indices, not names (GLTF node names may repeat).
-    // Caller runs on the original scene's render thread; install on the preview thread.
+    // Clone the entire hierarchy to keep sibling meshes and animation targets.
+    // Resolve by child index because glTF node names need not be unique.
+    // Clone on the original scene's render thread and install on the preview thread.
     static PreviewModel cloneForPreview(Spatial root, Spatial owner) {
         List<Integer> path = new ArrayList<>();
         Spatial cursor = owner;
@@ -178,7 +178,23 @@ public final class AnimationEditorSupport {
     private static void open(Spatial selected, Spatial root, BinaryModelDataObject data) {
         List<Spatial> owners = owners(selected);
         if (owners.isEmpty()) {
-            error(new IllegalArgumentException(text("Animation.No_animation_clips_found_Reimport_legacy_animation_models_using_t")));
+            boolean[] hasRig = {false};
+            selected.depthFirstTraversal(spatial -> {
+                if (spatial.getControl(com.jme3.anim.SkinningControl.class) != null) {
+                    hasRig[0] = true;
+                }
+            });
+            if (!hasRig[0]) {
+                error(new IllegalArgumentException(text("Animation.No_animation_clips_found_Reimport_legacy_animation_models_using_t")));
+                return;
+            }
+            com.jme3.gde.core.scene.SceneApplication.getApplication().enqueue(() -> {
+                if (selected.getControl(AnimComposer.class) == null) {
+                    selected.addControl(new AnimComposer());
+                }
+                EventQueue.invokeLater(() -> AnimationEditorTopComponent.open(data, root, List.of(selected)));
+                return null;
+            });
             return;
         }
         AnimationEditorTopComponent.open(data, root, owners);
@@ -203,6 +219,7 @@ public final class AnimationEditorSupport {
         if (file == null) {
             throw new java.io.IOException(text("Animation.Animation_editor_requires_a_local_J3O_file"));
         }
+        ModelTexturePreparation.prepareMissing(root, data.getLookup().lookup(ProjectAssetManager.class));
         java.nio.file.Path destination = file.toPath();
         java.nio.file.Path temporary = java.nio.file.Files.createTempFile(destination.getParent(), ".animation-", ".tmp");
         try (org.openide.filesystems.FileLock lock = data.getPrimaryFile().lock()) {

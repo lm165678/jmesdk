@@ -127,8 +127,8 @@ final class SdfPreview implements AutoCloseable {
         return volumes.size();
     }
 
-    // Project the source bounds to avoid one full-screen ray march per instance.
-    // A bound crossing the eye plane conservatively retains the whole viewport.
+    // Clip the ray march to the projected bounds of each source.
+    // Use the whole viewport if the bounds cross the eye plane.
     private Vector4f screenRect(Matrix4f localToClip, SdfVolume volume, Camera camera) {
         Vector3f low = volume.getMin();
         Vector3f high = volume.getMax();

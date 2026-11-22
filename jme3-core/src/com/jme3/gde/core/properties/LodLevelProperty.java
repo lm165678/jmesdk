@@ -94,7 +94,7 @@ public class LodLevelProperty extends SceneExplorerProperty {
         final int level = val instanceof Number number ? number.intValue()
                 : Integer.parseInt(val.toString().split(" - ")[0]);
         // Keep the property selection active while drawing, even with LodControl.
-        // Selecting another object or Original / Auto in Model Detail restores it.
+        // Select another object or choose Original / Auto in Model Detail to restore it.
         SceneApplication.getApplication().setPreviewLod(geometry, level);
         SceneApplication.getApplication().enqueue(new Callable<Void>() {
             public Void call() throws Exception {

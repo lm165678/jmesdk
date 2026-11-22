@@ -1,3 +1,5 @@
+param([switch]$Jni)
+
 $ErrorActionPreference = 'Stop'
 $sdkRoot = Split-Path -Parent $PSScriptRoot
 $jdk = $env:JAVA_HOME
@@ -22,7 +24,8 @@ try {
         throw 'Texture smoke test compilation failed'
     }
     $temporary = Join-Path $sdkRoot 'build/texture-tools-smoke/tmp'
-    & "$jdk/bin/java.exe" --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED "-Djava.io.tmpdir=$temporary" -cp "$classpath;jme3-texture-tools/build/test-classes" TextureToolsSmoke jme3-texture-tools/release/texture-tools build/texture-tools-smoke
+    $backend = if ($Jni) { 'jni' } else { 'cli' }
+    & "$jdk/bin/java.exe" --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED "-Djme.sdk.texture.backend=$backend" "-Djava.io.tmpdir=$temporary" -cp "$classpath;jme3-texture-tools/build/test-classes" TextureToolsSmoke jme3-texture-tools/release/texture-tools build/texture-tools-smoke
     if ($LASTEXITCODE -ne 0) {
         throw 'Texture Tools integration verification failed'
     }

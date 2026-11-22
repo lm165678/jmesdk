@@ -37,6 +37,13 @@
 
 ## Build and portability
 
+- Package future SDK JNI integrations like Bullet: build pinned native
+  dependencies for the supported desktop OS/architecture matrix in advance,
+  collect the platform libraries and license notices during the SDK build, and
+  load the matching bundled file at runtime. No user-side compiler or download
+  should be required. Release packaging must detect missing target binaries.
+  Record separately which binaries were built, packaged and run.
+
 - Keep `jmesdk` and `JMESources` as sibling directories. Read `readme.md`,
   `build-local-engine-sdk.bat`, `build-and-run-sdk.bat` and `gradle/local-engine.gradle`
   before changing local-engine integration.

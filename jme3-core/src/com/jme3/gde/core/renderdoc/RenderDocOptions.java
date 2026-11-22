@@ -8,9 +8,9 @@ import org.netbeans.spi.options.OptionsPanelController;
 import org.openide.*;
 import org.openide.util.*;
 
-/** Persistent RenderDoc settings. Enter explicitly saves both fields before asking
- * to restart; Cancel in that prompt keeps the saved settings for the next launch.
- * Apply also saves, whereas cancelling Options discards edits not saved by Enter.
+/** RenderDoc options saved by Apply or Enter. Enter saves both fields before
+ * asking to restart. Cancel at the restart prompt keeps those values for the
+ * next launch. Cancel in Options discards fields that have not been saved.
  */
 @OptionsPanelController.TopLevelRegistration(categoryName = "RenderDoc",
         iconBase = "com/jme3/gde/core/renderdoc/renderdoc-48.png",

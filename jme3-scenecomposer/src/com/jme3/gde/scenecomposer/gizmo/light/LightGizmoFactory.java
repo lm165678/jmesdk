@@ -6,6 +6,8 @@
 package com.jme3.gde.scenecomposer.gizmo.light;
 
 import com.jme3.asset.AssetManager;
+import com.jme3.gde.scenecomposer.gizmo.GizmoFactory;
+import com.jme3.gde.scenecomposer.gizmo.GizmoIcon;
 import com.jme3.gde.scenecomposer.gizmo.light.shape.ProbeRadiusShape;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeDirectionalLight;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeLight;
@@ -18,20 +20,16 @@ import com.jme3.light.Light;
 import com.jme3.light.PointLight;
 import com.jme3.light.SpotLight;
 import com.jme3.material.Material;
-import com.jme3.material.RenderState;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.FastMath;
 import com.jme3.math.Quaternion;
 import com.jme3.math.Vector3f;
-import com.jme3.renderer.queue.RenderQueue;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
 import com.jme3.scene.control.BillboardControl;
-import com.jme3.scene.shape.Quad;
+import com.jme3.scene.shape.Cylinder;
 import com.jme3.scene.shape.Sphere;
-import com.jme3.texture.Texture;
-import com.jme3.scene.debug.Arrow;
 
 /**
  * Handles the creation of the appropriate light gizmo according to the light type.
@@ -89,16 +87,7 @@ public class LightGizmoFactory {
         
         billboardNode.attachChild(createLightBulb(assetManager));
         
-        Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
-        mat.setColor("Color", ColorRGBA.White);
-        mat.getAdditionalRenderState().setLineWidth(2f);
-        
-        Geometry arrow = new Geometry("direction arrow", new Arrow(new Vector3f(0, 5, 0)));
-        arrow.setMaterial(mat);
-        arrow.addControl(new ScreenSizeControl(64f, 5f));
-        arrow.addControl(new LightColorUpdate(light, arrow.getMaterial(), "Color"));
-        
-        gizmo.attachChild(arrow);
+        gizmo.attachChild(createDirectionArrow(assetManager, light));
         gizmo.attachChild(billboardNode);
         
         jmeLight.setGizmo(gizmo);
@@ -120,13 +109,7 @@ public class LightGizmoFactory {
         
         Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
         mat.setColor("Color", ColorRGBA.White);
-        mat.getAdditionalRenderState().setLineWidth(1f);
-        
-        Geometry arrow = new Geometry("direction arrow", new Arrow(Vector3f.UNIT_Y.mult(1f)));
-        arrow.setMaterial(mat);
-        arrow.addControl(new ScreenSizeControl(64f, 1f));
-        arrow.addControl(new LightColorUpdate(light, arrow.getMaterial(), "Color"));
-        gizmo.attachChild(arrow);
+        gizmo.attachChild(createDirectionArrow(assetManager, light));
         
         Geometry inRadius = RadiusShape.createShape(assetManager, "inner radius shape");
         inRadius.rotate(pitch90);
@@ -149,7 +132,7 @@ public class LightGizmoFactory {
         cone.addControl(new LightConeRadiusUpdate((SpotLight) light, inRadius, outRadius));
         radiusNode.attachChild(cone);
         
-        radiusNode.addControl(new LightRangeUpdate((SpotLight) light, arrow));
+        radiusNode.addControl(new LightRangeUpdate((SpotLight) light));
         
         return gizmo;
     }
@@ -174,21 +157,32 @@ public class LightGizmoFactory {
     }
     
     protected static Geometry createLightBulb(AssetManager assetManager) {
-        Quad q = new Quad(0.5f, 0.5f);
-        Geometry lightBulb = new Geometry("light bulb", q);
-        lightBulb.move(-q.getHeight() / 2f, -q.getWidth() / 2f, 0);
-        
-        Material mat = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
-        Texture tex = assetManager.loadTexture("com/jme3/gde/scenecomposer/lightbulb32.png");
-        mat.setTexture("ColorMap", tex);
-        mat.getAdditionalRenderState().setBlendMode(RenderState.BlendMode.Alpha);
-        lightBulb.setMaterial(mat);
-        lightBulb.addControl(new ScreenSizeControl(24f, 0.5f));
-        mat.getAdditionalRenderState().setDepthTest(false);
-        mat.getAdditionalRenderState().setDepthWrite(false);
-        lightBulb.setQueueBucket(RenderQueue.Bucket.Transparent);
-        
-        return lightBulb;
+        return GizmoIcon.create(assetManager, "Light source", "sun.svg",
+                "com/jme3/gde/scenecomposer/lightbulb32.png", false);
+    }
+
+    private static Node createDirectionArrow(AssetManager assetManager, Light light) {
+        var material = new Material(assetManager, "Common/MatDefs/Misc/Unshaded.j3md");
+        material.setColor("Color", ColorRGBA.White);
+        var arrow = new Node("direction arrow");
+        var shaft = new Geometry("shaft", new Cylinder(2, 12, .018f, .81f, true));
+        shaft.rotate(-FastMath.HALF_PI, 0f, 0f);
+        shaft.setLocalTranslation(0f, .405f, 0f);
+        shaft.setMaterial(material);
+        arrow.attachChild(shaft);
+        var head = new Geometry("tip", GizmoFactory.createCone(12, .044f, .19f));
+        head.setLocalTranslation(0f, .81f, 0f);
+        head.setMaterial(material);
+        arrow.attachChild(head);
+        // Extend directional markers past the transform handles without widening the tip.
+        if (light instanceof com.jme3.light.DirectionalLight) {
+            shaft.setLocalScale(1f, 1f, 1.8f);
+            shaft.setLocalTranslation(0f, .729f, 0f);
+            head.setLocalTranslation(0f, 1.458f, 0f);
+        }
+        arrow.addControl(new ScreenSizeControl(108f, 1f));
+        arrow.addControl(new LightColorUpdate(light, material, "Color"));
+        return arrow;
     }
     
     /**

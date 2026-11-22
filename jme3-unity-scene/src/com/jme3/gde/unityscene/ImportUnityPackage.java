@@ -21,7 +21,7 @@ import org.openide.loaders.DataObject;
 import org.openide.util.NbBundle.Messages;
 import org.openide.util.RequestProcessor;
 
-/** Restores assets off EDT, then delegates optional J3O conversion to the existing workflow. */
+/** Restores assets on a worker and uses the standard exporter when J3O conversion is requested. */
 @ActionID(category = "jMonkeyPlatform", id = "com.jme3.gde.unityscene.ImportUnityPackage")
 @ActionRegistration(displayName = "#CTL_ImportUnityPackage")
 @ActionReference(path = "Loaders/application/x-unity-package/Actions", position = 100)

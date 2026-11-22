@@ -37,10 +37,13 @@ import com.jme3.collision.CollisionResults;
 import com.jme3.gde.core.scene.SceneApplication;
 import com.jme3.gde.core.scene.controller.SceneToolController;
 import com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode;
+import com.jme3.gde.core.sceneexplorer.nodes.JmeLight;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
 import com.jme3.gde.scenecomposer.gizmo.GizmoFactory;
+import com.jme3.gde.scenecomposer.tools.PickManager;
 import com.jme3.gde.scenecomposer.tools.shortcuts.ShortcutManager;
 import com.jme3.input.event.KeyInputEvent;
+import com.jme3.light.Light;
 import com.jme3.math.FastMath;
 import com.jme3.math.Quaternion;
 import com.jme3.math.Ray;
@@ -52,10 +55,12 @@ import com.jme3.renderer.ViewPort;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.openide.util.Lookup;
 
 /**
@@ -65,14 +70,18 @@ import org.openide.util.Lookup;
 public class SceneComposerToolController extends SceneToolController {
 
     private JmeNode rootNode;
+    private Spatial sceneRoot;
     private SceneEditTool editTool;
     private final EditorShortcutPolicy shortcuts = new EditorShortcutPolicy();
     private boolean selectingWithPrimary;
+    private boolean emptySelectionPress;
     private SceneEditorController editorController;
     private ViewPort overlayView;
     private Node onTopToolsNode;
     private Node nonSpatialMarkersNode;
-    private HashMap<AbstractSceneExplorerNode, Spatial> nonSpatialMarkers;
+    private SelectionHighlight selectionHighlight;
+    private volatile boolean selectionHighlightEnabled = true;
+    private final ConcurrentHashMap<AbstractSceneExplorerNode, Spatial> nonSpatialMarkers = new ConcurrentHashMap<>();
 
     private volatile boolean snapToGrid = false;
     private volatile boolean snapToScene = false;
@@ -89,8 +98,8 @@ public class SceneComposerToolController extends SceneToolController {
     public SceneComposerToolController(final Node toolsNode, AssetManager manager, JmeNode rootNode) {
         super(toolsNode, manager);
         this.rootNode = rootNode;
+        sceneRoot = rootNode == null ? null : rootNode.getLookup().lookup(Spatial.class);
         nonSpatialMarkersNode = new Node("lightMarkersNode");
-        nonSpatialMarkers = new HashMap<AbstractSceneExplorerNode, Spatial>();
         SceneApplication.getApplication().enqueue(new Callable<Object>() {
 
             public Object call() throws Exception {
@@ -145,6 +154,9 @@ public class SceneComposerToolController extends SceneToolController {
         SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
             public Void call() throws Exception {
+                if (selectionHighlight != null) {
+                    selectionHighlight.close();
+                }
                 overlayView.detachScene(onTopToolsNode);
                 onTopToolsNode.detachAllChildren();
                 return null;
@@ -154,8 +166,10 @@ public class SceneComposerToolController extends SceneToolController {
 
     @Override
     public void update(float tpf) {
+        clearDetachedSelection();
         super.update(tpf);
         if (editTool != null) {
+            editTool.setCamera(editCamera());
             editTool.doUpdateToolsTransformation();
         }
         if (onTopToolsNode != null) {
@@ -166,8 +180,29 @@ public class SceneComposerToolController extends SceneToolController {
     @Override
     public void render(RenderManager rm) {
         super.render(rm);
+        if (selectionHighlightEnabled && selected != null && selected != sceneRoot
+                && sceneRoot instanceof Node root && selected.hasAncestor(root)) {
+            if (selectionHighlight == null) {
+                selectionHighlight = new SelectionHighlight(manager, SceneApplication.getApplication().getEditorToolsView());
+            }
+            List<Spatial> highlighted = getSelectedSpatials().stream()
+                    .filter(spatial -> spatial.hasAncestor(root)).toList();
+            selectionHighlight.update(highlighted.contains(selected) ? highlighted : List.of(selected));
+        } else if (selectionHighlight != null) {
+            selectionHighlight.close();
+            selectionHighlight = null;
+        }
         // SceneApplication finalizes all overlay roots immediately before drawing.
         // A controller callback cannot guarantee that it runs last in the frame.
+    }
+
+    /**
+     * Shows the editor-only outline. Open Selection, snapping & cursor and toggle
+     * Selection highlight to show or hide the outline.
+     * Defaults to enabled. The next rendered frame picks up the Swing setting.
+     */
+    void setSelectionHighlightEnabled(boolean enabled) {
+        selectionHighlightEnabled = enabled;
     }
 
     public boolean isEditToolEnabled() {
@@ -196,6 +231,7 @@ public class SceneComposerToolController extends SceneToolController {
         SceneApplication.getApplication().enqueue(new Callable<Object>() {
 
             public Object call() throws Exception {
+                clearDetachedSelection();
                 doEnableEditTool(sceneEditTool);
                 return null;
             }
@@ -211,8 +247,15 @@ public class SceneComposerToolController extends SceneToolController {
             editTool.hideMarker();
         }
         editTool = sceneEditTool;
-        editTool.activate(manager, toolsNode, onTopToolsNode, selected, this);
+        if (editTool != null) {
+            editTool.setCamera(editCamera());
+            editTool.activate(manager, toolsNode, onTopToolsNode, selected, this);
+        }
         java.awt.EventQueue.invokeLater(() -> SceneComposerTopComponent.findInstance().showSelectedTool(sceneEditTool));
+    }
+
+    private Camera editCamera() {
+        return overlayView != null ? overlayView.getCamera() : SceneApplication.getApplication().getCamera();
     }
 
     public void selectedSpatialTransformed() {
@@ -223,10 +266,67 @@ public class SceneComposerToolController extends SceneToolController {
 
     @Override
     public void doUpdateSelection(Spatial spatial) {
+        if (spatial != null && !isInScene(spatial)) {
+            clearDetachedSelection();
+            notifySelectionRemoved(spatial, getSelectedSpatials());
+            return;
+        }
         super.doUpdateSelection(spatial);
         if (spatial instanceof com.jme3.environment.gi.GiProbeVolume
                 && editTool instanceof com.jme3.gde.scenecomposer.tools.RotateTool) {
             doEnableEditTool(new com.jme3.gde.scenecomposer.tools.MoveTool());
+        } else if (editTool != null) {
+            editTool.doUpdateToolsTransformation();
+        }
+    }
+
+    private boolean isInScene(Spatial spatial) {
+        if (sceneRoot == null) {
+            return true;
+        }
+        for (Spatial ancestor = spatial; ancestor != null; ancestor = ancestor.getParent()) {
+            if (ancestor == sceneRoot || ancestor == nonSpatialMarkersNode) {
+                return true;
+            }
+        }
+        return nonSpatialMarkers.containsValue(spatial);
+    }
+
+    private void clearDetachedSelection() {
+        List<Spatial> previous = selectedSpatials.get();
+        boolean pruned = previous.stream().anyMatch(spatial -> !isInScene(spatial))
+                && selectedSpatials.compareAndSet(previous, previous.stream().filter(this::isInScene).toList());
+        Spatial removed = selected;
+        boolean primaryRemoved = removed != null && !isInScene(removed);
+        if (!primaryRemoved && !pruned) {
+            return;
+        }
+        int transform = activeTransform();
+        if (editTool != null) {
+            // Discard the gesture without rolling back a transform on the removed object.
+            editTool.detachMarker();
+            editTool = null;
+            PickManager picker = Lookup.getDefault().lookup(PickManager.class);
+            if (picker != null) {
+                picker.reset();
+            }
+        }
+        selectingWithPrimary = false;
+        emptySelectionPress = false;
+        if (primaryRemoved) {
+            List<Spatial> survivors = selectedSpatials.get().stream().filter(this::isInScene).toList();
+            doUpdateSelection(survivors.isEmpty() ? null : survivors.get(0));
+            notifySelectionRemoved(removed, survivors);
+        }
+        if (transform != -1) {
+            doEnableEditTool(createTransform(transform));
+        }
+    }
+
+    private void notifySelectionRemoved(Spatial removed, List<Spatial> survivors) {
+        if (editorController != null) {
+            java.awt.EventQueue.invokeLater(() -> SceneComposerTopComponent.findInstance()
+                    .selectionRemoved(this, removed, survivors));
         }
     }
 
@@ -251,6 +351,7 @@ public class SceneComposerToolController extends SceneToolController {
      * @param camera
      */
     public void doEditToolActivatedPrimary(Vector2f mouseLoc, boolean pressed, Camera camera) {
+        clearDetachedSelection();
         ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
 
         if (scm.isActive()) {
@@ -266,14 +367,24 @@ public class SceneComposerToolController extends SceneToolController {
             if (selectingWithPrimary) {
                 com.jme3.gde.scenecomposer.tools.SelectTool selection = new com.jme3.gde.scenecomposer.tools.SelectTool();
                 if (pressed) {
-                    selection.selectAt(mouseLoc, camera, rootNode, editorController.getCurrentDataObject(), this);
+                    emptySelectionPress = selection.selectAt(mouseLoc, camera, rootNode, this)
+                            && !isAdditiveSelection();
                 }
-            } else {
+            } else if (selected != null) {
                 editTool.actionPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
             }
             if (!pressed) {
                 selectingWithPrimary = false;
+                emptySelectionPress = false;
             }
+        }
+    }
+
+    void finishSelectionClick() {
+        if (emptySelectionPress) {
+            setSelectedSpatials(List.of());
+            doUpdateSelection(null);
+            java.awt.EventQueue.invokeLater(() -> SceneComposerTopComponent.findInstance().clearViewportSelection(this));
         }
     }
 
@@ -286,36 +397,40 @@ public class SceneComposerToolController extends SceneToolController {
      * @param camera
      */
     public void doEditToolActivatedSecondary(Vector2f mouseLoc, boolean pressed, Camera camera) {
+        clearDetachedSelection();
         ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
 
         if (scm.isActive()) {
             scm.getActiveShortcut().setCamera(camera);
             scm.getActiveShortcut().actionSecondary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
-        } else if (editTool != null) {
+        } else if (editTool != null && (selected != null
+                || editTool instanceof com.jme3.gde.scenecomposer.tools.SelectTool)) {
             editTool.setCamera(camera);
             editTool.actionSecondary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
         }
     }
 
     public void doEditToolMoved(Vector2f mouseLoc, Camera camera) {
+        clearDetachedSelection();
         ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
 
         if (scm.isActive()) {
             scm.getActiveShortcut().setCamera(camera);
             scm.getActiveShortcut().mouseMoved(mouseLoc, rootNode, editorController.getCurrentDataObject());
-        } else if (editTool != null && editorController != null) {
+        } else if (editTool != null && selected != null && editorController != null) {
             editTool.setCamera(camera);
             editTool.mouseMoved(mouseLoc, rootNode, editorController.getCurrentDataObject());
         }
     }
 
-    /** Whether the current primary gesture is selection rather than a handle drag. */
+    /** Returns whether the primary gesture is selecting objects. */
     boolean allowsPrimaryOrbit() {
         ShortcutManager shortcuts = Lookup.getDefault().lookup(ShortcutManager.class);
         return !shortcuts.isActive() && (selectingWithPrimary || editTool == null);
     }
 
     public void doEditToolDraggedPrimary(Vector2f mouseLoc, boolean pressed, Camera camera) {
+        clearDetachedSelection();
         if (selectingWithPrimary) {
             return;
         }
@@ -324,19 +439,20 @@ public class SceneComposerToolController extends SceneToolController {
         if (scm.isActive()) {
             scm.getActiveShortcut().setCamera(camera);
             scm.getActiveShortcut().draggedPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
-        } else if (editTool != null) {
+        } else if (editTool != null && selected != null) {
             editTool.setCamera(camera);
             editTool.draggedPrimary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
         }
     }
 
     public void doEditToolDraggedSecondary(Vector2f mouseLoc, boolean pressed, Camera camera) {
+        clearDetachedSelection();
         ShortcutManager scm = Lookup.getDefault().lookup(ShortcutManager.class);
 
         if (scm.isActive()) {
             scm.getActiveShortcut().setCamera(null);
             scm.getActiveShortcut().draggedSecondary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
-        } else if (editTool != null) {
+        } else if (editTool != null && selected != null) {
             editTool.setCamera(camera);
             editTool.draggedSecondary(mouseLoc, pressed, rootNode, editorController.getCurrentDataObject());
         }
@@ -350,17 +466,17 @@ public class SceneComposerToolController extends SceneToolController {
         doKeyPressed(kie, true);
     }
 
-    private volatile java.util.List<Spatial> selectedSpatials = java.util.List.of();
+    private final AtomicReference<List<Spatial>> selectedSpatials = new AtomicReference<>(List.of());
     private boolean leftControl;
     private boolean rightControl;
 
     /** EDT selection snapshot; transform gestures consume it on the render thread. */
-    public void setSelectedSpatials(java.util.List<Spatial> values) {
-        selectedSpatials = java.util.List.copyOf(values);
+    public void setSelectedSpatials(List<Spatial> values) {
+        selectedSpatials.set(List.copyOf(values));
     }
 
-    public java.util.List<Spatial> getSelectedSpatials() {
-        return selectedSpatials;
+    public List<Spatial> getSelectedSpatials() {
+        return selectedSpatials.get();
     }
 
     public boolean isAdditiveSelection() {
@@ -399,17 +515,21 @@ public class SceneComposerToolController extends SceneToolController {
 
     /** Render-thread entry point shared by keyboard and viewport buttons. */
     void selectTransform(int code) {
-        SceneEditTool replacement = switch (code) {
+        SceneEditTool replacement = createTransform(code);
+        if (replacement != null) {
+            clearDetachedSelection();
+            doEnableEditTool(replacement);
+        }
+    }
+
+    private SceneEditTool createTransform(int code) {
+        return switch (code) {
             case com.jme3.input.KeyInput.KEY_Q -> new com.jme3.gde.scenecomposer.tools.SelectTool();
             case com.jme3.input.KeyInput.KEY_W -> new com.jme3.gde.scenecomposer.tools.MoveTool();
             case com.jme3.input.KeyInput.KEY_E -> new com.jme3.gde.scenecomposer.tools.RotateTool();
             case com.jme3.input.KeyInput.KEY_R -> new com.jme3.gde.scenecomposer.tools.ScaleTool();
             default -> null;
         };
-        if (replacement != null) {
-            doEnableEditTool(replacement);
-
-        }
     }
 
     float rotationDragDegrees() {
@@ -485,13 +605,7 @@ public class SceneComposerToolController extends SceneToolController {
                 it = nodes.iterator();
                 while (it.hasNext()) {
                     AbstractSceneExplorerNode n = it.next();
-                    if (!nonSpatialMarkers.containsKey(n)) {
-                        Spatial s = GizmoFactory.createGizmo(manager, n);
-                        if (s != null) {
-                            nonSpatialMarkers.put(n, s);
-                            applyMarkerVisibility(n, s);
-                        }
-                    }
+                    getOrCreateMarker(n);
                 }
                 return null;
             }
@@ -505,7 +619,7 @@ public class SceneComposerToolController extends SceneToolController {
     }
 
     private void applyMarkerVisibility(AbstractSceneExplorerNode node, Spatial marker) {
-        com.jme3.light.Light light = node.getLookup().lookup(com.jme3.light.Light.class);
+        Light light = node.getLookup().lookup(Light.class);
         boolean visible = light == null
                 || SceneApplication.getApplication().isLightGizmosVisible(light.getType());
         if (visible) {
@@ -519,7 +633,51 @@ public class SceneComposerToolController extends SceneToolController {
     }
 
     public Spatial getMarker(AbstractSceneExplorerNode node) {
-        return nonSpatialMarkers.get(node);
+        return node == null ? null : nonSpatialMarkers.get(node);
+    }
+
+    // A newly selected light can arrive before the Explorer's marker refresh.
+    void resolveSelectionMarker(AbstractSceneExplorerNode node, Consumer<Spatial> result) {
+        SceneApplication.getApplication().enqueue(() -> {
+            Spatial marker = getOrCreateMarker(node);
+            java.awt.EventQueue.invokeLater(() -> result.accept(marker));
+            return null;
+        });
+    }
+
+    private Spatial getOrCreateMarker(AbstractSceneExplorerNode node) {
+        if (node instanceof JmeLight lightNode
+                && !isAttachedLight(lightNode)) {
+            return null;
+        }
+        Spatial marker = nonSpatialMarkers.get(node);
+        if (marker == null) {
+            marker = GizmoFactory.createGizmo(manager, node);
+            if (marker != null) {
+                nonSpatialMarkers.put(node, marker);
+                applyMarkerVisibility(node, marker);
+                if (node instanceof JmeLight) {
+                    // Initialize the pose before selection. The scene root updates
+                    // geometry and inherited lights in parent-first order.
+                    marker.updateLogicalState(0);
+                }
+            }
+        }
+        return marker;
+    }
+
+    private boolean isAttachedLight(JmeLight node) {
+        Spatial owner = node.getSpatial();
+        if (owner == null || !isInScene(owner)) {
+            return false;
+        }
+        Light light = node.getLookup().lookup(Light.class);
+        for (var attached : owner.getLocalLightList()) {
+            if (attached == light) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isSnapToGrid() {

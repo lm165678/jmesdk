@@ -81,7 +81,7 @@ public class JmeLightProbe extends JmeLight {
             return sheet;
         }
 
-        // Local reflection probes expose specular controls only; retain legacy SH data on disk.
+        // The editor exposes reflection settings. Old SH data stays in the saved probe.
         set.put(makeProperty(obj, Vector3f.class, "getPosition", "setPosition", "Position"));
         set.put(makeEmbedProperty(obj.getArea(), obj.getArea().getClass(), float.class, "getRadius", "setRadius", "Radius"));
         set.put(makeEmbedProperty(JmeLightProbe.this, JmeLightProbe.class, boolean.class, "isHQBake","setHQBake", "High Quality Bake?"));

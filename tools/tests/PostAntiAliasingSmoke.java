@@ -5,11 +5,18 @@ import com.jme3.export.binary.BinaryExporter;
 import com.jme3.post.Filter;
 import com.jme3.post.FilterPostProcessor;
 import com.jme3.post.WorldSettings;
+import com.jme3.post.WorldSettings.DisplayOutput;
+import com.jme3.post.filters.ColorGradingFilter;
 import com.jme3.post.filters.FXAAFilter;
 import com.jme3.post.filters.TemporalAAFilter;
 import com.jme3.scene.Geometry;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Map;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
+import javax.swing.JComponent;
+import javax.swing.SwingUtilities;
 
 public final class PostAntiAliasingSmoke {
     public static void main(String[] args) throws Exception {
@@ -24,6 +31,7 @@ public final class PostAntiAliasingSmoke {
         add.invoke(editor, "TAA", new TemporalAAFilter(), false);
         add.invoke(editor, "FXAA", new FXAAFilter(), true);
         add.invoke(editor, "Upscaling", new com.jme3.post.filters.UpscalingPass(), false);
+        add.invoke(editor, "ToneMap", new ColorGradingFilter(), true);
         Geometry scene = new Geometry("AA settings");
         SceneRequest request = new SceneRequest(editor, scene, null);
         Field owner = EditorPostProcessing.class.getDeclaredField("owner");
@@ -75,5 +83,54 @@ public final class PostAntiAliasingSmoke {
             }
         }
         System.out.println("POST_AA_SETTINGS_PASS");
+
+        editor.configure("FilmicCurve", 1);
+        editor.configure("FilmLutTonemap", 1);
+        editor.saveSettings(request);
+        WorldSettings saved = scene.getControl(WorldSettings.class);
+        long filterRevision = saved.getRevision();
+        for (DisplayOutput mode : DisplayOutput.values()) {
+            editor.configure("GameDisplayOutput", mode.ordinal());
+            editor.saveSettings(request, true);
+            Geometry restored = BinaryExporter.saveAndLoad(assets, scene);
+            WorldSettings settings = restored.getControl(WorldSettings.class);
+            ColorGradingFilter grade = settings.createPostProcessor(assets).getFilter(ColorGradingFilter.class);
+            Field curve = ColorGradingFilter.class.getDeclaredField("curve");
+            curve.setAccessible(true);
+            if (settings.getDisplayOutput() != mode || saved.getRevision() != filterRevision
+                    || curve.get(grade) != ColorGradingFilter.Curve.FilmLut) {
+                throw new AssertionError("Display output or film LUT did not survive J3O round-trip");
+            }
+        }
+        SwingUtilities.invokeAndWait(PostAntiAliasingSmoke::verifyDisplayControls);
+        System.out.println("POST_DISPLAY_SETTINGS_PASS");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void verifyDisplayControls() {
+        try {
+            Class<?> type = Class.forName("com.jme3.gde.scenecomposer.EditorPostProcessingPanel");
+            var constructor = type.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object panel = constructor.newInstance();
+            Field field = type.getDeclaredField("inputs");
+            field.setAccessible(true);
+            Map<String, JComponent> inputs = (Map<String, JComponent>) field.get(panel);
+            JCheckBox film = (JCheckBox) inputs.get("FilmLutTonemap");
+            var apply = type.getDeclaredMethod("applySettings", Map.class);
+            apply.setAccessible(true);
+            apply.invoke(panel, Map.of());
+            if (!film.isEnabled() || film.isSelected() || inputs.get("FilmSlope").isEnabled()) {
+                throw new AssertionError("Film toggle must be usable when disabled");
+            }
+            apply.invoke(panel, Map.of("FilmLutTonemap", 1d, "GameDisplayOutput", 2d));
+            JComboBox<?> output = (JComboBox<?>) inputs.get("GameDisplayOutput");
+            if (!film.isEnabled() || !film.isSelected() || !inputs.get("FilmSlope").isEnabled()
+                    || inputs.get("FilmicCurve").isEnabled() || output.getSelectedIndex() != 2) {
+                throw new AssertionError("Restored film LUT and output controls have the wrong state");
+            }
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError(exception);
+        }
     }
 }

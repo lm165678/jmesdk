@@ -137,6 +137,14 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
     // End of variables declaration//GEN-END:variables
 
 
+    /**
+     * Creates an editor primitive with a static Minie collider on the render thread.
+     * <pre>
+     * 第一步：从 Spawn / Spatial 拖入基本几何体，或右键 Add Spatial / Primitives 创建。
+     * 第二步：确认尺寸后，编辑器会创建质量为 0 的碰撞体；在 Physics 面板可替换形状。
+     * 第三步：移动、旋转和缩放后保存 J3O。游戏读取时需使用兼容的 Minie 版本。
+     * </pre>
+     */
     public Geometry handleGeometry(ProjectAssetManager assetManager, Mesh m) {
         Geometry geom = new Geometry(inGeomName.getText(), m);
         ColorRGBA col;
@@ -162,6 +170,8 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
         }
         
         geom.setMaterial(mat);
+        geom.addControl(new com.jme3.bullet.control.RigidBodyControl(
+                com.jme3.gde.core.assets.ModelCollisionShapes.createPrimitive(geom), 0f));
         return geom;
     }
 }

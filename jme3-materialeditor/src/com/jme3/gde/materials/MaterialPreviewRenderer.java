@@ -97,7 +97,7 @@ public class MaterialPreviewRenderer implements SceneListener {
         refreshOnly();
     }
 
-    /** Toggle only this preview's baked environment; next request restores other previews. */
+    /** Toggles baked lighting for this preview. The next request applies its own settings. */
     public void setEnvironmentEnabled(boolean enabled) {
         environmentEnabled = enabled;
         refreshOnly();

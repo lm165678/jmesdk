@@ -32,6 +32,7 @@
 package com.jme3.gde.core.assets.actions;
 
 import com.jme3.gde.core.assets.BinaryModelDataObject;
+import com.jme3.gde.core.assets.ProjectAssetManager;
 import com.jme3.gde.core.assets.SpatialAssetDataObject;
 import com.jme3.gde.core.util.notify.MessageUtil;
 import java.awt.event.ActionEvent;
@@ -93,7 +94,8 @@ public final class ConvertModel implements ActionListener {
                             var choice = new java.util.concurrent.atomic.AtomicReference<com.jme3.gde.core.assets.ModelConversionOptions>();
                             javax.swing.SwingUtilities.invokeAndWait(() -> choice.set(
                                     com.jme3.gde.core.assets.ModelConversionOptions.ask(analysis,
-                                            spatialAssetDataObject.getPrimaryFile().getNameExt())));
+                                            spatialAssetDataObject.getPrimaryFile().getNameExt(), null,
+                                            spatialAssetDataObject.getLookup().lookup(ProjectAssetManager.class))));
                             if (choice.get() == null) {
                                 progressHandle.finish();
                                 return;
@@ -106,10 +108,7 @@ public final class ConvertModel implements ActionListener {
                         } catch (Exception ex) {
                             //Exceptions.printStackTrace(ex); // does only print the stacktrace when launching the sdk in debug mode
                             //bad for user reports, so we use error() and loggers
-                            MessageUtil.error("Unable to convert the model: An Exception has occured.\n"
-                                    + "Please look into the Output Window and report that Exception\n"
-                                    + "(including the full stacktrace) to us at \n"
-                                    + "https://github.com/jMonkeyEngine/sdk/issues");
+                            MessageUtil.error("Unable to convert the model: " + ex.getMessage());
                             logger.log(Level.SEVERE, "An Exception has occured.", ex);
                         }
                     }

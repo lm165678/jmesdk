@@ -9,17 +9,17 @@ import org.openide.loaders.DataObject;
 import org.openide.util.RequestProcessor;
 import org.openide.util.Exceptions;
 
-/** Saves immutable GI revisions off-thread; publishes only after IO succeeds.
- * Old files are retained for undo/old scene revisions. Failed exports leave
- * embedded data usable. Never overwrite a revision while a loader reads it.
+/** Writes GI data on a worker and switches the scene to the file after the
+ * write succeeds. On failure the scene keeps its embedded bake. Keep old
+ * revisions for undo and older scenes. A loader may still be reading them.
  */
 public final class GiStreamingAssets {
     private GiStreamingAssets() {
     }
 
     /**
-     * Starts on the render thread after baking. Export is asynchronous and marks
-     * the scene modified again when the committed reference replaces embedded data.
+     * Call on the render thread after baking. The worker saves the file, then
+     * the scene is marked modified when the new file reference is installed.
      * Save the scene after export completes and ship GI/Streaming with the assets.
      * Old revisions remain available for undo; automatic orphan removal is unsafe.
      * <pre>{@code

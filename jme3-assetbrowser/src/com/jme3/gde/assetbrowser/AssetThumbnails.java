@@ -1,6 +1,6 @@
 package com.jme3.gde.assetbrowser;
 
-import com.jme3.asset.AssetKey;
+import com.jme3.asset.AssetInfo;
 import com.jme3.audio.AudioKey;
 import com.jme3.audio.AudioBuffer;
 import com.jme3.bounding.BoundingBox;
@@ -46,7 +46,6 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import org.openide.filesystems.FileObject;
 import org.openide.util.RequestProcessor;
-import jme3tools.converters.ImageToAwt;
 
 /**
  * Bounded, lazy thumbnails. Disk IO runs on one worker; GPU jobs run one at a
@@ -73,10 +72,11 @@ final class AssetThumbnails implements AutoCloseable {
     private ProjectAssetManager sourceManager;
     private long sourceRevision;
 
-    // All callers of request use the EDT; only the worker touches disk/GPU waits.
+    // Requests come from the EDT. The worker handles disk access and waits for GPU work.
     Result request(ProjectAssetManager manager, FileObject file, String asset, long revision,
             Consumer<Result> callback) {
-        String key = file.toURL() + ":" + file.getSize() + ":" + file.lastModified().getTime() + ":" + revision + ":v3";
+        String version = AssetKind.of(file) == AssetKind.TEXTURE ? "v5" : "v3";
+        String key = file.toURL() + ":" + file.getSize() + ":" + file.lastModified().getTime() + ":" + revision + ":" + version;
         Result known = memory.get(key);
         if (known != null) {
             return known;
@@ -91,27 +91,14 @@ final class AssetThumbnails implements AutoCloseable {
             Result result;
             try {
                 Path cache = Path.of(System.getProperty("netbeans.user", System.getProperty("java.io.tmpdir")),
-                        "var", "cache", "asset-thumbnails-v3");
+                        "var", "cache", "asset-thumbnails-" + version);
                 String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                         .digest(key.getBytes(StandardCharsets.UTF_8)));
                 Path png = cache.resolve(hash + ".png");
-                BufferedImage image = Files.isRegularFile(png) ? ImageIO.read(png.toFile()) : null;
+                BufferedImage image = readCached(png);
                 if (image == null) {
-                    if (isolated == null || sourceManager != manager || sourceRevision != revision) {
-                        isolated = new ProjectAssetManager(manager.getAssetFolder());
-                        for (ClassLoader loader : manager.getClassLoaders()) {
-                            isolated.addClassLoader(loader);
-                        }
-                        sourceManager = manager;
-                        sourceRevision = revision;
-                    }
-                    try {
-                        image = generate(isolated, file, asset);
-                    } finally {
-                        isolated.clearCache();
-                    }
-                    Files.createDirectories(cache);
-                    ImageIO.write(image, "png", png.toFile());
+                    image = generateForRequest(manager, file, asset, revision);
+                    writeCached(png, image);
                 }
                 result = new Result(image, "");
             } catch (Exception | LinkageError error) {
@@ -130,10 +117,50 @@ final class AssetThumbnails implements AutoCloseable {
         return null;
     }
 
+    private static BufferedImage readCached(Path png) {
+        try {
+            return Files.isRegularFile(png) ? ImageIO.read(png.toFile()) : null;
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static void writeCached(Path png, BufferedImage image) {
+        try {
+            Files.createDirectories(png.getParent());
+            ImageIO.write(image, "png", png.toFile());
+        } catch (IOException | RuntimeException ignored) {
+            // The decoded thumbnail still serves this request when disk cache is unavailable.
+        }
+    }
+
+    private BufferedImage generateForRequest(ProjectAssetManager manager, FileObject file,
+            String asset, long revision) throws Exception {
+        if (AssetPreviewTextures.usesImageEditor(file)) {
+            return fit(AssetPreviewTextures.read(null, file, asset));
+        }
+        if (isolated == null || sourceManager != manager || sourceRevision != revision) {
+            isolated = new ProjectAssetManager(manager.getAssetFolder());
+            for (ClassLoader loader : manager.getClassLoaders()) {
+                isolated.addClassLoader(loader);
+            }
+            sourceManager = manager;
+            sourceRevision = revision;
+        }
+        try {
+            return generate(isolated, file, asset);
+        } finally {
+            isolated.clearCache();
+        }
+    }
+
     private BufferedImage generate(ProjectAssetManager manager, FileObject file, String asset) throws Exception {
         return switch (AssetKind.of(file)) {
-            case TEXTURE -> texture(manager, asset);
-            case AUDIO -> waveform(manager, asset);
+            case TEXTURE -> fit(AssetPreviewTextures.read(manager, file, asset));
+            case AUDIO -> java.util.Set.of("mp3", "mp4", "m4a", "aac", "flac")
+                    .contains(file.getExt().toLowerCase(java.util.Locale.ROOT))
+                    ? card(file.getExt().toUpperCase(java.util.Locale.ROOT), "OGG", new Color(89, 133, 180))
+                    : waveform(loadAudio(manager, file, asset));
             case SHADER -> source(file);
             case MODEL, MATERIAL, FILTER, GUI -> SceneApplication.getApplication().enqueue(
                     () -> render(manager, file, asset)).get(60, TimeUnit.SECONDS);
@@ -141,13 +168,29 @@ final class AssetThumbnails implements AutoCloseable {
         };
     }
 
-    private BufferedImage texture(ProjectAssetManager manager, String asset) {
-        Image image = manager.loadTexture(asset).getImage();
-        return fit(ImageToAwt.convert(image, false, false, 0));
+    static AudioBuffer loadAudio(ProjectAssetManager manager, FileObject file, String asset) throws IOException {
+        AudioKey key = new AudioKey(asset, false);
+        var loader = switch (file.getExt().toLowerCase(Locale.ROOT)) {
+            case "wav" -> new com.jme3.audio.plugins.WAVLoader();
+            case "ogg" -> new com.jme3.audio.plugins.OGGLoader();
+            default -> (com.jme3.asset.AssetLoader) null;
+        };
+        if (loader == null) {
+            return (AudioBuffer) manager.loadAudio(key);
+        }
+        return (AudioBuffer) loader.load(new AssetInfo(manager, key) {
+            @Override
+            public InputStream openStream() {
+                try {
+                    return file.getInputStream();
+                } catch (IOException error) {
+                    throw new UncheckedIOException(error);
+                }
+            }
+        });
     }
 
-    private BufferedImage waveform(ProjectAssetManager manager, String asset) {
-        AudioBuffer audio = (AudioBuffer) manager.loadAudio(new AudioKey(asset, false));
+    private BufferedImage waveform(AudioBuffer audio) {
         ByteBuffer pcm = audio.getData().duplicate().order(ByteOrder.LITTLE_ENDIAN);
         int bytes = audio.getBitsPerSample() / 8;
         int frameBytes = bytes * audio.getChannels();

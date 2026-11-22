@@ -39,8 +39,12 @@ import com.jme3.gde.core.scene.SceneListener;
 import com.jme3.gde.core.scene.SceneRequest;
 import com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
+import com.jme3.gde.core.sceneexplorer.nodes.JmeSpatial;
+import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
 import com.jme3.gde.core.util.TerrainUtils;
+import com.jme3.light.Light;
 import com.jme3.renderer.Camera;
+import com.jme3.scene.Spatial;
 import java.beans.PropertyVetoException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -337,6 +341,33 @@ public final class SceneExplorerTopComponent extends TopComponent implements Exp
             }
         } catch (PropertyVetoException ex) {
             Exceptions.printStackTrace(ex);
+        }
+    }
+
+    /**
+     * Selects a newly added spatial or light after its parent has been refreshed on the EDT.
+     * 第一步：在渲染线程添加物体。第二步：在 EDT 刷新父节点，再用原对象实例选中它。
+     * Selection is skipped when the parent no longer belongs to the displayed scene.
+     */
+    public void selectAddedObject(JmeSpatial parent, Object added) {
+        Node root = parent;
+        while (root.getParentNode() != null) {
+            root = root.getParentNode();
+        }
+        if (root != explorerManager.getRootContext()) {
+            return;
+        }
+        Class<?> type = added instanceof Light ? Light.class : Spatial.class;
+        for (Node child : parent.getChildren().getNodes(true)) {
+            if (child instanceof AbstractSceneExplorerNode sceneNode
+                    && child.getLookup().lookup(type) == added) {
+                AbstractSceneExplorerNode[] selection = {sceneNode};
+                setSelectedNode(selection);
+                if (TopComponent.getRegistry().getActivated() instanceof SceneViewerTopComponent viewer) {
+                    viewer.setActivatedNodes(selection);
+                }
+                return;
+            }
         }
     }
 

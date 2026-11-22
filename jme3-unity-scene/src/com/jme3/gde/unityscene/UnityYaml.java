@@ -36,8 +36,8 @@ final class UnityYaml {
     }
 
     /**
-     * Parses Unity's multi-document YAML after removing only the !u! document tag.
-     * Object bodies remain ordinary YAML, including flow-style fileID references.
+     * Reads Unity's multi-document YAML after stripping the !u! document tag.
+     * The body stays ordinary YAML, including inline fileID references.
      */
     static List<Document> parse(String text) throws IOException {
         if (text.indexOf('\0') >= 0) {
@@ -86,7 +86,7 @@ final class UnityYaml {
         return new Document(classId, fileId, stripped, first.getKey(), map(first.getValue()));
     }
 
-    /** Loads a normal single-document YAML file such as a Unity .meta file. */
+    /** Reads a single YAML document, such as a Unity .meta file. */
     static Object load(String text) throws IOException {
         try {
             // Each concurrent asset load needs its own parser/construction state.
@@ -194,7 +194,7 @@ final class UnityYaml {
                 floatValue(map.get("a"), fallback.a));
     }
 
-    /** Accepts both modern lists of single-entry maps and older direct maps. */
+    /** Reads modern lists of single-entry maps and legacy direct maps. */
     static List<Map.Entry<String, Object>> properties(Object value) {
         List<Map.Entry<String, Object>> result = new ArrayList<>();
         if (value instanceof Map<?, ?> map) {

@@ -3,8 +3,8 @@ package com.jme3.gde.core.util;
 import org.openide.util.NbBundle;
 
 /**
- * SDK-locale editor labels. English-only SDK installations use the same English
- * fallback; translated resource packs follow the SDK locale after restart.
+ * Editor labels use the SDK locale. Missing translations fall back to English.
+ * Restart the SDK after changing the locale or installing translations.
  */
 public final class EditorMessages {
     private EditorMessages() {

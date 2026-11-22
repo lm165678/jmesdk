@@ -8,7 +8,6 @@ package com.jme3.gde.scenecomposer.gizmo.light;
 import com.jme3.light.SpotLight;
 import com.jme3.renderer.RenderManager;
 import com.jme3.renderer.ViewPort;
-import com.jme3.scene.Geometry;
 import com.jme3.scene.control.AbstractControl;
 
 /**
@@ -19,11 +18,9 @@ class LightRangeUpdate extends AbstractControl{
 
     private SpotLight light;
     private float lastRange = -1;
-    private Geometry arrow;
     
-    public LightRangeUpdate(SpotLight l, Geometry arrow) {
+    public LightRangeUpdate(SpotLight l) {
         light = l;
-        this.arrow = arrow;
     }
 
     @Override
@@ -34,7 +31,6 @@ class LightRangeUpdate extends AbstractControl{
             if(getSpatial() != null){
                 getSpatial().setLocalTranslation(0, lastRange, 0);
             }
-            arrow.setLocalScale(lastRange);
         }
     }
 

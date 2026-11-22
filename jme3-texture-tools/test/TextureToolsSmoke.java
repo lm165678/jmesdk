@@ -27,7 +27,7 @@ public class TextureToolsSmoke {
         }
         Path source = work.resolve("source with spaces.png");
         ImageIO.write(image, "png", source.toFile());
-        for (String format : new String[]{"BC1", "BC3", "BC5", "BC7", "ASTC"}) {
+        for (String format : new String[]{"BC1", "BC2", "BC3", "BC4", "BC5", "BC7", "ASTC"}) {
             Path output = work.resolve(format + (format.equals("ASTC") ? ".ktx" : ".dds"));
             if (format.equals("ASTC")) {
                 CompressedTexture.encodeAstcKtx(source, output, true, "6x6", 4, tools);
@@ -37,6 +37,9 @@ public class TextureToolsSmoke {
             CompressedTexture texture = CompressedTexture.read(output);
             if (texture.levels() != 4) {
                 throw new AssertionError("Mip count: " + format + " " + texture.levels());
+            }
+            if (format.equals("ASTC") && !texture.srgb()) {
+                throw new AssertionError("ASTC KTX lost its sRGB flag");
             }
             for (int mip = 0; mip < 4; mip++) {
                 BufferedImage preview = texture.preview(mip, tools);
@@ -65,7 +68,7 @@ public class TextureToolsSmoke {
                 throw new AssertionError("Replacement failed");
             }
             byte[] after = Files.readAllBytes(edited);
-            int lastMipBytes = format.equals("BC1") ? 8 : 16;
+            int lastMipBytes = format.equals("BC1") || format.equals("BC4") ? 8 : 16;
             if (!java.util.Arrays.equals(java.util.Arrays.copyOfRange(before, before.length - lastMipBytes, before.length),
                     java.util.Arrays.copyOfRange(after, after.length - lastMipBytes, after.length))) {
                 throw new AssertionError("Unedited tail mip changed");
@@ -117,5 +120,50 @@ public class TextureToolsSmoke {
             }
             System.out.println("PASS timeout preserves destination");
         }
+        if ("jni".equals(System.getProperty("jme.sdk.texture.backend"))) {
+            verifyNativeOddSizes(root, work, tools);
+        }
+    }
+
+    private static void verifyNativeOddSizes(Path root, Path work, TextureToolchain tools) throws Exception {
+        BufferedImage image = new BufferedImage(9, 7, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                image.setRGB(x, y, 0xcca020e0);
+            }
+        }
+        Path source = work.resolve("odd.png");
+        ImageIO.write(image, "png", source.toFile());
+        for (String format : new String[]{"BC3", "BC7", "ASTC"}) {
+            Path encoded = work.resolve("odd-" + format + (format.equals("ASTC") ? ".astc" : ".dds"));
+            if (format.equals("ASTC")) {
+                tools.astc(source, encoded, true, "6x6");
+            } else {
+                tools.dds(source, encoded, format, 4);
+                CompressedTexture dds = CompressedTexture.read(encoded);
+                if (dds.levels() != 4 || dds.preview(3, tools).getWidth() != 1) {
+                    throw new AssertionError("Invalid odd-sized DDS mip chain: " + format);
+                }
+            }
+            Path decoded = work.resolve("decoded-" + format + ".png");
+            tools.decode(encoded, decoded, format.equals("ASTC"), true);
+            BufferedImage pixels = ImageIO.read(decoded.toFile());
+            int actual = pixels.getRGB(8, 6);
+            int expected = image.getRGB(8, 6);
+            for (int shift = 0; shift < 32; shift += 8) {
+                if (Math.abs((actual >>> shift & 255) - (expected >>> shift & 255)) > 24) {
+                    throw new AssertionError("Wrong channel in " + format + ": " + Integer.toHexString(actual));
+                }
+            }
+        }
+        try {
+            new TextureToolchain(root.resolve("missing")).dds(source, work.resolve("unused.dds"), "BC3", 1);
+            throw new AssertionError("Missing JNI library should fail in strict mode");
+        } catch (java.io.IOException expected) {
+            if (!expected.getMessage().startsWith("Required SDK JNI texture codec is missing")) {
+                throw expected;
+            }
+        }
+        System.out.println("PASS JNI odd dimensions / RGBA channels / no CLI fallback");
     }
 }

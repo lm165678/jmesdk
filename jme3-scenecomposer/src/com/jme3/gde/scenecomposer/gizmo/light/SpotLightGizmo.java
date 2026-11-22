@@ -31,7 +31,8 @@ public class SpotLightGizmo extends NodeCallback {
 
     @Override
     public void onTranslation(Vector3f oldTranslation, Vector3f newTranslation) {
-        light.setPosition(getWorldTranslation());
+        var parent = getParent();
+        light.setPosition(parent == null ? newTranslation : parent.localToWorld(newTranslation, null));
         jmeLight.setValue("position", light.getPosition());
     }
 

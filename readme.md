@@ -124,6 +124,11 @@ LWJGL 2 不用于这个 SDK，因此不需要复制 `jme3-lwjgl`；Android nativ
 再通过相同的 NetBeans/Ant suite 构建和启动。它不会重新编译引擎源码。
 如果修改了引擎，请先使用上面的联合构建脚本，然后再在 NetBeans 中 Run / Debug。
 
+SDK 构建完成后，可运行 `run-sdk.bat` 直接启动本仓库的 `build/cluster`，
+并使用 `build/testuserdir`。换机器后先完成一次构建。启动脚本复用上面的 JDK 25
+检测，可通过 `SDK_JAVA_HOME` 或 `sdk-local.json` 指定 JDK。
+`run-sdk.bat --check` 只检查 JDK 和 SDK 构建产物。
+
 ### 库更新的位置（均由构建管理，不要手工复制）
 
 | 用途 | SDK 内相对路径 |
@@ -183,6 +188,36 @@ SDK 向导新建的 Gradle 项目仍由向导选择版本；本次没有改写�
 对应的引擎回归测试为 `:jme3-desktop:test --tests '*CustomContextClassLoaderTest'`，
 使用引擎类加载器无法看到的独立插件类，覆盖注册、设置复制、持久化和内置类回退。
 SDK 的 `verify-local-engine.ps1` 也通过实际 `JmeSystem.newContext` 工厂启动 AWT 上下文。
+
+### FBX import with ufbx
+
+In a project asset folder, right-click an FBX and choose **Convert to J3O**.
+The Autodesk module imports meshes and animation clips through ufbx JNI.
+Keep the generated `dds` directories with your J3O assets. The game does not
+need the ufbx library. The SDK's CI bundles the Windows, Linux and macOS
+libraries for x64 and ARM64.
+
+For a local Windows x64 build against a source checkout, run
+`tools/build-ufbx-jni.ps1 -UfbxSource <ufbx-source-directory>` before the usual
+SDK build. To collect already built platform directories, use
+`gradlew prepareUfbxNatives -PufbxNativeBundles=<directory>`. Each
+`<os>-<arch>` subdirectory must contain its native library and license. CI
+uses `-PrequireUfbxNatives=true` to require all six targets.
+
+### FBX import with ufbx
+
+In a project asset folder, right-click an FBX and choose **Convert to J3O**.
+The Autodesk module imports meshes and animation clips through ufbx JNI.
+Keep the generated `dds` directories with your J3O assets. The game does not
+need the ufbx library. The SDK's CI bundles the Windows, Linux and macOS
+libraries for x64 and ARM64.
+
+For a local Windows x64 build against a source checkout, run
+`tools/build-ufbx-jni.ps1 -UfbxSource <ufbx-source-directory>` before the usual
+SDK build. To collect already built platform directories, use
+`gradlew prepareUfbxNatives -PufbxNativeBundles=<directory>`. Each
+`<os>-<arch>` subdirectory must contain its native library and license. CI
+uses `-PrequireUfbxNatives=true` to require all six targets.
 
 ### Modern scene/model editor
 

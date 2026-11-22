@@ -31,11 +31,13 @@
  */
 package com.jme3.gde.scenecomposer.tools;
 
+import com.jme3.asset.AssetManager;
 import com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent;
 import com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeSpatial;
 import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
+import com.jme3.gde.scenecomposer.SceneComposerToolController;
 import com.jme3.gde.scenecomposer.SceneEditTool;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
@@ -53,13 +55,19 @@ import org.openide.loaders.DataObject;
  */
 public class SelectTool extends SceneEditTool {
 
-    /** Selects under a left click without creating or replacing gizmo markers. */
-    public void selectAt(Vector2f point, com.jme3.renderer.Camera camera, JmeNode root,
-            DataObject data, com.jme3.gde.scenecomposer.SceneComposerToolController controller) {
+    @Override
+    public void activate(AssetManager manager, Node toolNode, Node onTopToolNode, Spatial selected,
+            SceneComposerToolController controller) {
+        super.activate(manager, toolNode, onTopToolNode, selected, controller);
+        displayCones();
+    }
+
+    /** Picks on press and reports an empty hit so the caller can deselect on click release. */
+    public boolean selectAt(Vector2f point, com.jme3.renderer.Camera camera, JmeNode root,
+            SceneComposerToolController controller) {
         toolController = controller;
         setCamera(camera);
-        actionSecondary(point, true, root, data);
-        actionSecondary(point, false, root, data);
+        return pickSelection(point, root);
     }
 
     private boolean wasDraggingR, wasDraggingL = false;
@@ -84,74 +92,8 @@ public class SelectTool extends SceneEditTool {
     @Override
     public void actionSecondary(final Vector2f screenCoord, boolean pressed, final JmeNode rootNode, DataObject dataObject) {
         if (pressed) {
-            Spatial selected;// = toolController.getSelectedSpatial();
-            // mouse down
-
-            if (!wasDraggingR && !wasDownR) { // wasn't dragging and was not down already
-                // pick on the spot
-                Spatial s = pickWorldSpatial(camera, screenCoord, rootNode);
-                Vector3f orbitPoint = s == null ? null : pickWorldLocation(camera, screenCoord, rootNode);
-                if (!toolController.isSelectTerrain() && isTerrain(s)) {
-                    // only select non-terrain
-                    selected = null;
-                    return;
-                } else {
-
-                    // climb up and find the Model Node (parent) and select that, don't select the geom
-                    if (!toolController.isSelectGeometries()) {
-                        Spatial linkNodeParent = findModelNodeParent(s, rootNode.getLookup().lookup(Spatial.class));
-                        if (linkNodeParent != null) {
-                            s = linkNodeParent;
-                        } else {
-                            return;
-                        }
-                    }
-                    // if the selected spatial is a sub spatial of a linked node
-                    // select the linked node
-                    s = findAssetLinkNode(s);
-
-                    toolController.recordOrbitPick(s, orbitPoint);
-                    final boolean additive = toolController.isAdditiveSelection();
-                    final Spatial selec = s;
-                    selected = selec;
-                    java.awt.EventQueue.invokeLater(new Runnable() {
-
-                        @Override
-                        public void run() {
-                            if (selec != null) {
-                                doSelect();
-                            }
-                        }
-
-                        private void doSelect() {
-                            // in case of linked assets the selected node in the viewer is not necessarily in the explorer.
-                            JmeSpatial n = rootNode.getChild(selec);
-                            if (n != null) {
-                                java.util.List<AbstractSceneExplorerNode> selection = new java.util.ArrayList<>();
-                                if (additive) {
-                                    for (Spatial spatial : toolController.getSelectedSpatials()) {
-                                        var existing = rootNode.getChild(spatial);
-                                        if (existing != null) {
-                                            selection.add(existing);
-                                        }
-                                    }
-                                }
-                                if (!selection.remove(n)) {
-                                    selection.add(0, n);
-                                }
-                                var nodes = selection.toArray(AbstractSceneExplorerNode[]::new);
-                                if (nodes.length == 0) {
-                                    toolController.setSelectedSpatials(java.util.List.of());
-                                    toolController.updateSelection(null);
-                                }
-                                SceneViewerTopComponent.findInstance().setActivatedNodes(nodes);
-                                SceneExplorerTopComponent.findInstance().setSelectedNode(nodes);
-                            }
-                        }
-                    });
-                }
-                // toolController will be updated by the SceneComposerTopComponent
-                //toolController.updateSelection(selected);
+            if (!wasDraggingR && !wasDownR) {
+                pickSelection(screenCoord, rootNode);
             }
             wasDownR = true;
         } else {
@@ -159,6 +101,52 @@ public class SelectTool extends SceneEditTool {
             wasDownR = false;
             wasDraggingR = false;
         }
+    }
+
+    private boolean pickSelection(Vector2f point, JmeNode root) {
+        Spatial hit = pickWorldSpatial(camera, point, root);
+        if (hit == null) {
+            toolController.recordOrbitPick(null, null);
+            return true;
+        }
+        if (!toolController.isSelectTerrain() && isTerrain(hit)) {
+            return false;
+        }
+        Spatial target = toolController.isSelectGeometries() ? hit
+                : findModelNodeParent(hit, root.getLookup().lookup(Spatial.class));
+        if (target != null) {
+            Spatial selected = findAssetLinkNode(target);
+            toolController.recordOrbitPick(selected, pickWorldLocation(camera, point, root));
+            boolean additive = toolController.isAdditiveSelection();
+            java.awt.EventQueue.invokeLater(() -> publishSelection(root, selected, additive));
+        }
+        return false;
+    }
+
+    private void publishSelection(JmeNode root, Spatial selected, boolean additive) {
+        JmeSpatial node = root.getChild(selected);
+        if (node == null) {
+            return;
+        }
+        var selection = new java.util.ArrayList<AbstractSceneExplorerNode>();
+        if (additive) {
+            for (Spatial spatial : toolController.getSelectedSpatials()) {
+                var existing = root.getChild(spatial);
+                if (existing != null) {
+                    selection.add(existing);
+                }
+            }
+        }
+        if (!selection.remove(node)) {
+            selection.add(0, node);
+        }
+        var nodes = selection.toArray(AbstractSceneExplorerNode[]::new);
+        if (nodes.length == 0) {
+            toolController.setSelectedSpatials(java.util.List.of());
+            toolController.updateSelection(null);
+        }
+        SceneViewerTopComponent.findInstance().setActivatedNodes(nodes);
+        SceneExplorerTopComponent.findInstance().setSelectedNode(nodes);
     }
 
     /**

@@ -90,7 +90,15 @@ public class AssetDataObject extends MultiDataObject {
             //TODO: On OpenGL thread? -- safest way.. with get()?
             SceneApplication.getApplication().enqueue(new Callable() {
                 public Object call() throws Exception {
-                    saveAsset();
+                    SceneApplication.getApplication().flushEditorCollision();
+                    try {
+                        SceneApplication.getApplication().saveEditorDisplayOutput(AssetDataObject.this);
+                        saveAsset();
+                    } catch (IOException failure) {
+                        logger.log(Level.WARNING, "Could not save " + getPrimaryFile().getNameExt(), failure);
+                        DialogDisplayer.getDefault().notifyLater(new NotifyDescriptor.Message(
+                                failure.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
+                    }
                     return null;
                 }
             });
@@ -245,14 +253,19 @@ public class AssetDataObject extends MultiDataObject {
             logger.log(Level.WARNING, "Trying to write asset failed, asset data null!\nImport failed?");
             return;
         }
+        SceneApplication.resetPhysicsBeforeSave(this);
+        if (this instanceof BinaryModelDataObject binary && this.savable instanceof com.jme3.scene.Spatial model
+                && org.openide.filesystems.FileUtil.toFile(getPrimaryFile()) != null) {
+            AnimationEditorSupport.saveSnapshot(binary, model);
+            return;
+        }
         final Savable savable;
         if (this instanceof SpatialAssetDataObject && "j3o".equalsIgnoreCase(saveExtension)
                 && !"j3o".equalsIgnoreCase(getPrimaryFile().getExt())
                 && this.savable instanceof com.jme3.scene.Spatial model) {
-            // Prepare only source-model conversion, before creating/truncating output.
-            savable = ModelConversionPreparation.prepare(model, conversionOptions, getLookup().lookup(ProjectAssetManager.class));
-            ModelTexturePreparation.prepare((com.jme3.scene.Spatial) savable,
-                    getLookup().lookup(ProjectAssetManager.class), getPrimaryFile());
+            // Prepare conversion before opening the destination, which would truncate it.
+            ProjectAssetManager assets = getLookup().lookup(ProjectAssetManager.class);
+            savable = ModelConversionPreparation.prepareForExport(model, conversionOptions, assets, assets, getPrimaryFile());
         } else {
             savable = this.savable;
         }

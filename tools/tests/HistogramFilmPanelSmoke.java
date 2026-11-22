@@ -1,7 +1,7 @@
 package com.jme3.gde.scenecomposer;
 import javax.swing.*;
 import java.lang.reflect.*;
-public final class UePostPanelSmoke {
+public final class HistogramFilmPanelSmoke {
     public static void main(String[] args) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             try {
@@ -17,8 +17,8 @@ public final class UePostPanelSmoke {
                 if (inputs.get("MinBrightness").isEnabled() || inputs.get("FilmSlope").isEnabled()) {
                     throw new AssertionError("Old scenes should keep old modes");
                 }
-                ((JCheckBox) inputs.get("UE4Exposure")).setSelected(true);
-                ((JCheckBox) inputs.get("UE4Tonemap")).setSelected(true);
+                ((JCheckBox) inputs.get("HistogramExposure")).setSelected(true);
+                ((JCheckBox) inputs.get("FilmLutTonemap")).setSelected(true);
                 Method update = panel.getClass().getDeclaredMethod("updateModeControls");
                 update.setAccessible(true);
                 update.invoke(panel);
@@ -26,7 +26,7 @@ public final class UePostPanelSmoke {
                         || inputs.get("ExposureMin").isEnabled() || inputs.get("FilmicCurve").isEnabled()) {
                     throw new AssertionError("Mode control enablement mismatch");
                 }
-                for (String key : new String[]{"UE4Exposure","UE4Tonemap","FilmSlope","GradingGammaRed"}) {
+                for (String key : new String[]{"HistogramExposure","FilmLutTonemap","FilmSlope","GradingGammaRed"}) {
                     if (inputs.get(key).getToolTipText().contains("Post"+key)) {
                         throw new AssertionError("Missing tooltip: "+key);
                     }
@@ -76,7 +76,7 @@ public final class UePostPanelSmoke {
                 if (!mode.isEnabled() || mode.getSelectedIndex() != 2) {
                     throw new AssertionError("AA preference was lost when upscaling was disabled");
                 }
-                System.out.println("UE4_POST_PANEL_PASS");
+                System.out.println("HISTOGRAM_FILM_POST_PANEL_PASS");
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

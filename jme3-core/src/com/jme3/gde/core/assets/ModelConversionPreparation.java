@@ -9,6 +9,7 @@ import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
 import com.jme3.scene.Spatial;
 import com.jme3.scene.VertexBuffer.Type;
+import com.jme3.scene.control.LodControl;
 import jme3tools.optimize.LodGenerator;
 import com.jme3.util.BufferUtils;
 import com.jme3.util.mikktspace.MikktspaceTangentGenerator;
@@ -23,8 +24,8 @@ import java.util.logging.Logger;
  * replaced on the export copy; shared meshes are processed once. The simplifier
  * can return fewer levels for tiny or non-reducible meshes; no duplicate levels
  * are fabricated. All descendant triangle meshes participate, regardless of
- * source format. Lines and points are left unchanged. This bakes LOD data only;
- * automatic runtime distance switching still requires a LodControl.
+ * source format. The export attaches a LodControl to geometries with reduced
+ * levels, along with the configured desktop and mobile starting levels.
  * Exported material Texture2D samplers use bilinear magnification and trilinear
  * minification when mip levels exist or were requested, otherwise bilinear without
  * mipmaps. This deliberately overrides source nearest samplers (including glTF).
@@ -60,29 +61,50 @@ import java.util.logging.Logger;
  * 第一步：选中 OBJ 等源模型，执行 Convert to j3o。
  * 第二步：导出副本自动补齐缺失法线，有 UV0 时补齐缺失切线；已有数据保留。
  * 默认生成含原始层的五级 LOD，目标保留比例为 100%、50%、25%、12.5%、6.25%。
+ * PC 和移动端起始 LOD 默认均为 0。用 assetManager.loadModel() 加载并挂到场景即可自动切换。
  * 普通材质二维纹理默认使用双线性放大；有 mipmap 时三线性缩小，否则双线性缩小。
  * 第三步：自动烘焙 SDF 与表面属性，并按模型类型添加缺失的物理控件。
  * 第四步：打开 j3o；在 Properties 检查角色胶囊尺寸和轴心，需要时 Rebuild。
  * 第五步：运行时把模型添加到 PhysicsSpace；普通 Ctrl+S 不会重复烘焙。
  * 转换对话框可取消各项生成，保留输入中的现有数据；LOD 层数含原始层。
  * 取消导入材质使用中性 Lighting 材质，表面属性烘焙也使用该替代材质。
+ * 选择已有 J3O 时，转换副本使用对应材质及其现有纹理路径。
  * </pre>
  */
 final class ModelConversionPreparation {
     private static final Logger LOG = Logger.getLogger(ModelConversionPreparation.class.getName());
 
     static Spatial prepare(Spatial source, ModelConversionOptions options, ProjectAssetManager assets) throws java.io.IOException {
+        return prepare(source, options, assets, assets);
+    }
+
+    static Spatial prepareForExport(Spatial source, ModelConversionOptions options, ProjectAssetManager assets,
+            ProjectAssetManager materialLibrary, org.openide.filesystems.FileObject sourceFile) throws java.io.IOException {
+        Spatial result = prepare(source, options, assets, materialLibrary);
+        if (options.importsSourceMaterials()) {
+            ModelTexturePreparation.prepare(result, assets, sourceFile);
+        }
+        return result;
+    }
+
+    private static Spatial prepare(Spatial source, ModelConversionOptions options, ProjectAssetManager assets,
+            ProjectAssetManager materialLibrary) throws java.io.IOException {
         org.netbeans.api.progress.ProgressHandle progress = org.netbeans.api.progress.ProgressHandle.createHandle("Preparing J3O: mesh, SDF, surface and collision");
         progress.start();
         try {
-            return prepareCopy(source, progress, options, assets);
+            return prepareCopy(source, progress, options, assets, materialLibrary);
         } finally {
             progress.finish();
         }
     }
 
-    private static Spatial prepareCopy(Spatial source, org.netbeans.api.progress.ProgressHandle progress, ModelConversionOptions options, ProjectAssetManager assets) throws java.io.IOException {
+    private static Spatial prepareCopy(Spatial source, org.netbeans.api.progress.ProgressHandle progress,
+            ModelConversionOptions options, ProjectAssetManager assets, ProjectAssetManager materialLibrary) throws java.io.IOException {
         Spatial result = source.clone(true);
+        boolean reuseMaterials = options.materialSource() != null;
+        if (reuseMaterials) {
+            ModelMaterialReuse.apply(result, materialLibrary, options.materialSource());
+        }
         result.setUserData(AnimationEditorSupport.PREFERENCE, options.editor().name());
         Map<Mesh, Mesh> copies = new IdentityHashMap<>();
         Map<Texture, Texture> samplers = new IdentityHashMap<>();
@@ -90,14 +112,14 @@ final class ModelConversionPreparation {
             if (!(spatial instanceof Geometry geometry) || geometry.getMesh() == null) {
                 return;
             }
-            if (!options.materials()) {
+            if (!reuseMaterials && !options.materials()) {
                 com.jme3.material.Material neutral = new com.jme3.material.Material(assets, "Common/MatDefs/Light/Lighting.j3md");
                 neutral.setBoolean("UseMaterialColors", true);
                 neutral.setColor("Diffuse", com.jme3.math.ColorRGBA.White);
                 neutral.setColor("Ambient", com.jme3.math.ColorRGBA.White);
                 geometry.setMaterial(neutral);
             }
-            if (geometry.getMaterial() != null) {
+            if (!reuseMaterials && geometry.getMaterial() != null) {
                 for (MatParam parameter : geometry.getMaterial().getParams()) {
                     if (parameter instanceof MatParamTexture textureParameter
                             && textureParameter.getTextureValue() instanceof Texture2D texture) {
@@ -177,6 +199,15 @@ final class ModelConversionPreparation {
             if (copy.getNumLodLevels() > 0) {
                 geometry.setLodLevel(0);
             }
+            if (options.lod() && copy.getNumLodLevels() > 1) {
+                LodControl control = geometry.getControl(LodControl.class);
+                if (control == null) {
+                    control = new LodControl();
+                    geometry.addControl(control);
+                }
+                control.setDesktopStartLevel(options.desktopStartLevel());
+                control.setMobileStartLevel(options.mobileStartLevel());
+            }
         });
         result.updateGeometricState();
         if (!copies.isEmpty()) {
@@ -199,7 +230,7 @@ final class ModelConversionPreparation {
                 result.updateGeometricState();
                 if (captureSurface) {
                     // 第一步：按实际卡片数估算预算；第二步：必要时降低分辨率。
-                    // Keep all cards. The payload cap is not a peak-memory limit.
+                    // The cap limits the saved payload. Baking still needs memory for all cards.
                     final long surfaceBudget = options.bake().surfaceMiB() * 1024L * 1024;
                     int cards = com.jme3.scene.plugins.sdf.SurfaceCacheLayout
                             .bake(result).getCardCount();
@@ -226,7 +257,7 @@ final class ModelConversionPreparation {
                 }
                 if (options.collision()) {
                     progress.progress("Generating collision controls...");
-                    ModelCollisionPreparation.addMissing(result, options.collisionShape());
+                    ModelCollisionPreparation.addMissing(result, options.collisionShape(), options.separateCollisionBodies());
                 }
                 return null;
             };

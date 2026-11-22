@@ -286,7 +286,7 @@ public class ShaderNodeDiagram extends Diagram implements ComponentListener {
         if (!selectedItems.contains(comment)) {
             selectedItems.add(comment);
         }
-        // Containment affects dragging only; it must never expand the deletion selection.
+        // Contained nodes move with their comment but must be selected separately for deletion.
         comment.requestFocusInWindow();
         repaint();
     }

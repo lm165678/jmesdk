@@ -41,7 +41,7 @@ public final class GeneratedTexturesSmoke {
         TextureToolchain tools = new TextureToolchain(toolRoot);
         GeneratedTextures store = new GeneratedTextures(root);
         String key = "Models/Robot/color.png";
-        Path generated = store.ensure(key, tools);
+        Path generated = store.ensureLogicalDds(key, tools);
         require(generated.equals(model.resolve("dds/color.png.dds")), "Default output path");
         var timestamp = Files.getLastModifiedTime(generated);
         require(store.ensure(key, tools).equals(generated), "Reuse path");
@@ -63,12 +63,11 @@ public final class GeneratedTexturesSmoke {
         System.out.println("PASS stale/missing DDS rebuild");
 
         FileObject generatedFile = file(generated);
-        try {
-            generatedFile.delete();
-            throw new AssertionError("NetBeans allowed deleting generated DDS");
-        } catch (java.io.IOException | java.io.UncheckedIOException expected) {
-            require(Files.exists(generated), "Protected DDS was deleted");
-        }
+        generatedFile.delete();
+        require(!Files.exists(generated) && source.equals(store.source(key)),
+                "Deleting the DDS must keep its original texture mapping");
+        store.ensure(key, tools);
+        generatedFile = file(generated);
         Path target = Files.createDirectories(root.resolve("Relocated"));
         try {
             generatedFile.copy(file(target), "illegal", "dds");
@@ -89,23 +88,26 @@ public final class GeneratedTexturesSmoke {
         FileObject ddsFolder = file(model.resolve("dds"));
         try (var lock = ddsFolder.lock()) {
             ddsFolder.move(lock, file(target), "dds", "");
+            throw new AssertionError("NetBeans allowed moving the generated directory");
+        } catch (java.io.IOException | java.io.UncheckedIOException expected) {
+            require(!Files.exists(target.resolve("dds")), "Blocked move created a destination");
         }
-        Path moved = target.resolve("dds/color.png.dds");
-        require(store.resolve(key).equals(moved), "Folder move failed to update physical mapping");
-        FileObject movedFile = file(moved);
-        try (var lock = movedFile.lock()) {
-            movedFile.rename(lock, "renamed", "dds");
+        try (var lock = generatedFile.lock()) {
+            generatedFile.rename(lock, "renamed", "dds");
+            throw new AssertionError("NetBeans allowed renaming a generated DDS");
+        } catch (java.io.IOException | java.io.UncheckedIOException expected) {
+            require(Files.exists(generated), "Blocked rename changed the generated DDS");
         }
-        moved = target.resolve("dds/renamed.dds");
-        require(store.resolve(key).equals(moved), "DDS rename failed to update mapping");
         Path sourceDestination = Files.createDirectories(root.resolve("MovedSources"));
         FileObject sourceFile = file(source);
         try (var lock = sourceFile.lock()) {
             sourceFile.move(lock, file(sourceDestination), "color", "png");
         }
+        Path moved = sourceDestination.resolve("dds/color.png.dds");
+        require(!Files.exists(generated), "Source move didn't remove the old DDS path");
         require(store.source(key).equals(sourceDestination.resolve("color.png")), "Source alias lost");
         require(store.resolve(key).equals(moved), "Logical key failed after source move");
-        System.out.println("PASS folder move, DDS rename and stable source alias");
+        System.out.println("PASS generated path protection and stable source alias after move");
 
         Path imported = model.resolve("imported.dds");
         Files.copy(moved, imported);
@@ -116,7 +118,7 @@ public final class GeneratedTexturesSmoke {
         require(!Files.exists(moved), "Source deletion did not remove its DDS");
         require(store.source(key) == null, "Source deletion did not remove mapping");
         require(Files.exists(target.resolve("imported-copy.dds")), "Unowned DDS unexpectedly removed");
-        require(Files.exists(target.resolve("dds/user-note.txt")), "Source cleanup removed unrelated directory content");
+        require(Files.exists(model.resolve("dds/user-note.txt")), "Source cleanup removed unrelated directory content");
         System.out.println("PASS imported DDS unaffected and source deletion cleans owned DDS");
 
         Path collision = model.resolve("collision.png");

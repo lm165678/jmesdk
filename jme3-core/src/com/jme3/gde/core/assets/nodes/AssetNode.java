@@ -44,12 +44,15 @@ import org.openide.util.lookup.ProxyLookup;
  * @author normenhansen
  */
 public class AssetNode extends FilterNode {
+    private final ProjectAssetManager importManager;
 
     private Node node;
 
     public AssetNode(ProjectAssetManager manager, Node node) {
         super(node, isFile(node) ? Children.LEAF : new AssetChildren(manager, node), createLookupProxy(manager, node));
         this.node = node;
+        this.importManager = manager;
+        com.jme3.gde.core.assets.ExternalAssetImport.watch(manager);
         enableDelegation(DELEGATE_GET_ACTIONS);
         enableDelegation(DELEGATE_GET_CONTEXT_ACTIONS);
     }
@@ -61,6 +64,45 @@ public class AssetNode extends FilterNode {
             return !obj.getPrimaryFile().isFolder();
         }
         return false;
+    }
+
+    @Override
+    public javax.swing.Action[] getActions(boolean context) {
+        javax.swing.Action[] existing = super.getActions(context);
+        DataObject object = getLookup().lookup(DataObject.class);
+        var convert = object == null ? null : com.jme3.gde.core.assets.ExternalAssetImport.audioAction(
+                importManager, object.getPrimaryFile());
+        if (convert == null && object != null) {
+            convert = com.jme3.gde.core.assets.ExternalAssetImport.textureAction(
+                    importManager, object.getPrimaryFile());
+        }
+        if (convert == null && object != null) {
+            convert = com.jme3.gde.core.assets.ExternalAssetImport.audioRepairAction(
+                    importManager, object.getPrimaryFile());
+        }
+        if (convert == null) {
+            return existing;
+        }
+        var actions = java.util.Arrays.copyOf(existing, existing.length + 1);
+        actions[existing.length] = convert;
+        return actions;
+    }
+
+    @Override
+    public org.openide.util.datatransfer.PasteType[] getPasteTypes(java.awt.datatransfer.Transferable transfer) {
+        var operation = externalPaste(transfer);
+        return operation == null ? super.getPasteTypes(transfer)
+                : new org.openide.util.datatransfer.PasteType[]{operation};
+    }
+    @Override
+    public org.openide.util.datatransfer.PasteType getDropType(java.awt.datatransfer.Transferable transfer, int action, int index) {
+        var operation = externalPaste(transfer);
+        return operation == null ? super.getDropType(transfer, action, index) : operation;
+    }
+    private org.openide.util.datatransfer.PasteType externalPaste(java.awt.datatransfer.Transferable transfer) {
+        DataObject object = getLookup().lookup(DataObject.class);
+        return object == null ? null : com.jme3.gde.core.assets.ExternalAssetImport.paste(
+                importManager, object.getPrimaryFile(), transfer);
     }
 
     public static Lookup createLookupProxy(ProjectAssetManager manager, Node node) {

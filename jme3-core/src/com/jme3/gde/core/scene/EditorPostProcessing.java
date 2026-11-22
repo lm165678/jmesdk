@@ -2,6 +2,7 @@ package com.jme3.gde.core.scene;
 
 import com.jme3.post.Filter;
 import com.jme3.post.FilterPostProcessor;
+import com.jme3.post.WorldSettings.DisplayOutput;
 import com.jme3.post.filters.*;
 import com.jme3.post.ssao.SSAOFilter;
 import com.jme3.math.Vector3f;
@@ -33,7 +34,8 @@ import java.util.Map;
  * 第七步：勾选 Legacy reference 查看旧的固定 ToneMap+FXAA；取消恢复新链及参数。
  * Shader sRGB output 开关只控制编辑器主 AWT 视口，默认开启；显式关闭可恢复旧输出。
  * 开启后先在线性浮点目标合成，再由 shader 编码读回；关闭恢复硬件 sRGB 目标。
- * 该预览选项随编辑器配置保存；游戏需显式建立呈现目标，不由 WorldSettings 改窗口。
+ * 该 shader 预览选项随编辑器配置保存。新场景默认选择 Game display output 的 HDR (scRGB)，
+ * 可在 Windows HDR 3DViewer 中直接预览，同时把游戏输出保存到 WorldSettings。
  * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由呈现阶段编码一次。
  * Upscaling 默认 Off；选择 FSR1/FSR2 并调整 Render resolution scale，GUI 保持输出尺寸。
  * FSR2 自动旁路普通 TAA/FXAA，关闭后恢复原选择；FSR1 保留前置抗锯齿。
@@ -41,7 +43,7 @@ import java.util.Map;
  * 窗口 shader sRGB 默认由 AppSettings 开启，不依赖此处的预览开关。
  * 抗锯齿分组选择 Off / FXAA / TAA；切换保留参数，TAA 从新历史开始。
  * 第八步：保存场景将 WorldSettings 写入 J3O；游戏加载并挂到 rootNode 后自动恢复。
- * 第九步：Exposure 勾选 UE4 histogram adaptation，ToneMap 勾选 UE4 Film / combined LUT。
+ * 第九步：Exposure 勾选 Histogram adaptation，ToneMap 勾选 Film / combined LUT。
  * 新模式使用亮度上下限和 Film 参数；Combine LUTs 分组调节 Gamma、Offset 和分区增益。
  * 取消这两个开关恢复旧模式；旧场景不会自动迁移。外部 LUT 纹理由 Java API 设置。
  * 切换场景会恢复各自设置和曝光历史；旧场景未编辑时使用默认预览，不用于 GI 烘焙。
@@ -59,10 +61,18 @@ final class EditorPostProcessing {
     private float maxEV = 8f;
     private float speedUp = 3f;
     private float speedDown = 1f;
+    private void migrateOption(String oldKey, String key) {
+        Double value = options.remove(oldKey);
+        if (value != null) {
+            options.putIfAbsent(key, value);
+        }
+    }
+
     private Vector3f gain = new Vector3f(1, 1, 1);
     private boolean enabled = true;
     private boolean lit = true;
     private boolean supported = true;
+    private DisplayOutput gameDisplayOutput = DisplayOutput.Hdr;
 
     EditorPostProcessing(SceneApplication app) {
         this.app = app;
@@ -97,6 +107,11 @@ final class EditorPostProcessing {
     }
 
     void configure(String option, double value) {
+        if (option.equals("GameDisplayOutput")) {
+            gameDisplayOutput = value == 2 ? DisplayOutput.Hdr
+                    : value == 1 ? DisplayOutput.Sdr : DisplayOutput.Application;
+            return;
+        }
         if (option.equals("FXAA") || option.equals("TAA")) {
             int mode = option.equals("TAA") ? 2 : 1;
             if (value != 0 || options.getOrDefault("AntiAliasing", 1d) == mode) {
@@ -131,9 +146,9 @@ final class EditorPostProcessing {
             ((TemporalAAFilter) filters.get("TAA")).setTranslucentVelocityEnabled(value != 0);
         } else if (processor != null && option.equals("TAAAlphaThreshold")) {
             ((TemporalAAFilter) filters.get("TAA")).setTranslucentAlphaThreshold((float) value);
-        } else if (processor != null && option.equals("UE4Exposure")) {
+        } else if (processor != null && option.equals("HistogramExposure")) {
             ((AutoExposureFilter) filters.get("Exposure")).setMode(value != 0
-                    ? AutoExposureFilter.Mode.UE4Histogram : AutoExposureFilter.Mode.Legacy);
+                    ? AutoExposureFilter.Mode.SceneHistogram : AutoExposureFilter.Mode.Legacy);
         } else if (processor != null && java.util.Set.of("MinBrightness", "MaxBrightness", "HistogramMin", "HistogramMax", "TransitionDistance", "LowPercent", "HighPercent").contains(option)) {
             AutoExposureFilter exposure = (AutoExposureFilter) filters.get("Exposure");
             double min = options.getOrDefault("MinBrightness", .03d);
@@ -149,7 +164,7 @@ final class EditorPostProcessing {
             double high = Math.max(low + .01, options.getOrDefault("HighPercent", .9d));
             options.put("HighPercent", high);
             exposure.setPercentiles((float) low, (float) high);
-        } else if (processor != null && (option.equals("UE4Tonemap") || option.startsWith("Film")
+        } else if (processor != null && (option.equals("FilmLutTonemap") || option.startsWith("Film")
                 || option.equals("Temperature") || option.equals("Tint") || option.equals("BlueCorrection") || option.equals("ExpandGamut")
                 || option.startsWith("GradingGamma") || option.startsWith("GradingOffset")
                 || option.startsWith("ShadowGain") || option.startsWith("MidtoneGain") || option.startsWith("HighlightGain"))) {
@@ -260,7 +275,7 @@ final class EditorPostProcessing {
 
     private void configureGrading() {
         ColorGradingFilter grade = (ColorGradingFilter) filters.get("ToneMap");
-        grade.setCurve(options.getOrDefault("UE4Tonemap", 0d) != 0 ? ColorGradingFilter.Curve.UE4
+        grade.setCurve(options.getOrDefault("FilmLutTonemap", 0d) != 0 ? ColorGradingFilter.Curve.FilmLut
                 : options.getOrDefault("FilmicCurve", 0d) != 0 ? ColorGradingFilter.Curve.Filmic
                 : ColorGradingFilter.Curve.Neutral);
         grade.setFilm(options.getOrDefault("FilmSlope", .88d).floatValue(),
@@ -303,12 +318,15 @@ final class EditorPostProcessing {
         if (request.getRootNode() != null) {
             var settings = request.getRootNode().getControl(com.jme3.post.WorldSettings.class);
             if (settings != null) {
+                gameDisplayOutput = settings.getDisplayOutput();
                 // Restore the pair before replaying either endpoint, so map insertion
                 // order cannot clamp a previously valid exposure range.
                 minEV = settings.getEditorOptions().getOrDefault("ExposureMin", -8d).floatValue();
                 maxEV = settings.getEditorOptions().getOrDefault("ExposureMax", 8d).floatValue();
                 options.putAll(settings.getEditorOptions());
-                for (var entry : settings.getEditorOptions().entrySet()) {
+                migrateOption("UE\u0034Exposure", "HistogramExposure");
+                migrateOption("UE\u0034Tonemap", "FilmLutTonemap");
+                for (var entry : new LinkedHashMap<>(options).entrySet()) {
                     if (!entry.getKey().equals("FXAA") && !entry.getKey().equals("TAA")) {
                         configure(entry.getKey(), entry.getValue());
                     }
@@ -325,29 +343,39 @@ final class EditorPostProcessing {
     }
 
     Map<String, Double> options() {
-        return new LinkedHashMap<>(options);
+        Map<String, Double> snapshot = new LinkedHashMap<>(options);
+        snapshot.put("GameDisplayOutput", gameDisplayOutput == DisplayOutput.Hdr ? 2d
+                : gameDisplayOutput == DisplayOutput.Sdr ? 1d : 0d);
+        return snapshot;
     }
 
     void saveSettings(SceneRequest request) throws java.io.IOException {
-        if (owner != request || request.getRootNode() == null || processor == null) {
+        saveSettings(request, false);
+    }
+
+    void saveSettings(SceneRequest request, boolean displayOnly) throws java.io.IOException {
+        if (owner != request || request.getRootNode() == null || (!displayOnly && processor == null)) {
             return;
         }
-        ensureLegacy();
         var root = request.getRootNode();
         var settings = root.getControl(com.jme3.post.WorldSettings.class);
         boolean added = settings == null;
         if (added) {
             settings = new com.jme3.post.WorldSettings();
         }
-        settings.setPostProcessing(legacy ? legacyProcessor : processor, options);
-        settings.setEnabled(enabled);
+        if (!displayOnly) {
+            ensureLegacy();
+            settings.setPostProcessing(legacy ? legacyProcessor : processor, options);
+            settings.setEnabled(enabled);
+        }
+        settings.setDisplayOutput(gameDisplayOutput);
         if (added) {
             root.addControl(settings);
         }
     }
 
     void close() {
-        app.setShaderSrgbPresentation(true);
+        app.setPreviewPresentation(true, false, false);
         for (FilterPostProcessor chain : new FilterPostProcessor[]{processor, legacyProcessor}) {
             if (chain != null && app.getViewPort().getProcessors().contains(chain)) {
                 app.getViewPort().removeProcessor(chain);
@@ -357,11 +385,14 @@ final class EditorPostProcessing {
         legacyProcessor = null;
         filters.clear();
         options.clear();
+        gameDisplayOutput = DisplayOutput.Hdr;
         owner = null;
     }
 
     void sync() {
-        app.setShaderSrgbPresentation(options.getOrDefault("ShaderSrgbOutput", 1d) != 0);
+        app.setPreviewPresentation(options.getOrDefault("ShaderSrgbOutput", 1d) != 0,
+                options.getOrDefault("SrgbOutputDithering", 0d) != 0,
+                supported && owner != null && gameDisplayOutput == DisplayOutput.Hdr);
         if (owner == null) {
             return;
         }

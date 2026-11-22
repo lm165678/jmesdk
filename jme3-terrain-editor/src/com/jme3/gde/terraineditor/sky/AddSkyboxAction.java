@@ -76,6 +76,11 @@ public class AddSkyboxAction extends AbstractNewSpatialWizardAction {
     }
 
     @Override
+    protected boolean usesSpawnPosition() {
+        return false;
+    }
+
+    @Override
     protected Spatial doCreateSpatial(Node parent, Object properties) {
         if (properties != null) {
             return generateSkybox((WizardDescriptor) properties);

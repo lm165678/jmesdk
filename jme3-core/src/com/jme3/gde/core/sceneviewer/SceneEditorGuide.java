@@ -77,7 +77,7 @@ final class SceneEditorGuide {
                 g.setComposite(AlphaComposite.Src);
                 g.setColor(new Color(0, 0, 0, 170));
                 g.fillRect(0, 0, getWidth(), getHeight());
-                // Alpha 1 keeps the spotlight visually clear but consumes clicks.
+                // An opaque spotlight receives clicks while leaving its target visible.
                 g.setColor(new Color(0, 0, 0, 1));
                 g.fillRoundRect(highlight.x, highlight.y, highlight.width, highlight.height, 10, 10);
                 g.setComposite(AlphaComposite.SrcOver);

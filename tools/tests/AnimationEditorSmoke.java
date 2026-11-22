@@ -50,6 +50,22 @@ public final class AnimationEditorSmoke {
     }
 
     public static void main(String[] args) throws Exception {
+        Class<?> rootTrackType = Class.forName("com.jme3.gde.core.assets.AnimationEditorTopComponent$RootTrack");
+        var rootTrackConstructor = rootTrackType.getDeclaredConstructor(String.class, boolean.class);
+        rootTrackConstructor.setAccessible(true);
+        String longPath = "Armature/".repeat(100) + "Hips";
+        Object rootTrack = rootTrackConstructor.newInstance(longPath, true);
+        require(rootTrack.toString().endsWith("Hips") && rootTrack.toString().length() < 60,
+                "Root motion choice must not display the full hierarchy inline");
+        require(((String) call(rootTrack, "hint")).endsWith(longPath),
+                "Root motion tooltip must retain the complete hierarchy");
+        String idleId = "Models%2FPaladin%2FIdle.j3o##mixamo.com";
+        var idleChoice = AnimationEditorTopComponent.linkedClipChoices(List.of(idleId)).getFirst();
+        require("Idle".equals(idleChoice.toString()) && idleId.equals(idleChoice.id()),
+                "A single linked clip shows the J3O name and keeps its resolver ID");
+        var library = AnimationEditorTopComponent.linkedClipChoices(List.of(idleId, "Models%2FPaladin%2FIdle.j3o##Walk"));
+        require("Idle — mixamo.com".equals(library.get(0).label()) && "Idle — Walk".equals(library.get(1).label()),
+                "Multiple clips in the same J3O have distinct picker labels");
         java.util.Locale.setDefault(java.util.Locale.ENGLISH);
         java.util.Locale.setDefault(java.util.Locale.ENGLISH);
         Node root = model();
@@ -100,6 +116,47 @@ public final class AnimationEditorSmoke {
                 require(!AnimationEditorSupport.guide(root).contains("第一步"), "English tutorial has no Chinese text");
                 System.out.println("ANIMATION_LOCALIZATION_LOCALE_PERSISTENCE_PASS");
 
+                Node linkTarget = model();
+                AnimationEditorTopComponent linkEditor = new AnimationEditorTopComponent(data, linkTarget, List.of(linkTarget));
+                var linkStates = (DefaultTableModel) field(linkEditor, "states");
+                linkStates.setValueAt("Edited", 0, 0);
+                AnimClip linked = new AnimClip(idleId);
+                linked.setTracks(new AnimTrack[]{new TransformTrack(linkTarget, new float[]{0, 1},
+                        new Vector3f[]{Vector3f.ZERO, Vector3f.UNIT_Y}, null, null)});
+                linkTarget.getControl(AnimComposer.class).setLinkedAnimClips(List.of(linked));
+                Node singleClipTarget = new Node("Paladin");
+                AnimComposer singleComposer = new AnimComposer();
+                singleClipTarget.addControl(singleComposer);
+                AnimClip pose = new AnimClip("mixamo.com");
+                pose.setTracks(new AnimTrack[]{new TransformTrack(singleClipTarget, new float[]{0, 1},
+                        new Vector3f[]{Vector3f.ZERO, Vector3f.ZERO}, null, null)});
+                singleComposer.addAnimClip(pose);
+                singleComposer.setLinkedAnimClips(List.of(linked));
+                var named = new AnimationEditorTopComponent(data, singleClipTarget, List.of(singleClipTarget));
+                AnimationGraph namedGraph = (AnimationGraph) call(named, "graph");
+                require(namedGraph.states.stream().anyMatch(state -> state.name.equals("Character")
+                        && state.clips.equals(List.of("mixamo.com"))), "Single local pose uses its J3O filename");
+                require(namedGraph.states.stream().anyMatch(state -> state.name.equals("Idle")
+                        && state.clips.equals(List.of(idleId))), "Linked state uses its source filename but plays by ID");
+                var namedStates = (DefaultTableModel) field(named, "states");
+                int idleRow = namedGraph.states.get(0).clips.contains(idleId) ? 0 : 1;
+                namedStates.setValueAt(idleId, idleRow, 0);
+                var title = AnimationEditorTopComponent.class.getDeclaredMethod("stateTitle", int.class);
+                title.setAccessible(true);
+                require("Idle".equals(title.invoke(named, idleRow))
+                        && idleId.equals(namedStates.getValueAt(idleRow, 0)), "Old saved title is shortened only visually");
+                var refreshLinks = AnimationEditorTopComponent.class.getDeclaredMethod("refreshLinks", String.class);
+                refreshLinks.setAccessible(true);
+                call(linkEditor, "beginLinkWork");
+                refreshLinks.invoke(linkEditor, idleId);
+                require("Edited".equals(linkStates.getValueAt(0, 0)) && (boolean) field(linkEditor, "dirty"),
+                        "Updating links preserves unsaved graph edits");
+                require(findButton(linkEditor, "Animation Links").isEnabled()
+                        && !(boolean) field(linkEditor, "saving"), "Link button re-enables after the update");
+                require(((JComboBox<?>) field(linkEditor, "ownerChoice")).getItemAt(0).toString().contains("4 clips"),
+                        "Composer badge counts the added clip immediately");
+                System.out.println("ANIMATION_LINK_REFRESH_PRESERVES_DRAFT_PASS");
+
                 AnimationEditorTopComponent editor = new AnimationEditorTopComponent(data, root, List.of(root));
                 AnimationEditorTopComponent emptyEditor = new AnimationEditorTopComponent(data, root, List.of(root));
                 DefaultTableModel emptyStates = (DefaultTableModel) field(emptyEditor, "states");
@@ -128,9 +185,15 @@ public final class AnimationEditorSmoke {
                 require(edges.getRowCount() == 0, "Undo drawn transition");
                 editor.getUndoRedo().redo();
                 require(edges.getRowCount() == 1, "Redo drawn transition");
-                drag(canvas, 240, 72, 50, 72);
+                drag(canvas, 40, 72, 240, 72);
+                drag(canvas, 205, 72, 405, 72);
+                require(edges.getRowCount() == 1, "Input-to-input and output-to-output are rejected");
+                drag(canvas, 405, 72, 40, 72);
+                drag(canvas, 40, 72, 405, 72);
+                require(edges.getRowCount() == 1, "Outer ports cannot create a wraparound transition");
+                drag(canvas, 240, 72, 205, 87);
                 require(edges.getRowCount() == 2 && "Run".equals(edges.getValueAt(1, 0))
-                        && "Idle".equals(edges.getValueAt(1, 1)), "Reverse direction is a separate edge");
+                        && "Idle".equals(edges.getValueAt(1, 1)), "Facing ports create the return edge");
                 JTabbedPane tabs = (JTabbedPane) field(editor, "tabs");
                 tabs.setSelectedIndex(0);
                 mouse(canvas, java.awt.event.MouseEvent.MOUSE_CLICKED, 223, 50, 1);
@@ -141,6 +204,21 @@ public final class AnimationEditorSmoke {
                 canvas.getActionMap().get("cancelLink").actionPerformed(new java.awt.event.ActionEvent(canvas, 0, "escape"));
                 mouse(canvas, java.awt.event.MouseEvent.MOUSE_RELEASED, 250, 72, 1);
                 require(edges.getRowCount() == 2, "Escape cancels pending transition");
+                verifyFixedPorts(canvas, states);
+                edges.removeRow(0);
+                var routeMethod = canvas.getClass().getDeclaredMethod("edgeRoute", int.class);
+                routeMethod.setAccessible(true);
+                Object loneReturn = routeMethod.invoke(canvas, 0);
+                require((double) field(loneReturn, "endX") == 205,
+                        "A return transition keeps the facing destination without a forward edge");
+                edges.setRowCount(0);
+                drag(canvas, 240, 72, 205, 72);
+                require(edges.getRowCount() == 1 && "Run".equals(edges.getValueAt(0, 0))
+                        && "Idle".equals(edges.getValueAt(0, 1)), "Return can be created first");
+                editor.getUndoRedo().undo();
+                require(edges.getRowCount() == 0, "Undo return created first");
+                editor.getUndoRedo().redo();
+                require(edges.getRowCount() == 1, "Redo return created first");
                 edges.setRowCount(0);
                 System.out.println("ANIMATION_GRAPH_DRAG_CONNECT_SELECT_UNDO_PASS");
                 verifyNavigation(editor);
@@ -154,13 +232,17 @@ public final class AnimationEditorSmoke {
                 require(((AnimationGraph) call(editor, "graph")).parameters.get(2).initial == 0,
                         "Boolean false compiles to runtime value");
                 parameters.setValueAt("1.0", 2, 2);
-                require(((AnimationGraph) call(editor, "graph")).parameters.get(2).initial == 1,
+                AnimationGraph authored = (AnimationGraph) call(editor, "graph");
+                require(authored.parameters.get(2).initial == 1,
                         "Legacy numeric boolean defaults remain readable");
+                require(AnimationEditorTopComponent.previewDefaults(authored).parameters.get(2).initial == 0
+                        && authored.parameters.get(2).initial == 1, "Live switches start cleared without editing defaults");
                 parameters.removeRow(2);
                 parameters.addRow(new Object[]{"End", "BOOLEAN", "false"});
                 AnimationGraph endGraph = (AnimationGraph) call(editor, "graph");
                 require(endGraph.parameters.get(2).name.equals("End") && endGraph.parameters.get(2).initial == 0,
                         "Adding End without a transition reference is valid");
+                verifyBlendEditors(editor, states, edges);
                 edges.addRow(new Object[]{"Idle", "Run", "", "TRUE", "0", "0.2", "-1"});
                 try {
                     call(editor, "graph");
@@ -230,6 +312,7 @@ public final class AnimationEditorSmoke {
                 states.addRow(new Object[]{"Locomotion", "Speed", "Idle|Walk|Run", "0|1|2", "true", "40", "40"});
                 ((JTextField) field(editor, "entry")).setText("Locomotion");
                 edges.addRow(new Object[]{"Locomotion", "Run", "Attack", "TRIGGER", "0", "0.3", "-1"});
+                edges.setValueAt(true, 0, 7);
                 AnimationGraph graph = (AnimationGraph) call(editor, "graph");
                 require(graph.states.size() == 4 && graph.transitions.size() == 1, "UI compiles graph");
                 parameters.setValueAt("2", 0, 2);
@@ -238,6 +321,8 @@ public final class AnimationEditorSmoke {
                 editor.getUndoRedo().redo();
                 require("2".equals(parameters.getValueAt(0, 2).toString()), "Redo parameter edit");
                 root.setUserData(AnimationGraph.USER_DATA, graph.encode());
+                String ports = (String) call(editor, "encodePorts");
+                root.setUserData("jme.animationGraph.ports.v1", ports);
                 @SuppressWarnings("unchecked")
                 List<AnimationGraphComments.Box> boxes = (List<AnimationGraphComments.Box>) field(editor, "comments");
                 root.setUserData(AnimationGraphComments.USER_DATA, AnimationGraphComments.encode(boxes));
@@ -273,6 +358,9 @@ public final class AnimationEditorSmoke {
                 require(AnimationGraphComments.decode(loaded.getUserData(AnimationGraphComments.USER_DATA)).equals(boxes),
                         "J3O restores comment text and geometry");
                 AnimationEditorTopComponent reopened = new AnimationEditorTopComponent(data, loaded, List.of(loaded));
+                require(ports.equals(call(reopened, "encodePorts")), "J3O restores fixed edge ports");
+                require(Boolean.TRUE.equals(((DefaultTableModel) field(reopened, "edges")).getValueAt(0, 7)),
+                        "Saved left source port must override current node layout");
                 require(field(reopened, "comments").equals(boxes), "Reopening editor restores comments");
                 require(AnimationEditorSupport.prefersAnimation(loaded), "Save/reload editor preference");
                 AnimationGraphPlayer player = AnimationGraphPlayer.attach(loaded);
@@ -289,6 +377,158 @@ public final class AnimationEditorSmoke {
             }
         });
         System.exit(0);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void verifyBlendEditors(AnimationEditorTopComponent editor, DefaultTableModel states,
+            DefaultTableModel edges) throws Exception {
+        JTable table = ((List<JTable>) field(editor, "tables")).get(1);
+        require(table.editCellAt(0, 1), "Open blend parameter editor");
+        var parameter = (JComboBox<String>) table.getEditorComponent();
+        require(!parameter.isEditable() && parameter.getItemCount() == 3 && "Speed".equals(parameter.getItemAt(1))
+                && "End".equals(parameter.getItemAt(2)), "Float and Boolean parameters are available");
+        parameter.setSelectedItem("Speed");
+        require("Speed".equals(states.getValueAt(0, 1)), "Blend parameter selection writes the state");
+
+        require(table.editCellAt(0, 2), "Open clip editor");
+        require(table.getEditorComponent() instanceof JButton, "Clips opens the paired sample editor");
+        table.getCellEditor().cancelCellEditing();
+        var samples = new AnimationEditorTopComponent.StateSamplesPanel(List.of("Idle", "Run"), true, "Idle", "0");
+        ((JButton) field(samples, "add")).doClick(0);
+        JPanel rows = (JPanel) field(samples, "rows");
+        var choices = java.util.Arrays.stream(rows.getComponents()).filter(JComboBox.class::isInstance).toList();
+        ((JComboBox<?>) choices.get(1)).setSelectedItem("Run");
+        require(samples.samples().equals(new AnimationEditorTopComponent.Samples("Idle|Run", "0.0|1.0")),
+                "Adding a clip automatically adds a corresponding threshold");
+        var values = java.util.Arrays.stream(rows.getComponents()).filter(JTextField.class::isInstance).toList();
+        var secondThreshold = (JTextField) values.get(1);
+        secondThreshold.setText("0");
+        try {
+            samples.samples();
+            throw new AssertionError("Equal thresholds should fail");
+        } catch (IllegalArgumentException expected) {
+            secondThreshold.setText("1");
+        }
+        var apply = AnimationEditorTopComponent.class.getDeclaredMethod("applySamples",
+                int.class, AnimationEditorTopComponent.Samples.class);
+        apply.setAccessible(true);
+        apply.invoke(editor, 0, samples.samples());
+        require(((AnimationGraph) call(editor, "graph")).states.get(0).clips.equals(List.of("Idle", "Run")),
+                "Dropdown selections compile to a 1D blend");
+        editor.getUndoRedo().undo();
+        editor.getUndoRedo().undo();
+        var single = new AnimationEditorTopComponent.StateSamplesPanel(List.of("Idle", "Run"), false, "Run", "0");
+        require(!((JButton) field(single, "add")).isEnabled()
+                && single.samples().equals(new AnimationEditorTopComponent.Samples("Run", "0.0")),
+                "Boolean or empty parameter provides one clip at threshold zero");
+        table.setValueAt("End", 0, 1);
+        require("End".equals(states.getValueAt(0, 1)), "Boolean parameter accepted for a single clip");
+        editor.getUndoRedo().undo();
+
+        states.setValueAt("Running", 1, 0);
+        edges.addRow(new Object[]{"Idle", "Running", "", "ALWAYS", "0", "0.2", "-1"});
+        require(table.editCellAt(0, 0), "Open name editor");
+        var name = (JTextField) table.getEditorComponent();
+        require("StateName".equals(table.getColumnName(0)), "State name heading");
+        name.setText(" ");
+        require(!table.getCellEditor().stopCellEditing(), "Empty state name rejected");
+        name.setText("Running");
+        require(!table.getCellEditor().stopCellEditing(), "Duplicate state name rejected");
+        name.setText("Locomotion");
+        require(table.getCellEditor().stopCellEditing(), "Custom state name accepted");
+        require("Locomotion".equals(states.getValueAt(0, 0)) && "Locomotion".equals(edges.getValueAt(0, 0))
+                && "Locomotion".equals(((JTextField) field(editor, "entry")).getText()),
+                "Rename updates transitions and entry");
+        require("Idle".equals(states.getValueAt(0, 2)), "Renaming preserves clip binding");
+        editor.getUndoRedo().undo();
+        require("Idle".equals(states.getValueAt(0, 0)) && "Idle".equals(edges.getValueAt(0, 0))
+                && "Idle".equals(states.getValueAt(0, 2)), "Undo restores name, clip and references together");
+        edges.removeRow(0);
+        states.setValueAt("Run", 1, 0);
+    }
+
+    private static void verifyFixedPorts(JComponent canvas, DefaultTableModel states) throws Exception {
+        var curve = canvas.getClass().getDeclaredMethod("edgeRoute", int.class);
+        curve.setAccessible(true);
+        var bounds = canvas.getClass().getDeclaredMethod("bounds", int.class);
+        bounds.setAccessible(true);
+        Object oldX = states.getValueAt(1, 5);
+        Object oldY = states.getValueAt(1, 6);
+        Object oldSourceY = states.getValueAt(0, 6);
+        var originalSource = (java.awt.Rectangle) bounds.invoke(canvas, 0);
+        var originalTarget = (java.awt.Rectangle) bounds.invoke(canvas, 1);
+        verifyEdgePorts(curve.invoke(canvas, 0), originalSource, originalTarget);
+        Object returning = curve.invoke(canvas, 1);
+        var returnPath = (java.awt.Shape) field(returning, "path");
+        var returnBounds = returnPath.getBounds2D();
+        require(returnBounds.getMinX() == originalSource.getMaxX()
+                && returnBounds.getMaxX() == originalTarget.getMinX(),
+                "The return arc stays between the facing ports");
+        require((double) field(returning, "endX") == originalSource.getMaxX()
+                && (double) field(returning, "labelY") > originalSource.getCenterY(),
+                "The lower arc points back to the source of the forward transition");
+        states.setValueAt(14, 1, 5);
+        states.setValueAt(160, 1, 6);
+        try {
+            var source = (java.awt.Rectangle) bounds.invoke(canvas, 0);
+            var target = (java.awt.Rectangle) bounds.invoke(canvas, 1);
+            Object route = curve.invoke(canvas, 0);
+            verifyEdgePorts(route, source, target);
+            verifyEdgePorts(curve.invoke(canvas, 1), target, source, true);
+            require((double) field(curve.invoke(canvas, 1), "labelY")
+                    != (double) field(route, "labelY"), "Reciprocal labels must use separate lanes");
+            double lane = (double) field(route, "labelY");
+            require(lane > source.getMaxY() && lane < target.getMinY(),
+                    "Backwards link should use the gap between vertically separated nodes");
+            String capture = System.getProperty("jme.sdk.animationRouteSnapshot");
+            if (capture != null) {
+                canvas.setSize(700, 400);
+                var image = new java.awt.image.BufferedImage(700, 400, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                var graphics = image.createGraphics();
+                try {
+                    canvas.paint(graphics);
+                } finally {
+                    graphics.dispose();
+                }
+                javax.imageio.ImageIO.write(image, "png", new File(capture));
+            }
+            states.setValueAt(-200, 1, 5);
+            target = (java.awt.Rectangle) bounds.invoke(canvas, 1);
+            verifyEdgePorts(curve.invoke(canvas, 0), source, target);
+            verifyEdgePorts(curve.invoke(canvas, 1), target, source, true);
+            states.setValueAt(14, 1, 5);
+            states.setValueAt(0, 1, 6);
+            states.setValueAt(160, 0, 6);
+            source = (java.awt.Rectangle) bounds.invoke(canvas, 0);
+            target = (java.awt.Rectangle) bounds.invoke(canvas, 1);
+            verifyEdgePorts(curve.invoke(canvas, 0), source, target);
+            lane = (double) field(curve.invoke(canvas, 0), "labelY");
+            require(lane > target.getMaxY() && lane < source.getMinY(),
+                    "Link should take the gap when the target is above the source");
+        } finally {
+            states.setValueAt(oldSourceY, 0, 6);
+            states.setValueAt(oldX, 1, 5);
+            states.setValueAt(oldY, 1, 6);
+        }
+    }
+
+    private static void verifyEdgePorts(Object route, java.awt.Rectangle source, java.awt.Rectangle target)
+            throws Exception {
+        verifyEdgePorts(route, source, target, false);
+    }
+
+    private static void verifyEdgePorts(Object route, java.awt.Rectangle source, java.awt.Rectangle target,
+            boolean sourceLeft) throws Exception {
+        var path = (java.awt.Shape) field(route, "path");
+        var iterator = path.getPathIterator(null);
+        double[] point = new double[6];
+        require(iterator.currentSegment(point) == java.awt.geom.PathIterator.SEG_MOVETO
+                && point[0] == (sourceLeft ? source.getMinX() : source.getMaxX())
+                && point[1] == source.getCenterY(),
+                "Transition must start at the source output");
+        require((double) field(route, "endX") == (sourceLeft ? target.getMaxX() : target.getMinX())
+                && (double) field(route, "endY") == target.getCenterY(),
+                "Transition must finish at the destination input");
     }
 
     private static JButton findButton(java.awt.Container root, String label) {

@@ -39,3 +39,6 @@ installers/linux-aarch64/jdk-aarch64_linux.tar.gz
 
 # Machine-local SDK launcher settings (never commit credentials).
 /sdk-local.json
+
+# Locally compiled ufbx JNI libraries and their license copies.
+/jme3-autodesk/release/lib/ufbx/

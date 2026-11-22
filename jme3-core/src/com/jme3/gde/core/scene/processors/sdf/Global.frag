@@ -143,7 +143,7 @@ void main() {
             gl_FragColor = vec4(color * light, 1.0);
             return;
         }
-        // Limit steps to the finest cell to avoid skipping finer-level entry regions.
+        // Limit the step to the finest cell so a ray cannot skip a finer level.
         t += min(max((d - cell * 0.5) * 0.7, cell * 0.025), m_Cells.x * 0.5);
     }
     gl_FragColor = vec4(0.8, 0.0, 0.6, 1.0);

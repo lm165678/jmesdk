@@ -134,7 +134,7 @@ public final class ModelConversionSmoke {
         System.out.println("GLTF_ANIMATION_AUTO_DEFAULTS_PASS");
     }
 
-    /** Keep dialog layout preferences out of the developer's registry/profile. */
+    /** Keeps dialog preferences in memory for this test. */
     public static final class MemoryPreferencesFactory implements java.util.prefs.PreferencesFactory {
         private final java.util.prefs.Preferences root = new MemoryPreferences(null, "");
         public java.util.prefs.Preferences systemRoot() {

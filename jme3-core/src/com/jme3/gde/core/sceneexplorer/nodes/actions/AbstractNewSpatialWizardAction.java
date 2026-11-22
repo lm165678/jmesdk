@@ -60,6 +60,11 @@ public abstract class AbstractNewSpatialWizardAction implements NewSpatialAction
 
     protected abstract Spatial doCreateSpatial(Node parent, Object configuration);
 
+    /** Whether this wizard's output can be translated to a viewport drop point. */
+    protected boolean usesSpawnPosition() {
+        return true;
+    }
+
     protected Action makeAction(final JmeNode rootNode, final DataObject dataObject) {
         pm = rootNode.getLookup().lookup(ProjectAssetManager.class);
         final Node node = rootNode.getLookup().lookup(Node.class);
@@ -70,8 +75,14 @@ public abstract class AbstractNewSpatialWizardAction implements NewSpatialAction
                 SceneApplication.getApplication().enqueue(new Callable<Void>() {
 
                     public Void call() throws Exception {
+                        if (!SceneSpawnEvent.canCreate(e)) {
+                            return null;
+                        }
                         final Spatial attachSpatial = doCreateSpatial(node, obj);
                         if (node != null && attachSpatial != null) {
+                            if (usesSpawnPosition()) {
+                                SceneSpawnEvent.place(e, node, attachSpatial);
+                            }
                             node.attachChild(attachSpatial);
                             Lookup.getDefault().lookup(SceneUndoRedoManager.class).addEdit(this, new AbstractUndoableSceneEdit() {
 
@@ -97,22 +108,18 @@ public abstract class AbstractNewSpatialWizardAction implements NewSpatialAction
                                     rootNode.refresh(true);
                                 }
                             });
-                            setModified();
+                            java.awt.EventQueue.invokeLater(() -> {
+                                dataObject.setModified(true);
+                                rootNode.refresh(true);
+                                com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance()
+                                        .selectAddedObject(rootNode, attachSpatial);
+                            });
                         }
                         return null;
                     }
                 });
             }
 
-            protected void setModified() {
-                java.awt.EventQueue.invokeLater(new Runnable() {
-
-                    public void run() {
-                        dataObject.setModified(true);
-                        rootNode.refresh(true);
-                    }
-                });
-            }
         };
     }
 

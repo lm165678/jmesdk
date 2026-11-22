@@ -1,0 +1,13 @@
+<!-- Original SDK camera outline, under the SDK BSD license.
+     Uses the same palette and outline weights as the Feather-based editor icons. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="-1 -1 26 26"
+     fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#23252b" stroke-width="3.4">
+        <path d="M3 7h4l2-3h6l2 3h4v13H3Z"/>
+        <circle cx="12" cy="13" r="4"/>
+    </g>
+    <g stroke="#ffe5a1" stroke-width="1.8">
+        <path d="M3 7h4l2-3h6l2 3h4v13H3Z"/>
+        <circle cx="12" cy="13" r="4"/>
+    </g>
+</svg>

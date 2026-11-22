@@ -37,6 +37,14 @@ configurations.examplelibs {
 apply from: 'gradle/local-engine.gradle'
 
 dependencies {
+    // In-process media import: pinned LGPL FFmpeg builds, no executable subprocess.
+    corelibs('org.bytedeco:javacv:1.5.12') { transitive = false }
+    corelibs('org.bytedeco:javacpp:1.5.12') { transitive = false }
+    corelibs('org.bytedeco:ffmpeg:7.1.1-1.5.12') { transitive = false }
+    ['windows-x86_64', 'linux-x86_64', 'linux-arm64', 'macosx-x86_64', 'macosx-arm64'].each { target ->
+        corelibs("org.bytedeco:javacpp:1.5.12:${target}") { transitive = false }
+        corelibs("org.bytedeco:ffmpeg:7.1.1-1.5.12:${target}") { transitive = false }
+    }
     corelibs dep("com.badlogicgames.gdx:gdx-ai:1.8.2", true, true)
     corelibs dep("javax.help:javahelp:2.0.05", false, false)
 
@@ -712,12 +720,19 @@ def textureToolBinaries = [
         'jme3-texture-tools/release/texture-tools/astcenc/5.7.1/macos-universal/bin/astcenc'
 ]
 
+def textureJniBundles = fileTree(providers.gradleProperty('textureJniBundles')
+        .getOrElse('build/texture-jni/bundles')) {
+    include 'jme-texture-codec-*.zip'
+}
+
 tasks.register('prepareTextureTools') {
     group = 'build setup'
     description = 'Verifies and unpacks the versioned native texture encoder archives.'
     inputs.files(textureToolPackages.collect { file("third-party/texture-tools/${it.archive}") })
+    inputs.files(textureJniBundles)
     inputs.property('expectedHashes', textureToolPackages.collect { "${it.archive}|${it.sha256}" })
     outputs.files(textureToolBinaries)
+    outputs.dir('jme3-texture-tools/release/texture-tools/jni')
     doLast {
         textureToolPackages.each { tool ->
             def archive = file("third-party/texture-tools/${tool.archive}")
@@ -736,6 +751,56 @@ tasks.register('prepareTextureTools') {
         textureToolBinaries.each { binary ->
             if (!file(binary).isFile()) {
                 throw new GradleException("Texture tool package has an unexpected layout; missing ${binary}")
+            }
+        }
+        project.sync { spec ->
+            spec.from(textureJniBundles.files.collect { zipTree(it) })
+            spec.into('jme3-texture-tools/release/texture-tools/jni')
+            spec.include('windows-*/jme-texture-codec.dll', 'linux-*/libjme-texture-codec.so',
+                    'macos-*/libjme-texture-codec.dylib', '*/LICENSE-*.txt')
+        }
+    }
+}
+
+def ufbxNatives = [
+        'windows-x86_64': 'jme-ufbx.dll',
+        'windows-arm64': 'jme-ufbx.dll',
+        'linux-x86_64': 'libjme-ufbx.so',
+        'linux-arm64': 'libjme-ufbx.so',
+        'macos-x86_64': 'libjme-ufbx.dylib',
+        'macos-arm64': 'libjme-ufbx.dylib'
+]
+def ufbxBundleDir = providers.gradleProperty('ufbxNativeBundles').getOrElse('build/ufbx-jni/bundles')
+def ufbxReleaseDir = file('jme3-autodesk/release/lib/ufbx')
+
+tasks.register('prepareUfbxNatives') {
+    group = 'build setup'
+    description = 'Collects precompiled ufbx JNI libraries for the SDK module.'
+    doLast {
+        def requireAll = providers.gradleProperty('requireUfbxNatives').getOrElse('false').toBoolean()
+        def filesByTarget = ufbxNatives.collectEntries { platform, library ->
+            [(platform): [library, 'LICENSE-ufbx.txt']]
+        }
+        filesByTarget.each { platform, filenames ->
+            def input = file("${ufbxBundleDir}/${platform}")
+            if (!input.isDirectory() && !requireAll) {
+                return
+            }
+            filenames.each { name ->
+                def artifact = new File(input, name)
+                if (!artifact.isFile() || artifact.length() == 0) {
+                    throw new GradleException("Incomplete ufbx JNI bundle for ${platform}: missing ${artifact}")
+                }
+            }
+        }
+        filesByTarget.each { platform, filenames ->
+            def input = file("${ufbxBundleDir}/${platform}")
+            if (input.isDirectory()) {
+                copy {
+                    from input
+                    include filenames
+                    into new File(ufbxReleaseDir, platform)
+                }
             }
         }
     }
@@ -788,7 +853,7 @@ tasks.register('verifyLocalEngine') {
 }
 
 tasks.register('buildSdk') {
-    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig, verifyLocalEngine, prepareSdkPhysicsNatives, prepareTextureTools
+    dependsOn copyBaseLibs, copyProjectLibs, createProjectXml, createBaseXml, copyTestSources, checkPlatformConfig, verifyLocalEngine, prepareSdkPhysicsNatives, prepareTextureTools, prepareUfbxNatives
     doLast {
         ant.propertyfile(file: "nbproject/project.properties") {
             entry(key: "plugins.version", value: "${jmeVersion}")
@@ -836,3 +901,28 @@ wrapper {
 
 //jar.dependsOn(buildSdk)
 //clean.dependsOn(cleanSdk)
+
+tasks.named('copyBaseLibs') {
+    doLast {
+        def directory = file('jme3-core-libraries/release/modules/ext')
+        ['windows-x86_64', 'linux-x86_64', 'linux-arm64', 'macosx-x86_64', 'macosx-arm64'].each { target ->
+            ['ffmpeg-7.1.1-1.5.12', 'javacpp-1.5.12'].each { library ->
+                def archive = new File(directory, "${library}-${target}.jar")
+                if (!archive.isFile()) {
+                    throw new GradleException("Missing audio JNI distribution: ${archive.name}")
+                }
+                new ZipFile(archive).withCloseable { zip ->
+                    if (!zip.entries().find { it.name.endsWith('.dll') || it.name.endsWith('.so') || it.name.endsWith('.dylib') }) {
+                        throw new GradleException("Audio JNI archive has no native library: ${archive.name}")
+                    }
+                }
+            }
+        }
+        ['NOTICE.txt', 'JavaCV-LICENSE.txt', 'JavaCPP-LICENSE.txt', 'FFmpeg-LICENSE.md',
+         'FFmpeg-COPYING.LGPLv3', 'FFmpeg-COPYING.GPLv3', 'Vorbis-COPYING', 'Ogg-COPYING'].each { notice ->
+            if (!file("jme3-core-libraries/release/licenses/audio-import/${notice}").isFile()) {
+                throw new GradleException("Missing media license: ${notice}")
+            }
+        }
+    }
+}

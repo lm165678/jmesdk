@@ -51,8 +51,8 @@ public class SceneApplication extends SimpleApplication {
     }
 
     /**
-     * Hidden embedded previews retain their scene but suspend simulation and
-     * rendering. Queued tasks still execute, including installation and cleanup.
+     * Hidden previews pause simulation and rendering. They keep the scene loaded
+     * and still process queued tasks for installation and cleanup.
      * AWT reports visibility on EDT; pause and timer changes belong to this
      * application's render thread. Visible split panes continue rendering.
      * <pre>{@code

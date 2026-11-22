@@ -96,6 +96,9 @@ public class PickManager {
      * @return true if the the new picked location is set, else return false.
      */
     public boolean updatePick(Camera camera, Vector2f screenCoord) {
+        if (startPickLoc == null) {
+            return false;
+        }
         finalPickLoc = SceneEditTool.pickWorldLocation(camera, screenCoord, plane, null);
         return finalPickLoc != null;
     }

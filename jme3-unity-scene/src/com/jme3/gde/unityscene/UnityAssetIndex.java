@@ -22,7 +22,7 @@ final class UnityAssetIndex {
         this(root, null);
     }
 
-    /** Prefer sidecars from the current import when another package repeats a GUID. */
+    /** When packages share a GUID, prefer the sidecar from the current import. */
     UnityAssetIndex(FileObject root, FileObject preferred) throws IOException {
         this.root = root;
         Enumeration<? extends FileObject> children = root.getChildren(true);
@@ -64,8 +64,8 @@ final class UnityAssetIndex {
     }
 
     /**
-     * Resolves an imported Mesh fileID through ModelImporter's old or current
-     * fileID-to-name table. Null means the caller should use the whole model.
+     * Looks up the imported mesh name in either version of ModelImporter's
+     * fileID table. Use the whole model when this returns null.
      */
     String meshName(FileObject model, long fileId) throws IOException {
         String path = path(model);
