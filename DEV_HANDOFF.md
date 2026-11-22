@@ -543,3 +543,9 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 ## 2026-11-19 curved receiver opt-in switch (supersedes previous note)
 - GI Volume > Curved receiver correction defaults Off, including old scenes. On enables curved projection limiting; Off restores the previous plane algorithm. Scene save retains the flag; no rebake required. GiPreview forwards it through the updated engine streaming API. Requires paired engine export/SDK rebuild; no running SDK replacement.
 - Engine defaults/persistence/page toggle tests5/5 passed. Actual TestScene2 off/on/off captures confirm Off matches pre-fix baseline byte-for-byte; On removes the arch strip. Two SDK classes compiled against updated engine. TestScene3 remains unavailable, per user. No full SDK build/deployment, commit/push.
+
+## 待办：完善地形编辑器（2026-11-22）
+
+- [ ] 先盘点现有新建/导入、地形画刷、材质绘制及保存能力，结合实际场景确认最影响使用的缺口和优先级。
+- [ ] 优先验收高度与材质编辑的笔刷反馈、撤销/重做和保存重载。再评估大地形编辑性能、分块边缘、碰撞同步及新版渲染路径的预览；将确认的问题拆成独立任务。
+- 下次继续 SDK 地形工具、Terrain、画刷或大地形集成时，主动提醒用户这项待办。引擎侧 VT（含 LightProbe 烘焙评估）和 Virtual Shadow Maps 见引擎的 `RENDERING_QUALITY_ROADMAP.md`。本次仅登记计划，无实现或构建。
