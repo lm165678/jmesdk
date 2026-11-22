@@ -28,6 +28,7 @@ import org.openide.util.datatransfer.PasteType;
  * model dependencies do not also receive standalone texture dialogs.
  * <pre>
  * 第一步：从资源管理器复制或拖入文件/文件夹到 Project Assets 或 Asset Browser。
+ * 单独拖入分离式 glTF 时，读取同目录下由 glTF 声明的 BIN 和纹理，保留其相对目录。
  * 第二步：逐个确认模型或纹理选项；Copy original resources 默认关闭。
  * 第三步：确认后提交 J3O/DDS；取消丢弃整批临时转换，不改动项目。
  * 第四步：需要源文件时勾选保留；重新导入遇到同名输出会报错，不覆盖已有编辑。
@@ -294,6 +295,13 @@ public final class ExternalAssetImport {
             if (onDisk && inputs.keySet().stream().noneMatch(p -> model(p) || image(p) || media(p))) {
                 return;
             }
+            Set<Path> originalInputs = Set.copyOf(inputs.keySet());
+            Map<Path, Set<Path>> gltfDependencies = new HashMap<>();
+            for (Path relative : originalInputs) {
+                if ("gltf".equals(extension(relative))) {
+                    gltfDependencies.put(relative, addGltfDependencies(inputs, relative, root, onDisk));
+                }
+            }
             stage = FileUtil.normalizeFile(Files.createTempDirectory(root.getParent(), ".jme-import-").toFile()).toPath();
             for (var entry : inputs.entrySet()) {
                 Path staged = stage.resolve(entry.getKey());
@@ -312,7 +320,7 @@ public final class ExternalAssetImport {
                     continue;
                 }
                 FileObject source = staging.getAssetFolder().getFileObject(key(relative));
-                Set<Path> dependencies = new HashSet<>();
+                Set<Path> dependencies = new HashSet<>(gltfDependencies.getOrDefault(relative, Set.of()));
                 List<String> missing = new ArrayList<>();
                 com.jme3.asset.AssetEventListener listener = new com.jme3.asset.AssetEventListener() {
                     @Override public void assetLoaded(com.jme3.asset.AssetKey asset) {
@@ -458,7 +466,10 @@ public final class ExternalAssetImport {
             publish(stage, root, outputs);
             published = true;
             if (onDisk) {
-                for (Path relative : consumed) {
+                for (Path relative : originalInputs) {
+                    if (!consumed.contains(relative)) {
+                        continue;
+                    }
                     Path original = inputs.get(relative);
                     if (original != null && !retain.contains(relative) && !outputs.contains(relative)
                             && Files.mismatch(original, stage.resolve(relative)) == -1) {
@@ -485,6 +496,59 @@ public final class ExternalAssetImport {
                 }
             }
         }
+    }
+
+    private static Set<Path> addGltfDependencies(Map<Path, Path> inputs, Path model, Path root, boolean onDisk)
+            throws IOException {
+        Path source = inputs.get(model);
+        Path sourceFolder = source.getParent();
+        Path allowedFolder = onDisk ? root : sourceFolder;
+        Path destinationFolder = model.getParent() == null ? Path.of("") : model.getParent();
+        Set<Path> dependencies = new LinkedHashSet<>();
+        try (var reader = Files.newBufferedReader(source)) {
+            var document = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
+            for (String section : List.of("buffers", "images")) {
+                var entries = document.getAsJsonArray(section);
+                if (entries == null) {
+                    continue;
+                }
+                for (var entry : entries) {
+                    var uri = entry.getAsJsonObject().get("uri");
+                    if (uri == null || uri.isJsonNull()) {
+                        continue;
+                    }
+                    String reference = uri.getAsString();
+                    if (reference.startsWith("data:")) {
+                        continue;
+                    }
+                    // Match GltfLoader, including %2F used by Godot for texture subdirectories.
+                    String decoded = java.net.URLDecoder.decode(reference, java.nio.charset.StandardCharsets.UTF_8);
+                    if (decoded.isEmpty() || decoded.indexOf(':') >= 0 || decoded.indexOf('\\') >= 0
+                            || reference.indexOf('?') >= 0 || reference.indexOf('#') >= 0) {
+                        throw new IOException("Expected a local glTF dependency path: " + reference);
+                    }
+                    Path path = Path.of(decoded);
+                    Path dependency = sourceFolder.resolve(path).normalize();
+                    Path destination = destinationFolder.resolve(path).normalize();
+                    if (path.isAbsolute() || !dependency.startsWith(allowedFolder)
+                            || destination.startsWith("..")) {
+                        throw new IOException("glTF dependency is outside the import folder: " + reference);
+                    }
+                    Path existing = inputs.get(destination);
+                    if (existing != null && !existing.equals(dependency)) {
+                        throw new IOException("Conflicting glTF dependency at " + destination);
+                    }
+                    if (!Files.isRegularFile(dependency) || !dependency.toRealPath().startsWith(allowedFolder.toRealPath())) {
+                        throw new IOException("Missing or inaccessible glTF dependency: " + dependency);
+                    }
+                    addInput(inputs, destination, dependency);
+                    dependencies.add(destination);
+                }
+            }
+        } catch (com.google.gson.JsonParseException | IllegalArgumentException | IllegalStateException failure) {
+            throw new IOException("Invalid glTF dependency list: " + source.getFileName(), failure);
+        }
+        return dependencies;
     }
 
     private static void addInput(Map<Path, Path> inputs, Path relative, Path source) throws IOException {

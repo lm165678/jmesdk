@@ -859,3 +859,9 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - Implementation pair: SDK 217d403bc968311e34cb8ab6f5f2bb0ad93c2b7e (master), engine 7b31f949e3bdfb3d1332a6b3abf6034875979869 (dev_fix_lightprobe_issue). Documentation-only commits follow.
 - Current sources/tests and prior validation records are collected; no additional full build or full-suite run for this push. SDK generated templates, native libraries, testdata JAR, generated ZIPs and local build counters remain local.
 - Fork destinations: lm165678/jmesdk and lm165678/jmonkeyengine. Remote success must be verified after pushing.
+
+## 2026-11-22 分离式 glTF 导入和镜像碰撞
+
+- 从 Project Assets 或 Asset Browser 拖入或粘贴单个 `.gltf` 时，读取 `buffers[].uri` 和 `images[].uri`，按目录布局复制本地 BIN 和图片到导入暂存区。URI 解码与现有 glTF 加载器一致，支持 Godot 的 `%2F`，跳过内嵌数据，外部导入限制在模型目录内，缺失或越界路径在转换前报错。依赖随模型处理，避免单独弹纹理转换框。保留源文件选项包括依赖，项目内已存在但不在本次批次的依赖不会被清理。
+- 静态网格含镜像缩放时使用转换专用的几何烘焙，将有符号变换写入碰撞顶点，反射时修正三角形绕序，保持 Minie 缩放为正值。不改渲染网格、编辑器控制器或 Minie；无镜像模型继续走原工厂，盒、球及角色胶囊路径保持原实现。
+- Windows JDK25 定向编译通过。GLTF_SIDECARS_AND_MIRRORED_COLLISION_PASS 使用实际 AbandonedSpaceship.gltf 验证从单文件收集一个 BIN 和 24 张纹理、加载、Minie 碰撞生成及 J3O 保存重载，另用正负缩放偏移模型比较射线命中。EXTERNAL_ASSET_IMPORT_PASS 和 EDITOR_PHYSICS_PASS 通过。未运行完整 SDK 的拖放界面及该模型的 GPU 表面卡片烘焙，未构建 SDK。基线 SDK 6687d57d / engine 86a9556b4，无引擎源码改动。
