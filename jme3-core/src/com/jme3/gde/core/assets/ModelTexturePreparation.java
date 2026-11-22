@@ -82,6 +82,11 @@ final class ModelTexturePreparation {
     }
 
     static void prepare(Spatial model, ProjectAssetManager assets, FileObject sourceModel) throws IOException {
+        prepare(model, assets, sourceModel, null);
+    }
+
+    static void prepare(Spatial model, ProjectAssetManager assets, FileObject sourceModel,
+            java.util.function.Consumer<String> phase) throws IOException {
         if (assets == null || assets.getAssetFolder() == null) {
             throw new IOException("Texture conversion requires a project asset root");
         }
@@ -132,7 +137,9 @@ final class ModelTexturePreparation {
         TextureToolchain tools = TextureToolchain.installed();
         boolean portableDds = fbx && !tools.hasConfiguredDdsEncoder();
         Map<String, Path> outputs = new LinkedHashMap<>();
+        int textureNumber = 0;
         for (String key : keys.keySet()) {
+            textureNumber++;
             if (keys.get(key) && store.source(key) == null) {
                 LOG.info("Skipping already compressed imported texture: " + key);
                 continue;
@@ -142,6 +149,10 @@ final class ModelTexturePreparation {
                 continue;
             }
             try {
+                if (phase != null) {
+                    phase.accept("Preparing texture " + textureNumber + " / " + keys.size() + ": "
+                            + key.substring(key.lastIndexOf('/') + 1));
+                }
                 Path output;
                 if (!fbx) {
                     output = store.ensureLogicalDds(key, tools);

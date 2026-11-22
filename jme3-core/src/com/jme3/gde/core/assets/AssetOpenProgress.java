@@ -25,13 +25,22 @@ import org.openide.windows.WindowManager;
 public final class AssetOpenProgress implements AutoCloseable {
     private static final ConcurrentHashMap<FileObject, AssetOpenProgress> ACTIVE = new ConcurrentHashMap<>();
     private final FileObject file;
+    private final String title;
+    private final String label;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ProgressHandle handle;
     private JDialog dialog;
+    private JLabel detail;
 
     private AssetOpenProgress(FileObject file) {
+        this(file, AnimationEditorMessages.text("Animation.Opening_asset"), file.getNameExt());
+    }
+
+    private AssetOpenProgress(FileObject file, String title, String label) {
         this.file = file;
-        handle = ProgressHandle.createHandle(AnimationEditorMessages.text("Animation.Opening_asset") + " " + file.getNameExt());
+        this.title = title;
+        this.label = label;
+        handle = ProgressHandle.createHandle(title + " " + label);
     }
 
     public static AssetOpenProgress begin(DataObject data) {
@@ -45,10 +54,42 @@ public final class AssetOpenProgress implements AutoCloseable {
             });
             return null;
         }
-        progress.handle.setInitialDelay(0);
-        progress.handle.start();
-        EventQueue.invokeLater(progress::show);
+        progress.start();
         return progress;
+    }
+
+    /**
+     * 第一步：后台开始扫描文件时显示导入进度。第二步：弹出转换选项时暂时隐藏，
+     * 确认后恢复。第三步：完成、失败或取消时关闭窗口。
+     */
+    static AssetOpenProgress beginImport(String label) {
+        var progress = new AssetOpenProgress(null, "Importing assets", label);
+        progress.start();
+        return progress;
+    }
+
+    private void start() {
+        handle.setInitialDelay(0);
+        handle.start();
+        EventQueue.invokeLater(this::show);
+    }
+
+    void phase(String message) {
+        handle.progress(message);
+        EventQueue.invokeLater(() -> {
+            if (detail != null) {
+                detail.setText(message);
+            }
+        });
+    }
+
+    // Called on EDT before and after the modal conversion options.
+    void setDialogVisible(boolean visible) {
+        if (visible) {
+            show();
+        } else if (dialog != null) {
+            dialog.setVisible(false);
+        }
     }
 
     public static AssetOpenProgress current(DataObject data) {
@@ -59,18 +100,25 @@ public final class AssetOpenProgress implements AutoCloseable {
         if (closed.get() || GraphicsEnvironment.isHeadless()) {
             return;
         }
-        dialog = new JDialog(WindowManager.getDefault().getMainWindow(),
-                AnimationEditorMessages.text("Animation.Opening_asset"), false);
+        if (dialog != null) {
+            dialog.setVisible(true);
+            return;
+        }
+        dialog = new JDialog(WindowManager.getDefault().getMainWindow(), title, false);
+        if (file == null) {
+            dialog.setAutoRequestFocus(false);
+        }
         dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
         JPanel content = new JPanel(new BorderLayout(0, 12));
         content.setBorder(BorderFactory.createEmptyBorder(16, 18, 16, 18));
-        JLabel name = new JLabel(file.getNameExt());
-        name.setToolTipText(file.getPath());
+        JLabel name = new JLabel(label);
+        name.setToolTipText(file == null ? label : file.getPath());
         content.add(name, BorderLayout.NORTH);
         JProgressBar bar = new JProgressBar();
         bar.setIndeterminate(true);
         content.add(bar, BorderLayout.CENTER);
-        content.add(new JLabel(AnimationEditorMessages.text("Animation.Opening_asset_wait")), BorderLayout.SOUTH);
+        detail = new JLabel(file == null ? "Checking files..." : AnimationEditorMessages.text("Animation.Opening_asset_wait"));
+        content.add(detail, BorderLayout.SOUTH);
         dialog.setContentPane(content);
         dialog.setSize(440, 150);
         dialog.setResizable(false);
@@ -81,12 +129,15 @@ public final class AssetOpenProgress implements AutoCloseable {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            ACTIVE.remove(file, this);
+            if (file != null) {
+                ACTIVE.remove(file, this);
+            }
             handle.finish();
             EventQueue.invokeLater(() -> {
                 if (dialog != null) {
                     dialog.dispose();
                     dialog = null;
+                    detail = null;
                 }
             });
         }

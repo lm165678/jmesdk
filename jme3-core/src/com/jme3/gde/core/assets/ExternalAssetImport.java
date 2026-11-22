@@ -193,7 +193,7 @@ public final class ExternalAssetImport {
                     files = new ArrayList<>(pending);
                     pending.clear();
                 }
-                if (!files.isEmpty()) {
+                if (files.stream().anyMatch(ExternalAssetImport::needsConversion)) {
                     run(manager, manager.getAssetFolder(), files, true);
                 }
             });
@@ -240,6 +240,10 @@ public final class ExternalAssetImport {
     private static boolean model(Path path) {
         return Set.of("fbx", "gltf", "glb", "obj", "dae", "blend", "3ds").contains(extension(path));
     }
+
+    private static boolean needsConversion(Path path) {
+        return model(path) || image(path) || media(path);
+    }
     private static boolean media(Path path) {
         return Set.of("mp3", "mp4", "m4a", "aac", "flac").contains(extension(path));
     }
@@ -253,8 +257,15 @@ public final class ExternalAssetImport {
     private static String key(Path path) {
         return path.toString().replace('\\', '/');
     }
-    private static <T> T ui(Callable<T> action) throws Exception {
-        java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(action);
+    private static <T> T ui(AssetOpenProgress progress, Callable<T> action) throws Exception {
+        java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(() -> {
+            progress.setDialogVisible(false);
+            T result = action.call();
+            if (result != null) {
+                progress.setDialogVisible(true);
+            }
+            return result;
+        });
         SwingUtilities.invokeAndWait(task);
         return task.get();
     }
@@ -266,6 +277,17 @@ public final class ExternalAssetImport {
     }
 
     private static void run(ProjectAssetManager manager, FileObject destination, List<Path> sources, boolean onDisk) {
+        if (sources.isEmpty()) {
+            return;
+        }
+        String label = sources.size() == 1 ? sources.getFirst().getFileName().toString() : sources.size() + " items";
+        try (AssetOpenProgress progress = AssetOpenProgress.beginImport(label)) {
+            importFiles(manager, destination, sources, onDisk, progress);
+        }
+    }
+
+    private static void importFiles(ProjectAssetManager manager, FileObject destination, List<Path> sources, boolean onDisk,
+            AssetOpenProgress progress) {
         Path stage = null;
         boolean published = false;
         try {
@@ -292,9 +314,10 @@ public final class ExternalAssetImport {
                             : root.relativize(target).resolve(source.getFileName()), source);
                 }
             }
-            if (onDisk && inputs.keySet().stream().noneMatch(p -> model(p) || image(p) || media(p))) {
+            if (onDisk && inputs.keySet().stream().noneMatch(ExternalAssetImport::needsConversion)) {
                 return;
             }
+            progress.phase("Finding model dependencies...");
             Set<Path> originalInputs = Set.copyOf(inputs.keySet());
             Map<Path, Set<Path>> gltfDependencies = new HashMap<>();
             for (Path relative : originalInputs) {
@@ -302,6 +325,7 @@ public final class ExternalAssetImport {
                     gltfDependencies.put(relative, addGltfDependencies(inputs, relative, root, onDisk));
                 }
             }
+            progress.phase("Preparing " + inputs.size() + " source files...");
             stage = FileUtil.normalizeFile(Files.createTempDirectory(root.getParent(), ".jme-import-").toFile()).toPath();
             for (var entry : inputs.entrySet()) {
                 Path staged = stage.resolve(entry.getKey());
@@ -319,6 +343,7 @@ public final class ExternalAssetImport {
                 if (!model(relative)) {
                     continue;
                 }
+                progress.phase("Reading model: " + relative.getFileName());
                 FileObject source = staging.getAssetFolder().getFileObject(key(relative));
                 Set<Path> dependencies = new HashSet<>(gltfDependencies.getOrDefault(relative, Set.of()));
                 List<String> missing = new ArrayList<>();
@@ -358,7 +383,7 @@ public final class ExternalAssetImport {
                 dependencies.add(relative);
                 var analysis = ModelConversionAnalysis.inspect(loaded);
                 boolean[] keep = {false};
-                ModelConversionOptions options = ui(() -> {
+                ModelConversionOptions options = ui(progress, () -> {
                     JCheckBox checkbox = new JCheckBox("Copy original resources to Assets", false);
                     ModelConversionOptions result = ModelConversionOptions.ask(analysis, relative.toString(), checkbox, manager);
                     keep[0] = checkbox.isSelected();
@@ -367,7 +392,9 @@ public final class ExternalAssetImport {
                 if (options == null) {
                     return;
                 }
-                Spatial prepared = ModelConversionPreparation.prepareForExport(loaded, options, staging, manager, source);
+                progress.phase("Converting model: " + relative.getFileName());
+                Spatial prepared = ModelConversionPreparation.prepareForExport(
+                        loaded, options, staging, manager, source, progress::phase);
                 if (options.importsSourceMaterials()) {
                     outputs.addAll(directTextureKeys(prepared, staging, stage));
                 }
@@ -375,6 +402,7 @@ public final class ExternalAssetImport {
                 if (inputs.containsKey(output)) {
                     throw new IOException("Batch already contains the model output: " + output);
                 }
+                progress.phase("Writing model: " + output.getFileName());
                 BinaryExporter.getInstance().save(prepared, stage.resolve(output).toFile());
                 outputs.add(output);
                 used.addAll(dependencies);
@@ -388,14 +416,16 @@ public final class ExternalAssetImport {
                 if (used.contains(relative) || !image(relative)) {
                     continue;
                 }
+                progress.phase("Reading texture: " + relative.getFileName());
                 BufferedImage pixels = ImageIO.read(stage.resolve(relative).toFile());
                 if (pixels == null) {
                     throw new IOException("Cannot decode " + relative);
                 }
-                TextureChoice choice = ui(() -> textureChoice(relative, pixels));
+                TextureChoice choice = ui(progress, () -> textureChoice(relative, pixels));
                 if (choice == null) {
                     return;
                 }
+                progress.phase("Converting texture: " + relative.getFileName());
                 BufferedImage resized = new BufferedImage(choice.width(), choice.height(), BufferedImage.TYPE_INT_ARGB);
                 var graphics = resized.createGraphics();
                 graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
@@ -418,7 +448,7 @@ public final class ExternalAssetImport {
                 if (!media(relative)) {
                     continue;
                 }
-                int[] choice = ui(() -> {
+                int[] choice = ui(progress, () -> {
                     JPanel rows = new JPanel(new java.awt.GridLayout(0, 2, 8, 6));
                     JComboBox<Integer> rate = new JComboBox<>(new Integer[]{44100, 48000, 22050});
                     JComboBox<Integer> bitrate = new JComboBox<>(new Integer[]{160, 96, 128, 192, 256});
@@ -444,6 +474,7 @@ public final class ExternalAssetImport {
                 if (inputs.containsKey(output)) {
                     throw new IOException("Batch contains audio output: " + output);
                 }
+                progress.phase("Converting audio: " + relative.getFileName());
                 AudioImportConverter.convert(stage.resolve(relative), stage.resolve(output), choice[0], choice[1]);
                 outputs.add(output);
                 consumed.add(relative);
@@ -451,6 +482,7 @@ public final class ExternalAssetImport {
                     retain.add(relative);
                 }
             }
+            progress.phase("Saving imported assets...");
             // Non-convertible files are copied as-is, except consumed model sidecars.
             for (Path relative : inputs.keySet()) {
                 if (!consumed.contains(relative)) {
@@ -479,7 +511,14 @@ public final class ExternalAssetImport {
             }
             manager.clearCache();
             manager.getAssetFolder().refresh(true);
+            if (!outputs.isEmpty()) {
+                String output = outputs.stream().filter(path -> "j3o".equals(extension(path))).findFirst()
+                        .map(ExternalAssetImport::key).orElse(outputs.size() + " files");
+                SwingUtilities.invokeLater(() -> org.openide.awt.StatusDisplayer.getDefault()
+                        .setStatusText("Import complete: " + output));
+            }
         } catch (Exception failure) {
+            progress.close();
             error(failure);
         } finally {
             if (stage != null) {

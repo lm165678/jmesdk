@@ -872,3 +872,10 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - 从 Project Assets 或 Asset Browser 拖入或粘贴单个 `.gltf` 时，读取 `buffers[].uri` 和 `images[].uri`，按目录布局复制本地 BIN 和图片到导入暂存区。URI 解码与现有 glTF 加载器一致，支持 Godot 的 `%2F`，跳过内嵌数据，外部导入限制在模型目录内，缺失或越界路径在转换前报错。依赖随模型处理，避免单独弹纹理转换框。保留源文件选项包括依赖，项目内已存在但不在本次批次的依赖不会被清理。
 - 静态网格含镜像缩放时使用转换专用的几何烘焙，将有符号变换写入碰撞顶点，反射时修正三角形绕序，保持 Minie 缩放为正值。不改渲染网格、编辑器控制器或 Minie；无镜像模型继续走原工厂，盒、球及角色胶囊路径保持原实现。
 - Windows JDK25 定向编译通过。GLTF_SIDECARS_AND_MIRRORED_COLLISION_PASS 使用实际 AbandonedSpaceship.gltf 验证从单文件收集一个 BIN 和 24 张纹理、加载、Minie 碰撞生成及 J3O 保存重载，另用正负缩放偏移模型比较射线命中。EXTERNAL_ASSET_IMPORT_PASS 和 EDITOR_PHYSICS_PASS 通过。未运行完整 SDK 的拖放界面及该模型的 GPU 表面卡片烘焙，未构建 SDK。基线 SDK 6687d57d / engine 86a9556b4，无引擎源码改动。
+
+## 2026-11-22 外部模型导入进度窗口
+
+- Asset Browser / Project Assets 共用的外部导入在读取前显示非模态进度窗口，依次显示依赖检查、暂存、模型读取、烘焙、当前纹理、写入 J3O 和发布。转换选项出现时暂时隐藏窗口，确认后恢复，取消或异常时关闭。只有发布和资源刷新完成才显示 Import complete。打开已有资产的进度入口仍沿用原先的去重和窗口流程。
+- 用户的 TestGame 暂存目录有 11 张已完成 DDS 和未完成纹理临时文件，原 SDK 日志在此阶段开始关闭模块，尚无 J3O 发布记录。原始 glTF 有六个使用法线贴图且缺 UV0 的片段，导入仍可继续。4152 张表面卡片在 32px 时约 210.8 MiB，预算 64 MiB 自动降至 16px（约 52.7 MiB）。只补反馈，不更改切线、LOD、表面预算、碰撞或 DDS 算法。
+- Windows JDK25 定向编译、EXTERNAL_ASSET_IMPORT_PASS 通过。实际 AbandonedSpaceship.gltf 的原生 AWT 测试确认窗口先于选项出现，选项期间隐藏，确认后恢复。未构建或替换 SDK，无引擎源码改动。基线 SDK c4b1926d / 引擎 86a9556b4 加当前依赖。
+- SPACESHIP_IMPORT_PASS：RTX 5080 AWT/OpenGL、默认转换选项和已安装 JNI DDS 编码器完成单文件导入，发布 94,319,991 字节 J3O。SPACESHIP_RELOAD_PASS 验证刚体与 24 个外置 DDS 引用。独立测试目录为 build/spaceship-import-check/spaceship-12637236260070702264/assets，用户项目仅只读诊断。

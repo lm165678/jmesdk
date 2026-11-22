@@ -80,9 +80,18 @@ final class ModelConversionPreparation {
 
     static Spatial prepareForExport(Spatial source, ModelConversionOptions options, ProjectAssetManager assets,
             ProjectAssetManager materialLibrary, org.openide.filesystems.FileObject sourceFile) throws java.io.IOException {
+        return prepareForExport(source, options, assets, materialLibrary, sourceFile, null);
+    }
+
+    static Spatial prepareForExport(Spatial source, ModelConversionOptions options, ProjectAssetManager assets,
+            ProjectAssetManager materialLibrary, org.openide.filesystems.FileObject sourceFile,
+            java.util.function.Consumer<String> phase) throws java.io.IOException {
         Spatial result = prepare(source, options, assets, materialLibrary);
         if (options.importsSourceMaterials()) {
-            ModelTexturePreparation.prepare(result, assets, sourceFile);
+            if (phase != null) {
+                phase.accept("Preparing model textures: " + sourceFile.getNameExt());
+            }
+            ModelTexturePreparation.prepare(result, assets, sourceFile, phase);
         }
         return result;
     }
