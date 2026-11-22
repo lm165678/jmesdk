@@ -891,4 +891,5 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 
 - 普通网格 Bake 完成后，后台写入独立的细块资产版本目录；预览保留已有引用至发布完成，避免上传供拆分用的完整网格。发布成功后，场景引用粗层和块目录。保存 J3O 时写入这份引用，游戏资产需包含 GI/Streaming。导出失败保留本次内嵌结果，排队任务等到保存回调后才启动下一项。自适应和表面探针继续走原来的导出路径。
 - SceneComposer 的 World Settings / GI streaming 提供预取距离、最大细层驻留探针数和图集 MiB 预算，默认 64、8192、64，0 个细探针使用粗层。Apply 将设置提交给场景并标记待保存；恢复默认或调整运行时预算无需重新烘焙。游戏用配套引擎加载并挂载 J3O 后自动应用。
-- Windows JDK25 定向编译及 RTX 5080 原生 AWT 的 GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS 通过，覆盖 World Settings 面板提交及 J3O 重载，两个重叠 Volume 独立导出并在重载后保留引用，以及排队、恢复进度和取消。用户报告的旧场景重叠问题按要求延后，未复现场景。配套引擎基线 86a9556b4、SDK 基线 aea7fdbe 加本改动。未构建或替换 SDK。
+- Windows JDK25 定向编译及 RTX 5080 原生 AWT 的 GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS 通过，覆盖 World Settings 面板提交及 J3O 重载，两个重叠 Volume 独立导出并在重载后保留引用，以及排队、恢复进度和取消。旧场景重叠效果未在完整编辑器中复现。配套引擎基线 86a9556b4、SDK 基线 aea7fdbe 加本改动。未构建或替换 SDK。
+- 配套实现提交为引擎 8ba8a08ad 与 SDK 3038dd49。只读核查 TestScene5.j3o 中两份旧压缩资产及解码内容，重放图集分配确认 64 MiB 无法同时容纳，80 MiB 可接纳两份旧资产，无需为了扩容重烘焙。若要使用细块，则应以配套引擎和 SDK 重新普通烘焙并保存。未修改 TestGame 资产。
