@@ -1,3 +1,8 @@
+## 2026-11-23 paired half-resolution GI implementation checkpoint
+
+- Compatible implementation commits: SDK `51cd1dc39190cb3de4ce6806d022f93e9172fb4e` (master), engine `2e3021957b0054f1e65402fa899e950fb2748f08` (dev_fix_lightprobe_issue). Documentation-only commits may follow. Export/rebuild the paired engine before SDK packaging; this checkpoint does not install newly built SDK modules.
+- Future static/dynamic/local-dynamic classification, static Lightmap caching, optional spatial SH caching and dynamic DDGI update/storage plans are in the engine RENDERING_QUALITY_ROADMAP.md; they are not implemented by these commits. Preserve local generated archives, nbm revision and extracted resources; they are excluded from the source push.
+
 ## 2026-11-23 half-resolution GI and independent full-query fallback
 
 - Paired engine2f2e18698 / SDKe32e9a63 plus working trees. EditorGiStreamingPanel adds Half-resolution GI (default Off) and Full GI fallback (quality, default On); fallback editable only with half GI, preserves explicit choices, defaults restore Off/On. Apply mutates WorldSettings on render thread, marks scene modified on EDT; both options persist in J3O. GiPreview applies them before rendering. No bake format changes or rebake required.
