@@ -1,3 +1,8 @@
+## 2026-11-24 Static mobility for new scenes
+
+- The empty-scene J3O template now explicitly sets Scene Root to Static so inherited rigid receivers remain eligible for Lightmap baking when attached under another node. Existing assets retain their saved policy. Explicit child mobility and animation inference follow the engine's existing rules.
+- Reloaded the template and checked an inherited child and a Dynamic child under a Dynamic parent. Rebuilt the local SceneComposer module. This uses the existing engine Mobility API and does not require a new engine build.
+
 ## 2026-11-24 SceneComposer resource lookup
 
 - TestScene2 loaded successfully, but SceneComposer construction failed when the GI panel requested `Editor.GiSingleVisibility`. Both new GI labels now use the `Editor.` prefix used by EditorMessages.
