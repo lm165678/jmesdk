@@ -17,6 +17,8 @@ import java.util.logging.*;
  * is restricted to drawing so save/undo sees original materials.
  */
 final class GiPreview implements AutoCloseable {
+    private final Set<com.jme3.environment.gi.ProbeLightmapControl> lightmaps =
+            Collections.newSetFromMap(new IdentityHashMap<>());
     private record Source(String id, GiProbeData data, String asset,
             GiProbeStreamingData bricks, Vector3f offset) { }
     private final Map<GiProbeVolume, Source> sources = new IdentityHashMap<>();
@@ -90,9 +92,18 @@ final class GiPreview implements AutoCloseable {
                 stream.setUnloadMultiplier(1.3);
             }
             stream.setFineStreaming(settings.getPreloadDistance(), settings.getMaxFineProbes());
+            stream.setSingleProbeVisibility(previewWorld != null && previewWorld.isSingleProbeVisibility());
+            stream.setOctahedralProbeIrradiance(previewWorld != null && previewWorld.isOctahedralProbeIrradiance());
             Set<GiProbeVolume> seen = Collections.newSetFromMap(new IdentityHashMap<>());
             Set<Material> materials = Collections.newSetFromMap(new IdentityHashMap<>());
+            Set<com.jme3.environment.gi.ProbeLightmapControl> seenLightmaps =
+                    Collections.newSetFromMap(new IdentityHashMap<>());
             root.depthFirstTraversal(spatial -> {
+                var lightmap = spatial.getControl(com.jme3.environment.gi.ProbeLightmapControl.class);
+                if (lightmap != null) {
+                    seenLightmaps.add(lightmap);
+                    lightmap.updateResidency(request.getManager(), app.getCamera().getLocation(), true);
+                }
                 if (spatial instanceof GiProbeVolume volume) {
                     Source old = sources.get(volume);
                     if (GiStreamingAssets.isWritingBricks(volume)) {
@@ -124,6 +135,14 @@ final class GiPreview implements AutoCloseable {
                     materials.add(geometry.getMaterial());
                 }
             });
+            lightmaps.removeIf(lightmap -> {
+                if (!seenLightmaps.contains(lightmap)) {
+                    lightmap.clearResidency();
+                    return true;
+                }
+                return false;
+            });
+            lightmaps.addAll(seenLightmaps);
             Iterator<Map.Entry<GiProbeVolume, Source>> iterator = sources.entrySet().iterator();
             while (iterator.hasNext()) {
                 Map.Entry<GiProbeVolume, Source> entry = iterator.next();
@@ -176,6 +195,8 @@ final class GiPreview implements AutoCloseable {
 
     @Override
     public void close() {
+        lightmaps.forEach(com.jme3.environment.gi.ProbeLightmapControl::clearResidency);
+        lightmaps.clear();
         if (stream != null) {
             stream.close();
             stream = null;

@@ -331,6 +331,7 @@ public class JmeSpatial extends AbstractSceneExplorerNode {
         set.put(makeProperty(obj, CullHint.class, "getLocalCullHint", "setCullHint", "Local Cull Hint"));
         //set.put(makeProperty(obj, ShadowMode.class, "getShadowMode", "Shadow Mode"));
         set.put(makeProperty(obj, ShadowMode.class, "getLocalShadowMode", "setShadowMode", "Local Shadow Mode"));
+        set.put(makeProperty(obj, com.jme3.scene.Mobility.class, "getLocalMobility", "setMobility", "Mobility"));
         set.put(makeProperty(obj, LightList.class, "getWorldLightList", "World Light List"));
 
         set.put(makeProperty(obj, RenderQueue.Bucket.class, "getQueueBucket", "setQueueBucket", "Queue Bucket"));

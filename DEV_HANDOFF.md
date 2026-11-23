@@ -1,3 +1,12 @@
+## 2026-11-23 xatlas UV2, dual probe GI and static Lightmaps
+
+- Pair with engine implementation `985834fb2` on dev_fix_lightprobe_issue. Export that engine when rebuilding the SDK. SceneComposer persists separate single-Chebyshev and octahedral-irradiance toggles (both off initially), and the scene inspector edits persistent Mobility on spatials and lights.
+- Convert Model defaults Generate lightmap UVs on for rigid models and off when skinning is detected. Existing UV2 is retained. Generated UV2 remaps chart seams while retaining UV0, vertex attributes, and existing LOD indices. Runtime uses live probes for simplified LODs, whose triangles can cross UV charts.
+- The xatlas JNI bridge pins upstream revision `16ace528acd2cf1f16a7c0dde99c42c486488dbe`. The ufbx native workflow builds and stages xatlas beside ufbx for Windows, Linux, and macOS on x64 and ARM64. Release preparation checks all six targets and bundles the MIT license. Native hosts run an xatlas JNI unwrap smoke in CI; Windows ARM64 is cross-compiled. The SDK locates its bundled native library by OS/architecture, with `-J-Djme.sdk.xatlas.library=` for local verification.
+- After a complete regular volume bake, SceneComposer creates external Lightmaps in `GI/Lightmaps/` for supported rigid static PBR/Phong receivers, generating missing UV2 through xatlas. Coverage fallback, distance unloading, and supported material/volume limitations are recorded in the paired engine handoff. No production project assets were changed during verification.
+- Targeted compilation of the changed SDK classes passed. The Windows x64 JNI smoke generated UV2, preserved existing LODs and reloaded the resulting J3O. The engine OpenGL smoke passed on RTX 5080. Full SDK packaging and interactive SceneComposer acceptance were not run.
+- Windows x64 and macOS x64/ARM64 binaries built locally and verified for architecture and JNI symbol; Windows x64 additionally passed runtime loading. Zig failed during the Windows ARM64 and Linux x64/ARM64 link steps on this host due to child-process access errors. The six-target runner workflow was configured and not dispatched.
+
 ## 2026-11-23 paired half-resolution GI implementation checkpoint
 
 - Compatible implementation commits: SDK `51cd1dc39190cb3de4ce6806d022f93e9172fb4e` (master), engine `2e3021957b0054f1e65402fa899e950fb2748f08` (dev_fix_lightprobe_issue). Documentation-only commits may follow. Export/rebuild the paired engine before SDK packaging; this checkpoint does not install newly built SDK modules.

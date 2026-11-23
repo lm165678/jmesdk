@@ -1,4 +1,4 @@
-name: Build ufbx JNI libraries
+name: Build ufbx and xatlas JNI libraries
 
 on:
   workflow_call:
@@ -45,6 +45,12 @@ jobs:
           ref: 26a482ae66871d7de36eb722aa060bce95bce274
           path: build/ufbx-jni/source
           persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jpcy/xatlas
+          ref: 16ace528acd2cf1f16a7c0dde99c42c486488dbe
+          path: build/xatlas-jni/source
+          persist-credentials: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -66,6 +72,14 @@ jobs:
             --prefix "$PWD/build/ufbx-jni/stage/$TARGET"
           test -s "build/ufbx-jni/stage/$TARGET/$LIBRARY"
           test -s "build/ufbx-jni/stage/$TARGET/LICENSE-ufbx.txt"
+          cmake -S jme3-core/native/xatlas -B build/xatlas-jni/compile \
+            -DXATLAS_SOURCE_DIR="$PWD/build/xatlas-jni/source" \
+            -DCMAKE_BUILD_TYPE=Release "${platform_args[@]}"
+          cmake --build build/xatlas-jni/compile --config Release --parallel
+          cmake --install build/xatlas-jni/compile --config Release \
+            --prefix "$PWD/build/ufbx-jni/stage/$TARGET"
+          test -s "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/xatlas}"
+          test -s "build/ufbx-jni/stage/$TARGET/LICENSE-xatlas.txt"
       - name: Load the JNI library and parse an FBX fixture
         # This artifact is cross-compiled on an x64 host.
         if: matrix.target != 'windows-arm64'
@@ -96,6 +110,40 @@ jobs:
           java --enable-native-access=ALL-UNNAMED -cp build/ufbx-jni/smoke com.jme3.gde.autodesk.UfbxLoader \
             "build/ufbx-jni/stage/$TARGET/$LIBRARY" \
             build/ufbx-jni/source/data/blender_272_cube_7400_binary.fbx
+      - name: Generate lightmap UVs through the xatlas JNI library
+        # This artifact is cross-compiled on an x64 host.
+        if: matrix.target != 'windows-arm64'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          LIBRARY: ${{ matrix.library }}
+        run: |
+          set -euo pipefail
+          cat > build/xatlas-jni/LightmapUvGenerator.java <<'JAVA'
+          package com.jme3.gde.core.assets;
+          import java.nio.file.Path;
+          public class LightmapUvGenerator {
+              private static native int[] unwrap(float[] xyz, int[] indices) throws java.io.IOException;
+              public static void main(String[] args) throws Exception {
+                  System.load(Path.of(args[0]).toAbsolutePath().toString());
+                  int[] indices = {0, 1, 2, 0, 2, 3};
+                  int[] result = unwrap(new float[]{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0}, indices);
+                  if (result[0] < 4 || result.length != 1 + result[0] * 3 + indices.length) {
+                      throw new AssertionError("Missing xatlas remap data");
+                  }
+                  for (int i = 0; i < result[0]; i++) {
+                      float u = Float.intBitsToFloat(result[2 + i * 3]);
+                      float v = Float.intBitsToFloat(result[3 + i * 3]);
+                      if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) {
+                          throw new AssertionError("Invalid lightmap UV");
+                      }
+                  }
+              }
+          }
+          JAVA
+          javac -d build/xatlas-jni/smoke build/xatlas-jni/LightmapUvGenerator.java
+          java --enable-native-access=ALL-UNNAMED -cp build/xatlas-jni/smoke com.jme3.gde.core.assets.LightmapUvGenerator \
+            "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/xatlas}"
       - uses: actions/upload-artifact@v7
         with:
           name: ufbx-jni-${{ matrix.target }}

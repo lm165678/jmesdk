@@ -775,7 +775,7 @@ def ufbxReleaseDir = file('jme3-autodesk/release/lib/ufbx')
 
 tasks.register('prepareUfbxNatives') {
     group = 'build setup'
-    description = 'Collects precompiled ufbx JNI libraries for the SDK module.'
+    description = 'Collects precompiled ufbx and xatlas JNI libraries for the SDK.'
     doLast {
         def requireAll = providers.gradleProperty('requireUfbxNatives').getOrElse('false').toBoolean()
         def filesByTarget = ufbxNatives.collectEntries { platform, library ->
@@ -786,10 +786,11 @@ tasks.register('prepareUfbxNatives') {
             if (!input.isDirectory() && !requireAll) {
                 return
             }
-            filenames.each { name ->
+            def required = requireAll ? filenames + [filenames[0].replace('ufbx', 'xatlas'), 'LICENSE-xatlas.txt'] : filenames
+            required.each { name ->
                 def artifact = new File(input, name)
                 if (!artifact.isFile() || artifact.length() == 0) {
-                    throw new GradleException("Incomplete ufbx JNI bundle for ${platform}: missing ${artifact}")
+                    throw new GradleException("Incomplete SDK JNI bundle for ${platform}: missing ${artifact}")
                 }
             }
         }
@@ -800,6 +801,12 @@ tasks.register('prepareUfbxNatives') {
                     from input
                     include filenames
                     into new File(ufbxReleaseDir, platform)
+                }
+                def xatlasFiles = [filenames[0].replace('ufbx', 'xatlas'), 'LICENSE-xatlas.txt']
+                copy {
+                    from input
+                    include xatlasFiles
+                    into file("jme3-core/release/lib/xatlas/${platform}")
                 }
             }
         }
@@ -816,7 +823,9 @@ tasks.register('verifyLocalEngine') {
         def libraries = configurations.corelibs.resolvedConfiguration.resolvedArtifacts
         def required = [
             'jme3-core': ['com/jme3/renderer/pipeline/FrameGraphPipeline.class',
-                          'com/jme3/renderer/RenderPath.class'],
+                          'com/jme3/renderer/RenderPath.class',
+                          'com/jme3/environment/gi/ProbeLightmapControl.class',
+                          'com/jme3/scene/Mobility.class'],
             'jme3-plugins': ['com/jme3/scene/plugins/sdf/SdfVolume.class',
                              'com/jme3/scene/plugins/sdf/SurfaceBakeData.class']
         ]

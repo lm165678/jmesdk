@@ -194,6 +194,14 @@ final class ModelConversionPreparation {
                         LOG.warning("Skipped tangents (missing UV0): " + geometry.getName());
                     }
                 }
+                if (options.lightmapUv() && copy.getBuffer(Type.TexCoord2) == null
+                        && !copy.isAnimated() && copy.getMorphTargets().length == 0 && copy.getTriangleCount() > 0) {
+                    try {
+                        copy = LightmapUvGenerator.generate(copy);
+                    } catch (java.io.IOException error) {
+                        throw new java.io.UncheckedIOException("Lightmap UV generation failed for " + geometry.getName(), error);
+                    }
+                }
                 if (options.lod() && options.lodLevels() > 1 && copy.getTriangleCount() > 0) {
                     float[] reductions = new float[options.lodLevels() - 1];
                     for (int level = 0; level < reductions.length; level++) {

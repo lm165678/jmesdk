@@ -478,6 +478,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             // panel share the live volume. Never reapply a stale UI snapshot.
             app.getStateManager().attach(new BaseAppState() {
                 private GiAdaptiveBakeJob job;
+                private com.jme3.gde.core.scene.ProbeLightmapAssets lightmaps;
                 private boolean saving;
 
                 @Override
@@ -521,7 +522,14 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                         bake.cancel();
                     }
                     try {
-                        if (job.step(nanos)) {
+                        if (lightmaps == null && job.step(nanos)) {
+                            lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(app, request, volume);
+                        }
+                        if (bake.isCancelled()) {
+                            finish("Cancelled. Save or rebake the probe data as needed.");
+                            return;
+                        }
+                        if (lightmaps != null && lightmaps.step()) {
                             // Old data may still be shared by runtime bindings; do not dispose it here.
                             SwingUtilities.invokeLater(() -> file.setModified(true));
                             app.setGiPreviewEnabled(true);
@@ -549,7 +557,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                                     if (remaining.decrementAndGet() == 0) {
                                         finish(problems.isEmpty()
                                                 ? "Bake complete. Saved " + published.size()
-                                                        + " GI assets." + coverageReport + " Save the scene to keep their references."
+                                                        + " GI assets." + coverageReport + lightmaps.summary() + " Save the scene to keep their references."
                                                 : String.join(" | ", problems));
                                     }
                                 });

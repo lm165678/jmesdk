@@ -35,6 +35,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
     private final JButton defaults = new JButton(EditorMessages.text("GiStreamingDefaults"));
     private final JCheckBox halfGi = new JCheckBox(EditorMessages.text("GiHalfResolution"));
     private final JCheckBox fullFallback = new JCheckBox(EditorMessages.text("GiFullFallback"), true);
+    private final JCheckBox singleVisibility = new JCheckBox(EditorMessages.text("GiSingleVisibility"));
+    private final JCheckBox octahedral = new JCheckBox(EditorMessages.text("GiOctahedralIrradiance"));
     private SceneRequest scene;
 
     EditorGiStreamingPanel() {
@@ -48,6 +50,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
         add(halfGi);
         fullFallback.setToolTipText(EditorMessages.text("GiFullFallbackHint"));
         add(fullFallback);
+        add(singleVisibility);
+        add(octahedral);
         halfGi.addActionListener(event -> fullFallback.setEnabled(halfGi.isEnabled() && halfGi.isSelected()));
         add(defaults);
         add(apply);
@@ -69,6 +73,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
         fine.setEnabled(editable);
         atlas.setEnabled(editable);
         halfGi.setEnabled(editable);
+        singleVisibility.setEnabled(editable);
+        octahedral.setEnabled(editable);
         fullFallback.setEnabled(editable && halfGi.isSelected());
         apply.setEnabled(editable);
         defaults.setEnabled(editable);
@@ -79,13 +85,15 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
     }
 
     private void showSettings(GiStreaming settings, boolean halfResolution) {
-        showSettings(settings, halfResolution, true);
+        showSettings(settings, halfResolution, true, false, false);
     }
 
-    private void showSettings(GiStreaming settings, boolean halfResolution, boolean fallback) {
+    private void showSettings(GiStreaming settings, boolean halfResolution, boolean fallback, boolean single, boolean oct) {
         fullFallback.setSelected(fallback);
         fullFallback.setEnabled(halfGi.isEnabled() && halfResolution);
         halfGi.setSelected(halfResolution);
+        singleVisibility.setSelected(single);
+        octahedral.setSelected(oct);
         distance.setValue((double) settings.getPreloadDistance());
         fine.setValue(settings.getMaxFineProbes());
         atlas.setValue(settings.getAtlasMiB());
@@ -94,6 +102,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
     private void apply(GiStreaming values) {
         boolean halfResolution = halfGi.isSelected();
         boolean fallback = fullFallback.isSelected();
+        boolean single = singleVisibility.isSelected();
+        boolean oct = octahedral.isSelected();
         SceneRequest request = scene;
         if (request == null) {
             return;
@@ -113,6 +123,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
             world.setGiStreaming(values);
             world.setHalfResolutionProbeGi(halfResolution);
             world.setProbeGiFullFallback(fallback);
+            world.setSingleProbeVisibility(single);
+            world.setOctahedralProbeIrradiance(oct);
             EventQueue.invokeLater(() -> request.getDataObject().setModified(true));
             return null;
         });
@@ -127,10 +139,12 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
             GiStreaming values = world == null ? GiStreaming.DEFAULTS : world.getGiStreaming();
             boolean halfResolution = world != null && world.isHalfResolutionProbeGi();
             boolean fallback = world == null || world.isProbeGiFullFallback();
+            boolean single = world != null && world.isSingleProbeVisibility();
+            boolean oct = world != null && world.isOctahedralProbeIrradiance();
             EventQueue.invokeLater(() -> {
                 if (isDisplayable() && current == app.getCurrentSceneRequest()) {
                     scene = current;
-                    showSettings(values, halfResolution, fallback);
+                    showSettings(values, halfResolution, fallback, single, oct);
                     setEditable(current != null && current.getDataObject() != null && current.getRootNode() != null);
                 }
             });

@@ -110,6 +110,8 @@ public class JmeLight extends AbstractSceneExplorerNode {
         }
 
         createFields(Light.class, set, obj);
+        set.remove("Mobility");
+        set.put(makeProperty(obj, com.jme3.scene.Mobility.class, "getMobility", "setMobility", "Mobility"));
         // We don't want the user to mess with them
         set.remove("Frustum Check Needed");
         set.remove("Intersects Frustum");

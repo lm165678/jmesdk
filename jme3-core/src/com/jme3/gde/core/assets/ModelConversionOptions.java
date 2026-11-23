@@ -47,7 +47,7 @@ import com.jme3.gde.core.util.EditorMessages;
 public record ModelConversionOptions(boolean collision, Collision collisionShape,
         boolean lod, int lodLevels, boolean normals, boolean tangents,
         boolean sdf, boolean surface, boolean materials, AnimationEditorSupport.Preference editor, Bake bake,
-        boolean separateCollisionBodies, int desktopStartLevel, int mobileStartLevel, String materialSource) {
+        boolean separateCollisionBodies, int desktopStartLevel, int mobileStartLevel, String materialSource, boolean lightmapUv) {
     /** Low-cost defaults; budgets describe output payload, not whole-process memory. */
     public record Bake(int sdfX, int sdfY, int sdfZ, int sdfMiB,
             int surfaceResolution, int surfaceMiB, boolean reduceSurface) {
@@ -97,6 +97,14 @@ public record ModelConversionOptions(boolean collision, Collision collisionShape
             int desktopStartLevel, int mobileStartLevel) {
         this(collision, collisionShape, lod, lodLevels, normals, tangents, sdf, surface, materials,
                 editor, bake, separateCollisionBodies, desktopStartLevel, mobileStartLevel, null);
+    }
+
+    public ModelConversionOptions(boolean collision, Collision collisionShape, boolean lod,
+            int lodLevels, boolean normals, boolean tangents, boolean sdf, boolean surface,
+            boolean materials, AnimationEditorSupport.Preference editor, Bake bake, boolean separateCollisionBodies,
+            int desktopStartLevel, int mobileStartLevel, String materialSource) {
+        this(collision, collisionShape, lod, lodLevels, normals, tangents, sdf, surface, materials,
+                editor, bake, separateCollisionBodies, desktopStartLevel, mobileStartLevel, materialSource, false);
     }
 
     /** Uses animation detection by default, as for other new conversions. */
@@ -164,6 +172,8 @@ public record ModelConversionOptions(boolean collision, Collision collisionShape
         row(rows, "MobileStart", mobileStart);
         JCheckBox normals = flag(rows, "Normals");
         JCheckBox tangents = flag(rows, "Tangents");
+        JCheckBox lightmapUv = flag(rows, "LightmapUv");
+        lightmapUv.setSelected(analysis == null || !analysis.skinned());
         JCheckBox sdf = flag(rows, "Sdf");
         JCheckBox surface = flag(rows, "Surface");
         JSpinner sdfX = number(rows, "SDF X", 32, 2, 1024);
@@ -249,7 +259,7 @@ public record ModelConversionOptions(boolean collision, Collision collisionShape
                                 : animated.isSelected() ? AnimationEditorSupport.Preference.ANIMATION
                                 : AnimationEditorSupport.Preference.SCENE, bake, separate.isSelected(),
                         lod.isSelected() ? value(desktopStart) : 0, lod.isSelected() ? value(mobileStart) : 0,
-                        materialSource.getText().isEmpty() ? null : materialSource.getText());
+                        materialSource.getText().isEmpty() ? null : materialSource.getText(), lightmapUv.isSelected());
             } catch (IllegalArgumentException | java.text.ParseException error) {
                 DialogDisplayer.getDefault().notify(new NotifyDescriptor.Message(error.getMessage(), NotifyDescriptor.ERROR_MESSAGE));
             }
