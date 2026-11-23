@@ -825,6 +825,7 @@ tasks.register('verifyLocalEngine') {
             'jme3-core': ['com/jme3/renderer/pipeline/FrameGraphPipeline.class',
                           'com/jme3/renderer/RenderPath.class',
                           'com/jme3/environment/gi/ProbeLightmapControl.class',
+                          'com/jme3/environment/gi/ProbeLightmapAsset.class',
                           'com/jme3/scene/Mobility.class'],
             'jme3-plugins': ['com/jme3/scene/plugins/sdf/SdfVolume.class',
                              'com/jme3/scene/plugins/sdf/SurfaceBakeData.class']

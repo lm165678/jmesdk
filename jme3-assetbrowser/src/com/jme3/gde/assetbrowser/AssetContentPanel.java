@@ -471,7 +471,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
      */
     private long thumbnailRevision(Entry entry) {
         return switch (entry.kind()) {
-            case TEXTURE, AUDIO, SHADER -> refreshVersion;
+            case TEXTURE, LIGHTMAP, AUDIO, SHADER -> refreshVersion;
             default -> entry.file().getExt().equalsIgnoreCase("obj") ? objRevision : revision;
         };
     }
@@ -1059,6 +1059,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         }
         if (entry.file().isFolder()) {
             openFolder(entry);
+            return;
+        }
+        if (entry.kind() == AssetKind.LIGHTMAP) {
+            com.jme3.gde.core.assets.ProbeLightmapTopComponent.openPreview(entry.file());
             return;
         }
         if (entry.kind() == AssetKind.TEXTURE && AssetPreviewTextures.usesImageEditor(entry.file())) {

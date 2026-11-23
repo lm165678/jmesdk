@@ -1,3 +1,10 @@
+## 2026-11-24 tagged Lightmap assets and read-only preview
+
+- Pair with engine `6f6f25694ec61a7dc6942bb9198dd103d300ab8f`. New bake outputs have a `ProbeLightmapAsset` root and publish by atomic rename when supported. Geometry's control still stores only the external asset path and streaming settings. Runtime unwraps the texture or reads the previous bare `Texture2D` files. Linear RGBA16F remains the transport format; there is no Android ASTC conversion for this asset type.
+- The dedicated MIME loader looks at the J3O root without deserializing it. Renamed/moved tagged assets still open in Lightmap Preview. Existing bare textures are identified in `GI/Lightmaps/`; a model with nested texture/lightmap data keeps its model editor. The desktop preview displays irradiance with exposure, coverage, sky visibility and signed bent direction. Browser thumbnails are decoded on the CPU.
+- Overlapping volumes and embedded or external fine bricks participate in the baked field. Bounded source reads stay on workers. Failed or oversized regions retain live probing. Scene previews and production game assets were not modified during validation.
+- Verified targeted SDK compilation with annotation processors, the NetBeans MIME and DataObject OpenCookie lookup, CPU preview pixels for all four channels, and native OpenGL baking/streaming on RTX 5080. Complete SDK distribution and interactive editor load were not run. Windows ARM64 xatlas remains missing locally; standalone LLD failed to launch with AccessDenied.
+
 ## 2026-11-23 xatlas UV2, dual probe GI and static Lightmaps
 
 - Pair with engine implementation `985834fb2` on dev_fix_lightprobe_issue. Export that engine when rebuilding the SDK. SceneComposer persists separate single-Chebyshev and octahedral-irradiance toggles (both off initially), and the scene inspector edits persistent Mobility on spatials and lights.

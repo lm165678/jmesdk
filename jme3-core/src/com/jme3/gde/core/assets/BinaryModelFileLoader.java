@@ -53,7 +53,7 @@ import org.openide.loaders.MultiFileLoader;
 @MIMEResolver.ExtensionRegistration(
         displayName = "jME3 Model",
         mimeType = "application/jme3model",
-        extension = {"j3o", "j3s", "j3odata"}
+        extension = {"j3s", "j3odata"}
 )
 @DataObject.Registration(iconBase = IconList.CARDBOARD_BOX_CLOSED, displayName = "jME3 Model", mimeType = "application/jme3model")
 @ActionReferences({
@@ -107,13 +107,13 @@ public class BinaryModelFileLoader extends MultiFileLoader {
             return null;
         }
         String ext = fo.getExt();
+        if (ProbeLightmapResolver.isLightmap(fo)) {
+            return null;
+        }
         if (ext.equalsIgnoreCase(INFO_EXTENSION)) {
             FileObject info = FileUtil.findBrother(fo, FILE_EXTENSION);
-            if (info != null) {
-                return info;
-            } else {
-                return null;
-            }
+            return info != null && !ProbeLightmapResolver.isLightmap(info)
+                    ? info : null;
         }
         if (getExtensions().isRegistered(fo)) {
             return fo;

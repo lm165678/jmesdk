@@ -1,13 +1,16 @@
 package com.jme3.gde.core.scene;
 
-import com.jme3.bounding.BoundingBox;
+import com.jme3.environment.gi.GiProbeData;
+import com.jme3.environment.gi.GiProbeSet;
+import com.jme3.environment.gi.ProbeLightmapAsset;
 import com.jme3.environment.gi.GiProbeVolume;
 import com.jme3.environment.gi.ProbeLightmapBaker;
 import com.jme3.environment.gi.ProbeLightmapControl;
+import com.jme3.environment.gi.ProbeLightmapRegion;
 import com.jme3.export.binary.BinaryExporter;
 import com.jme3.gde.core.assets.LightmapUvGenerator;
 import com.jme3.math.Transform;
-import com.jme3.math.Vector3f;
+import com.jme3.post.WorldSettings;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
 import com.jme3.scene.Mobility;
@@ -15,7 +18,9 @@ import com.jme3.scene.Node;
 import com.jme3.scene.VertexBuffer.Type;
 import com.jme3.texture.Texture2D;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -34,13 +39,21 @@ import org.openide.util.RequestProcessor;
  * }</pre>
  * Receivers outside supported coverage continue using live probes. The scene is saved through the editor.
  */
-public final class ProbeLightmapAssets {
+public final class ProbeLightmapAssets implements AutoCloseable {
     private static final int RESOLUTION = 256;
     private final SceneApplication app;
     private final SceneRequest scene;
     private final GiProbeVolume volume;
-    private final com.jme3.environment.gi.GiProbeData data;
-    private final Vector3f offset;
+    private final GiProbeData data;
+    private final boolean singleVisibility;
+    private final boolean octahedral;
+    private final long budget;
+    private final List<ProbeLightmapRegion.Source> sources = new ArrayList<>();
+    private List<ProbeLightmapRegion.Source> activeSources = List.of();
+    private GiProbeSet field;
+    private CompletableFuture<ProbeLightmapRegion> reading;
+    private Mesh requestedMesh;
+    private Transform requestedTransform;
     private final Path assetRoot;
     private final String revision = "GI/Lightmaps/" + UUID.randomUUID() + "/";
     private final ArrayDeque<Geometry> remaining = new ArrayDeque<>();
@@ -56,41 +69,28 @@ public final class ProbeLightmapAssets {
         this.scene = scene;
         this.volume = volume;
         data = volume.getData();
-        offset = volume.getWorldTranslation().clone();
+        WorldSettings world = scene.getRootNode().getControl(WorldSettings.class);
+        singleVisibility = world != null && world.isSingleProbeVisibility();
+        octahedral = world != null && world.isOctahedralProbeIrradiance();
+        budget = (long) (world == null ? WorldSettings.GiStreaming.DEFAULTS : world.getGiStreaming()).getAtlasMiB() << 20;
         var folder = scene.getManager().getAssetFolder();
         var local = folder == null ? null : FileUtil.toFile(folder);
         assetRoot = local == null ? null : local.toPath();
-        if (assetRoot == null || data == null || data.hasSeparatedSky() || volume.isSurfaceLayout()) {
+        if (assetRoot == null || data == null) {
             return;
         }
-        BoundingBox region = bounds(volume);
-        List<BoundingBox> overlaps = new ArrayList<>();
+        var region = ProbeLightmapRegion.Source.capture(volume);
         scene.getRootNode().depthFirstTraversal(spatial -> {
-            if (spatial instanceof GiProbeVolume other && other != volume
-                    && (other.getData() != null || other.getStreamAsset() != null || other.getStreamingData() != null)) {
-                BoundingBox adjacent = bounds(other);
-                if (adjacent.intersects(region)) {
-                    overlaps.add(adjacent);
+            if (spatial instanceof GiProbeVolume other) {
+                var source = ProbeLightmapRegion.Source.capture(other);
+                if (source != null) {
+                    sources.add(source);
                 }
+            } else if (spatial instanceof Geometry geometry && supported(geometry)
+                    && region.intersects(geometry.getWorldBound())) {
+                remaining.add(geometry);
             }
         });
-        scene.getRootNode().depthFirstTraversal(spatial -> {
-            if (spatial instanceof Geometry geometry && supported(geometry)
-                    && geometry.getWorldBound() != null && region.intersects(geometry.getWorldBound())) {
-                if (overlaps.stream().anyMatch(adjacent -> adjacent.intersects(geometry.getWorldBound()))) {
-                    skipped++;
-                } else {
-                    remaining.add(geometry);
-                }
-            }
-        });
-    }
-
-    private static BoundingBox bounds(GiProbeVolume volume) {
-        var grid = volume.getBakeGrid();
-        Vector3f min = grid.getOrigin().add(volume.getWorldTranslation());
-        Vector3f extent = grid.getCounts().subtract(1, 1, 1).multLocal(grid.getSpacing()).multLocal(.5f);
-        return new BoundingBox(min.add(extent), extent.x, extent.y, extent.z);
     }
 
     private static boolean supported(Geometry geometry) {
@@ -122,17 +122,56 @@ public final class ProbeLightmapAssets {
             commit();
             return true;
         }
-        Geometry geometry = remaining.removeFirst();
+        Geometry geometry = remaining.peekFirst();
+        var bounds = geometry.getWorldBound();
+        var local = sources.stream().filter(source -> source.intersects(bounds)).toList();
+        if (reading != null && (geometry.getMesh() != requestedMesh
+                || !geometry.getWorldTransform().equals(requestedTransform))) {
+            reading.cancel(false);
+            reading = null;
+        }
+        if (local.isEmpty() || !supported(geometry)) {
+            close();
+            remaining.removeFirst();
+            skipped++;
+            return false;
+        }
+        boolean fine = local.stream().anyMatch(ProbeLightmapRegion.Source::hasBricks);
+        if (reading == null && (fine || !local.equals(activeSources))) {
+            closeField();
+            var snapshot = bounds.clone(null);
+            var pending = new CompletableFuture<ProbeLightmapRegion>();
+            reading = pending;
+            requestedMesh = geometry.getMesh();
+            requestedTransform = geometry.getWorldTransform().clone();
+            RequestProcessor.getDefault().post(() -> {
+                try {
+                    pending.complete(ProbeLightmapRegion.load(scene.getManager(), local, snapshot, 2 * budget, octahedral));
+                } catch (IOException | RuntimeException failure) {
+                    pending.completeExceptionally(failure);
+                }
+            });
+        }
+        if (reading != null && !reading.isDone()) {
+            return false;
+        }
+        remaining.removeFirst();
         Mesh source = geometry.getMesh();
         try {
+            if (reading != null) {
+                var result = reading;
+                reading = null;
+                field = result.join().open(app.getRenderManager(), budget, singleVisibility, octahedral);
+                activeSources = local;
+            }
             Mesh mesh = LightmapUvGenerator.generate(source);
             Geometry proxy = new Geometry(geometry.getName(), mesh);
             Transform transform = geometry.getWorldTransform().clone();
             proxy.setLocalTransform(transform);
             proxy.setIgnoreTransform(geometry.isIgnoreTransform());
             proxy.updateGeometricState();
-            Texture2D texture = ProbeLightmapBaker.bake(app.getRenderManager(), scene.getManager(),
-                    proxy, data, offset, RESOLUTION, RESOLUTION);
+            Texture2D texture = ProbeLightmapBaker.bakeField(app.getRenderManager(), scene.getManager(),
+                    proxy, field, RESOLUTION, RESOLUTION);
             String key = revision + UUID.randomUUID() + ".j3o";
             outputs.add(new Entry(geometry, source, mesh, transform, key));
             write = new CompletableFuture<>();
@@ -141,7 +180,17 @@ public final class ProbeLightmapAssets {
                 try {
                     Path file = assetRoot.resolve(key);
                     Files.createDirectories(file.getParent());
-                    new BinaryExporter().save(texture, file.toFile());
+                    Path staging = Files.createTempFile(file.getParent(), "lightmap-", ".tmp");
+                    try {
+                        new BinaryExporter().save(new ProbeLightmapAsset(texture, true), staging.toFile());
+                        try {
+                            Files.move(staging, file, StandardCopyOption.ATOMIC_MOVE);
+                        } catch (AtomicMoveNotSupportedException unsupported) {
+                            Files.move(staging, file);
+                        }
+                    } finally {
+                        Files.deleteIfExists(staging);
+                    }
                     FileUtil.refreshFor(file.toFile());
                     pending.complete(null);
                 } catch (IOException | RuntimeException failure) {
@@ -158,7 +207,25 @@ public final class ProbeLightmapAssets {
         return false;
     }
 
+    @Override
+    public void close() {
+        if (reading != null) {
+            reading.cancel(false);
+            reading = null;
+        }
+        closeField();
+    }
+
+    private void closeField() {
+        if (field != null) {
+            field.close();
+            field = null;
+        }
+        activeSources = List.of();
+    }
+
     private void commit() {
+        close();
         int saved = 0;
         if (volume.getData() == data && app.getCurrentSceneRequest() == scene) {
             for (Entry item : outputs) {

@@ -157,6 +157,11 @@ final class AssetThumbnails implements AutoCloseable {
     private BufferedImage generate(ProjectAssetManager manager, FileObject file, String asset) throws Exception {
         return switch (AssetKind.of(file)) {
             case TEXTURE -> fit(AssetPreviewTextures.read(manager, file, asset));
+            case LIGHTMAP -> {
+                var lightmap = com.jme3.gde.core.assets.ProbeLightmapTopComponent.readLightmap(file);
+                yield fit(com.jme3.gde.core.assets.ProbeLightmapTopComponent.renderImage(lightmap,
+                        com.jme3.gde.core.assets.ProbeLightmapTopComponent.Channel.IRRADIANCE, 0));
+            }
             case AUDIO -> java.util.Set.of("mp3", "mp4", "m4a", "aac", "flac")
                     .contains(file.getExt().toLowerCase(java.util.Locale.ROOT))
                     ? card(file.getExt().toUpperCase(java.util.Locale.ROOT), "OGG", new Color(89, 133, 180))

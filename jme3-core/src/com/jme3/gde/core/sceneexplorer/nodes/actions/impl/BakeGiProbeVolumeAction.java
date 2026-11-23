@@ -580,6 +580,9 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                 @Override
                 protected void cleanup(Application application) {
                     try {
+                        if (lightmaps != null) {
+                            lightmaps.close();
+                        }
                         if (job != null) {
                             job.close();
                         }

@@ -499,6 +499,10 @@ public class AssetBrowser extends javax.swing.JPanel implements PreviewInteracti
 
         } else if (widget instanceof ModelPreview) {
             try {
+                if (com.jme3.gde.core.assets.ProbeLightmapResolver.isLightmap(pf)) {
+                    com.jme3.gde.core.assets.ProbeLightmapTopComponent.openPreview(pf);
+                    return;
+                }
                 BinaryModelDataObject model = (BinaryModelDataObject) DataObject.find(pf);
                 Runnable call = () -> {
                     assetManager.clearCache();
