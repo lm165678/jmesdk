@@ -24,11 +24,12 @@ import java.util.zip.GZIPInputStream;
  */
 final class UnityPackageImporter {
     static Path unpack(Path archive) throws IOException {
-        Path staging = Files.createTempDirectory("jme-unity-package-");
+        Path parent = archive.toAbsolutePath().getParent();
+        Path staging = Files.createTempDirectory(parent, ".jme-unity-package-");
         Path destination = null;
         try {
             extract(archive, staging);
-            destination = Files.createTempDirectory(archive.toAbsolutePath().getParent(), "UnityImport-");
+            destination = Files.createTempDirectory(parent, "UnityImport-");
             Set<String> paths = new HashSet<>();
             int restored = 0;
             try (var groups = Files.list(staging)) {
@@ -38,7 +39,18 @@ final class UnityPackageImporter {
                         throw new IOException("Missing or oversized Unity pathname: " + group.getFileName());
                     }
                     String name = Files.readString(pathname, StandardCharsets.UTF_8).strip();
-                    if (!name.startsWith("Assets/") || name.contains("\\") || name.contains(":")) {
+                    // Some Unity exporters append a separate "00" terminator line.
+                    name = name.replaceFirst("\\r?\\n00$", "");
+                    if (name.startsWith("ProjectSettings/") || name.startsWith("Packages/")) {
+                        // These are Unity project configuration, not JME assets.
+                        continue;
+                    }
+                    if (name.startsWith("ProjectSettings/") || name.startsWith("Packages/")) {
+                        // These are Unity project configuration, not JME assets.
+                        continue;
+                    }
+                    if (!name.startsWith("Assets/") || name.contains("\\") || name.contains(":")
+                            || name.chars().anyMatch(Character::isISOControl)) {
                         throw new IOException("Invalid Unity asset path: " + name);
                     }
                     for (String part : name.split("/", -1)) {
@@ -123,6 +135,15 @@ final class UnityPackageImporter {
                     continue;
                 }
                 if (type == '5' && name.matches("[0-9a-fA-F]{32}/?") && size == 0) {
+                    continue;
+                }
+                if (type == '5' && name.matches("packagemanagermanifest/?") && size == 0) {
+                    continue;
+                }
+                if ((type == 0 || type == '0') && (name.equals(".icon.png")
+                        || name.matches("packagemanagermanifest/(asset|pathname|asset.meta)"))) {
+                    // Retain only game assets. Unity Package Manager metadata is not installed.
+                    input.skipNBytes(size + (512 - size % 512) % 512);
                     continue;
                 }
                 if ((type != 0 && type != '0') || !name.matches("[0-9a-fA-F]{32}/(asset|asset.meta|pathname|preview.png)")) {

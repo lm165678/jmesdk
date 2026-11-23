@@ -231,6 +231,22 @@ public final class UfbxLoader implements AssetLoader {
                     }
                 }
             }
+            // Unity packages often retain an FBX path relative to an ancestor
+            // of the model, for example "FPS Framework/Art/Textures/...".
+            // Resolve only inside the asset root, never against an OS path.
+            if (path.contains("/") && !path.startsWith("/") && path.indexOf(':') < 0
+                    && !java.util.Arrays.asList(path.split("/")).contains("..")) {
+                String ancestor = folder;
+                while (!ancestor.isEmpty()) {
+                    int slash = ancestor.lastIndexOf('/', ancestor.length() - 2);
+                    ancestor = slash < 0 ? "" : ancestor.substring(0, slash + 1);
+                    try {
+                        return loadTexture(ancestor + path);
+                    } catch (AssetNotFoundException ex) {
+                        // Continue toward the asset root.
+                    }
+                }
+            }
             try {
                 return loadTexture(folder + name);
             } catch (AssetNotFoundException ex) {

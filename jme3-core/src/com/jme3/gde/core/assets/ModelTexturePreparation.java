@@ -69,7 +69,7 @@ import org.openide.filesystems.FileUtil;
  * 第六步：给已有 J3O 绑定材质后保存，只补齐材质引用的、尚无 DDS 的 PNG/JPEG。
  * </pre>
  */
-final class ModelTexturePreparation {
+public final class ModelTexturePreparation {
     private static final Logger LOG = Logger.getLogger(ModelTexturePreparation.class.getName());
     private static final Pattern GLTF_STREAM_NAME = Pattern.compile("image[0-9]+\\.[a-z0-9]+",
             Pattern.CASE_INSENSITIVE);
@@ -87,6 +87,24 @@ final class ModelTexturePreparation {
 
     static void prepare(Spatial model, ProjectAssetManager assets, FileObject sourceModel,
             java.util.function.Consumer<String> phase) throws IOException {
+        prepare(model, assets, sourceModel, phase, false);
+    }
+
+    /**
+     * Prepares an owned import copy so the game can open it with direct DDS keys.
+     * 第一步：在工作线程加载并复制待导出的网格和材质。
+     * 第二步：用 prepareLinkedImport(model, assets, modelFile) 处理嵌入和外置贴图。
+     * 第三步：保存 J3O，并在只包含所需产物的工程中重新打开验证。
+     * Pass the original model asset for embedded images or null for an external
+     * texture-only scene. A failed preparation must not be saved as a conversion.
+     */
+    public static void prepareLinkedImport(Spatial model, ProjectAssetManager assets, FileObject sourceModel)
+            throws IOException {
+        prepare(model, assets, sourceModel, null, true);
+    }
+
+    private static void prepare(Spatial model, ProjectAssetManager assets, FileObject sourceModel,
+            java.util.function.Consumer<String> phase, boolean directKeys) throws IOException {
         if (assets == null || assets.getAssetFolder() == null) {
             throw new IOException("Texture conversion requires a project asset root");
         }
@@ -134,8 +152,16 @@ final class ModelTexturePreparation {
             return;
         }
         assets.getAssetFolder().refresh();
-        TextureToolchain tools = TextureToolchain.installed();
-        boolean portableDds = fbx && !tools.hasConfiguredDdsEncoder();
+        TextureToolchain tools;
+        try {
+            tools = TextureToolchain.installed();
+        } catch (IOException unavailable) {
+            if (!directKeys || !"auto".equals(System.getProperty("jme.sdk.texture.backend", "auto"))) {
+                throw unavailable;
+            }
+            tools = null;
+        }
+        boolean portableDds = (fbx || directKeys) && (tools == null || !tools.hasConfiguredDdsEncoder());
         Map<String, Path> outputs = new LinkedHashMap<>();
         int textureNumber = 0;
         for (String key : keys.keySet()) {
@@ -154,7 +180,7 @@ final class ModelTexturePreparation {
                             + key.substring(key.lastIndexOf('/') + 1));
                 }
                 Path output;
-                if (!fbx) {
+                if (!fbx && !directKeys) {
                     output = store.ensureLogicalDds(key, tools);
                 } else if (portableDds) {
                     output = store.ensurePortableBc3(key, PortableModelDds::write);
@@ -169,7 +195,7 @@ final class ModelTexturePreparation {
                 throw new IOException("Texture conversion interrupted", exception);
             }
         }
-        if (fbx) {
+        if (fbx || directKeys) {
             for (Texture texture : textures) {
                 if (texture.getKey() instanceof TextureKey key) {
                     Path output = outputs.get(key.getName());

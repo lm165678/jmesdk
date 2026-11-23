@@ -49,6 +49,9 @@ dependencies {
     corelibs dep("javax.help:javahelp:2.0.05", false, false)
 
     corelibs dep("org.jmonkeyengine:jme3-core:$jmeVersion-$jmeVersionTag", true, true)
+    if (localEngineModules.contains('jme3-unity-runtime')) {
+        corelibs dep("org.jmonkeyengine:jme3-unity-runtime:$jmeVersion-$jmeVersionTag", true, true)
+    }
     corelibs dep("org.jmonkeyengine:jme3-desktop:$jmeVersion-$jmeVersionTag", true, true)
     corelibs dep("org.jmonkeyengine:jme3-awt-dialogs:$jmeVersion-$jmeVersionTag", true, true)
     corelibs dep("org.jmonkeyengine:jme3-plugins-json:$jmeVersion-$jmeVersionTag", true, true)

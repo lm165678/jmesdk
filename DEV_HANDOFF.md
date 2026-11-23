@@ -1,3 +1,11 @@
+## 待办：3DViewer 多选变换与 Merge（2026-11-24）
+
+- [ ] 在 3DViewer 中 Ctrl + 点击加入选择，Shift + 点击移除该物体。视口与 Scene Explorer 同步多选。变换手柄显示在最后一个仍选中的物体上，拖动手柄时对整组选中物体应用平移、旋转或缩放，以手柄位置为旋转和缩放的枢轴。验证不同父节点下的世界变换、父子同时选中时不叠加变换，以及整组操作的撤销和重做。
+- [ ] 多选后从 Scene Explorer 节点树或 3DViewer 右键菜单进入同一个 Merge 配置对话框，选择 Batch 或 Instance。执行前显示参与对象、预计结果及无法合并的对象。
+- [ ] Batch 合并顶点和索引。必须显式选择目标材质，即使源物体材质及参数不同。按目标材质的纹理槽自动生成图集并重映射 UV，依据目标材质默认值和纹理通道语义补齐缺失参数。无法可靠映射的材质参数应在确认前提示，避免合并后才发现外观丢失。
+- [ ] Instance 只将同类网格且使用同一材质实例的物体分组。一次选择可生成多组，例如 A/B 合成一组、C/D/E 合成另一组。各组的 Instance 节点挂在对应源物体的父节点下。跨父节点时按父节点分别分组，保留各对象原来的世界变换。成功后在节点树显示 Instance 节点并移除该组源节点，未成组的对象保留。
+- [ ] 验收两个右键入口、取消或失败不修改场景、合并可整组撤销和重做，以及保存并重开 J3O 后层级、外观和变换正确。下次继续 SceneComposer 多选、变换手柄或对象合并时，提醒本节待办。当前只登记计划。
+
 ## 2026-11-24 GPU Scene LOD
 
 - SceneComposer → GPU Scene LOD edits the decreasing projected diameters in pixels. Apply marks the scene modified. Save J3O persists an override under WorldSettings. Use defaults restores 80, 30, 10 and 3. A blank field followed by Apply also restores defaults.
@@ -204,40 +212,43 @@
 - 本机 Gradle 验证受守护进程回环连接限制，未验证完整 CI 汇集流程。持续规则已写入 SDK/引擎 AGENTS.md：新增 JNI 按 Bullet 方式提前构建并随 SDK 打包，发布时检查目标齐全。
 - 回归检查发现现有真实 GLB 样本在纹理准备前已丢失内嵌图片的 TextureKey。已用改动前的 SDK/引擎 JAR 复现同样失败。模拟内嵌图片及逻辑键/DDS 映射用例通过。此已知问题与本次 ufbx 路径独立，真实 GLB 的自动提取仍需修复。
 
-## 2026-11-21 Unity 导入插件分阶段计划（部分待实施）
+## 2026-11-24 Unity 行为运行时、脚本生成与链接 Prefab
 
-目标：从 Unity 资产包或项目资源导入可重载的 J3O。FBX 产出模型 J3O，Prefab 产出独立、可复用的预制体 J3O，场景 J3O 保存预制体资源引用及实例覆盖，支持范围内的 C# 行为在导入时生成 Java Control。现有导入器已能恢复标准资源包及导入部分文本场景和预制体，当前输出是快照，详见后续历史条目。本计划尚无实现、配对版本或验证结果。
+- 配套引擎实现 `b03115aad484658bb1c41b0f559922d58d64edc5` 新增 `jme3-unity-runtime`。SDK 可通过本地引擎导出装载它。游戏依赖同版本模块，并在应用线程挂载 `new UnityBehaviourState(importedRoot)`。固定步由游戏线程转发；SDK 默认预览、J3O 加载和克隆不会自行执行行为。临时移除与销毁走不同回调。
+- 右键文本 `.unity` / `.prefab` 使用 **Export Unity J3O with Controls**，填写项目包名，在工程 Java 源码组下生成 `<项目包>/controls/`，在资产根新建 `UnityExport-*` 保存场景和它引用的 Prefab J3O。旧 Convert Model 继续保存快照。首版生成标量、Transform/GameObject 引用、条件块、赋值、Time 和基础 Translate。未支持的脚本保留被动绑定和字段，现有 Java 不覆盖。新建导出目录避免替换原有 J3O。
+- 文本 Prefab 复用独立 J3O，支持同资源内的变换、名称、激活、材质和脚本字段覆盖。脚本绑定用稳定 fileID，实例自己的对象引用经克隆或加载恢复。支持实际 FPS Framework 中以 FBX 为源的根变体，并复用现有 DDS 流程。还需扩展 stripped 和跨实例引用、复杂变体、二进制解析、任意 C# / Unity API 和真实项目完整渲染。重新导出生成新资源目录；更新已有场景引用的 Prefab 时，应在原键处更新该 J3O。
+- 本机真实验收：Learn2022s 的 TestScene1.unity 和 Point.prefab、Vergo_android 的 Block.prefab；实际 Point 由两个链接实例复用，共享资源更新后，两者保留独立 X 覆盖并继承新的 Y。Block 重开保留 9 个脚本绑定。LakeSideCabin、FPS Framework 和高性能体积雾包解包成功，修复了 FPS 包的元数据条目与 pathname 尾标。旧 LakeSideCabin 二进制 Prefab 按预期报告限制。
+- 指定资源目录实测：LakeSideCabin 门、岩石、木墙三个 FBX 由 ufbx 转 J3O，独立 J3O+DDS 目录重载并验证压缩贴图。FPS Framework 的 Door Variant.prefab 通过源 FBX 和材质转换，重开含一个链接实例、240 三角形。JDK 25 生成菜单注册，运行时 --release 11 编译通过，生成的 DoorControl 经 javac 后验证两个实例各自的字段、对象引用、Fixed/Late 回调、临时移出及销毁。完整 Gradle 导出受本机守护进程/构建锁及 Groovy worker 0xC0000005 阻塞，未安装或重打 SDK。
+- 高性能体积雾实验用实际 Tzar/VerticalFog 和 Simple Fog.mat，手工映射着色器逻辑、自动读取材质数值，产出 SimpleFog.j3md、SimpleFog.j3m 和 GLSL。RTX 5080 / OpenGL 4.3 测到近深度黑像素与远深度亮像素 0 → 208。实验以显式提供的场景深度验证交界淡化。Advanced Fog、自动 FrameGraph 深度接入、Unity 雾/VR 变体和通用 ShaderLab/Shader Graph 翻译仍待做。临时资产和日志在引擎 build/unity-runtime-check。
 
-### 1. 先验证 FBX → J3O
+## 2026-11-23 Unity 导入插件分阶段计划（V1 已交付，扩展项见上方）
 
-- [ ] 用带层级与枢轴的静态 FBX、带纹理与多个材质槽的 FBX、带蒙皮和动画的 FBX 建立基准。记录源模型的尺寸、轴向、节点、材质槽、骨骼与动画，便于对照。
-- [x] SDK 模型转换采用 ufbx JNI 直接导入 JME 模型，保存 J3O 和外置 DDS。见上方实现与样本验证。独立分离式 glTF 输出和 Blender 生产资产对照仍待验证。
-- [ ] 核对单位和轴向、父子变换、枢轴、材质槽、UV、法线、贴图、骨骼绑定与动画。明确坐标转换由哪一层负责，避免 FBX 转换与 Unity 场景组装重复翻轴。基础模型通路完成后再关联 Unity .meta/.mat，按材质类型映射 PBRLighting、Lighting 或 Unshaded，记录还未支持的着色器与贴图通道。
-- [ ] 验收：三类样本均可重复转换，重载的 J3O 仍能正常预览和播放动画。失败必须报告出错文件与阶段，且保留已有可用输出。以样本结果决定桥接是否作为默认路径。
+目前可恢复标准 `.unitypackage`，并将部分文本 `.unity` / `.prefab` 转成 J3O 快照。计划优先建立 MonoBehaviour 对应的 Java 运行契约，再生成脚本子类，最后实现独立 Prefab J3O 和场景引用复用。
 
-#### 模型转 J3O 共用的外置 DDS 流程
+### 已有基础与待补验收
 
-- [ ] 新的 FBX 桥接输出分离式 glTF，图片放在外部文件中。供其他工具使用的标准 glTF 继续引用 PNG/JPEG 等标准支持的格式，DDS 由最终 J3O 的材质通过项目资产路径引用。
-- [ ] SDK 的模型转 J3O 入口和 Unity 导入路径共用纹理处理。读取普通外置图片，以及已有 .gltf/.glb 的 data URI 或 bufferView 内嵌图片。在保存目标 J3O 前，复用 SDK Texture Tools 的 DDS 编码能力生成或复用外部 .dds，把材质里的纹理替换成可重载的 TextureKey。使用次级 UV、贴图变换、不同 sampler 的情况保留原来的采样语义，纹理文件共享不应合并各材质的采样设置。
-- [ ] 按用途处理色彩空间与 mipmap，保留透明度。底色和自发光按 sRGB，法线和金属度/粗糙度/遮蔽等数据贴图按线性。纹理去重包含像素内容和影响编码的用途与设置，避免同名资源冲突，也避免把同一图片的 sRGB 和线性用法合并。确认所选 DDS 压缩格式可由目标 JME 渲染后端读取。
-- [ ] 编码与 J3O 保存使用暂存输出。编码、重绑或写入失败时报告模型、纹理与失败阶段，并保留已有可用输出，避免静默生成缺贴图的 J3O。
-- [ ] 验收：分离式 glTF、内嵌图片的 .gltf、内嵌图片的 .glb 三类输入都产出外置 DDS 和 J3O。用只包含结果 J3O 与 DDS 的资产目录及新的 AssetManager 重载，核对材质槽、颜色、透明度和法线。再核对材质通过 DDS 资产键取图，J3O 不包含内嵌纹理数据。以内嵌贴图和外置贴图混用、共享图片但采样参数不同的模型验证引用与去重。
+- [x] SDK 使用 ufbx JNI 直接导入 FBX，输出 J3O 和外置 DDS。复用这条通路；分离式 glTF 从 Unity 导入计划移除。
+- [ ] 在 Unity 导入场景验收 `.meta` / `.mat` 引用、单位和轴向、层级和枢轴、材质槽及蒙皮和动画，避免 FBX 转换与场景组装重复翻轴。
+- [ ] 验收 Unity 导入复用现有 DDS 流程后，贴图外置、DDS 资产键、次级 UV、贴图变换、独立 sampler、透明度、色彩空间及失败保留旧产物符合预期。用仅含产物的资产目录和新 AssetManager 重载。这是 Unity 路径的整合与验收，已有 FBX 转 DDS 能力直接复用。
 
-### 2. 验证 Prefab → 独立 J3O → 场景复用
+### 1. 优先实现 MonoBehaviour 对应的 Java Control 基类
 
-- [ ] 第一份样本选文本 Prefab，例如引用阶段 1 门板模型的 Door.prefab。按 GUID 定位资源，在资源内部按 fileID 定位节点和组件，生成一个 Door.j3o。资源索引保留 Unity ID 到 JME 对象 ID 的映射，供实例覆盖与重导使用。
-- [ ] 场景 J3O 中建立两个独立实例，分别记录自己引用的 Door.j3o 资源键、Transform 和覆盖值。评估以 AssetLinkNode 为底层，增加实例数据与覆盖恢复。先加载预制体并建立实例内 ID 表，再应用覆盖并修复引用。外部资源故障应报告来源和目标。
-- [ ] 验收：保存并重新加载场景后，两扇门仍指向同一份资源，场景没有把完整预制体分别内嵌两次。移动或替换其中一扇门的材质不会影响另一扇。更新预制体并重新加载后，两个实例获得新的资源内容，各自的覆盖仍生效。Prefab 实例是场景对象，GPU Instancing 是可独立启用的渲染优化。
-- [ ] 扩展到嵌套 Prefab、变体、stripped 对象、跨实例引用和重导时的稳定 ID。二进制 Prefab 单独验证，使用已有 Unity 5.1.1f1 样本评估解析或重序列化路径。FBX 桥接和 YAML→JSON 都不能替代二进制资源解析。
+- [ ] 新增继承 `AbstractControl` 的 `UnityBehaviourControl`，沿用 JME Control API 和序列化契约。明确 `Awake`、`OnEnable`、`Start`、`Update`、`LateUpdate`、`FixedUpdate`、`OnDisable`、`OnDestroy` 的签名和调度顺序。Unity 消息由调度器调用，对应 Java 中可覆写的回调。
+- [ ] 区分组件 enabled、对象 activeSelf 和父级激活状态。先恢复字段与引用，再启动生命周期。晚更新和物理固定步独立调度，区分暂时移出场景和销毁。加载、克隆和默认 SDK 编辑预览保持被动，游戏运行时激活。
+- [ ] 先用手写 DoorControl 验证两份 J3O 对象各自引用门板、保存不同速度、独立触发和销毁，测试保存重载以及旧 J3O 兼容。
 
-### 3. 验证 MonoBehaviour → Java Control → J3O 运行
+### 2. 导入时生成 Java Control 子类
 
-- [ ] 保持 Control 接口和 AbstractControl 的 API 与序列化契约。新增继承自 AbstractControl 的 UnityBehaviourControl，作为生成脚本的父类。配套场景调度器负责激活与生命周期；保留旧 J3O 的加载回归。
-- [ ] 定义 Awake、OnEnable、Start、Update、LateUpdate、FixedUpdate、OnDisable、OnDestroy 对应的 Java 回调。先恢复字段和引用，再进入运行生命周期；分别处理组件 enabled、对象自身 activeSelf 和父级决定的有效激活状态。统一执行晚更新，固定步回调接入物理步，区分临时移出场景与销毁。加载、克隆及默认 SDK 编辑预览不执行脚本。
-- [ ] 先用一份 DoorControl 验证数据和调度契约。两个 Door.j3o 实例分别引用各自的门板，配置不同打开速度，单独触发和销毁。保存重载保留配置与引用，每次实例化重新开始运行生命周期。
-- [ ] 实现导入时代码生成。通过 m_Script GUID 和 .cs.meta 找到 C# 源码，用语法树与类型分析生成 Java。每种脚本类型只生成一个继承 UnityBehaviourControl 的 .java；J3O 为每个组件实例保存自己的字段与对象引用。生成文件放进明确的源目录，记录生成来源，重导不覆盖手写扩展。生成类随游戏编译和发布。
-- [ ] 首批支持字段、基础控制流、Transform、Time、组件查询和简单交互；为每条 Unity API 映射验证坐标、数值及事件语义。没有源码或遇到不支持的语法/API 时保留组件字段与引用，列出无法转换的位置，并允许 SDK 在没有生成类时查看资源。待验证后再扩大到输入、碰撞、动画和协程。
-- [ ] 验收：导入样本 .cs 自动产生可编译的 Java 源码。编译后打开包含两份 Door 引用的场景 J3O，分别触发、停用与销毁，核对字段覆盖、引用归属和回调顺序，并验证旧 J3O 和默认编辑预览。
+- [ ] SDK 默认将生成的 Control 子类写入游戏工程 Java 源码根目录下的 `<项目包路径>/controls/`。例如 `src/main/java/mygame/controls/DoorControl.java` 对应 `package mygame.controls;`。沿用工程实际配置的源码根目录，使生成类参与游戏编译；记录已生成文件，重导保护手写源码。
+- [ ] 按 `m_Script` GUID 和 `.cs.meta` 定位 C#，用语法树与类型分析生成 Java。每种脚本生成一个可编译的子类，每个组件实例的字段与引用由 J3O 单独保存。记录生成来源与目标目录，重导保护手写扩展。
+- [ ] 首批支持字段、基础控制流、Transform、Time、组件查询和简单交互。缺源码或遇到超出支持范围的语法/API 时，保留序列化字段与引用并报告具体位置，SDK 仍可查看资产。输入、碰撞、动画、协程后续逐项评估。
+- [ ] 用最小文本场景验证 `.cs` 自动生成、项目编译、J3O 重载与生命周期执行。复用现有文本 YAML 解析，留出 GUID/fileID 引用解析接口供 Prefab 复用。
+
+### 3. Prefab 独立保存与场景复用
+
+- [ ] 先从文本 `Door.prefab` 生成独立 `Door.j3o`，建立稳定的 GUID/fileID 与节点、组件 ID 映射。场景 J3O 保存资源键和每个实例的变换、材质及受支持的组件字段覆盖，评估以 AssetLinkNode 为底层。
+- [ ] 实例化时先建立实例内 ID 表，应用覆盖、修复同实例对象引用，再启动 Control。验收两个门共享一份资源、覆盖互不影响，更新 Prefab 重载后仍保留各自覆盖。记录缺失资源的来源和目标。
+- [ ] 再扩展嵌套 Prefab、变体、stripped 对象、跨实例引用和重导稳定性。Unity 5.1.1f1 二进制资源的解析或重序列化路径单独评估。
 
 ## 2026-11-21 In-process texture codecs
 
@@ -655,6 +666,7 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - No build, compilation or live UI tests per user instruction. Source/platform-bytecode inspection only. SDK base 067a2f80 / engine base 12f5239be, no engine API changes or commit/push. Next verify palette addition, XML, undo/redo and internal moves. First edit attempt crashed before writing; retry applied using PowerShell.
 
 ## 2026-11-17 待办：Lemur 与双 GUI 编辑器
+- [ ] Lemur 集成后验证 Unity uGUI 导入。先建立与 GUI 后端无关的 Canvas/RectTransform 树，涵盖锚点、pivot、offset、CanvasScaler 和层级。再用真实 Unity UI 样本验证 Lemur 上的文本、图片、按钮、布局与事件，并区分屏幕空间和世界空间。保留 Nifty 作为现有项目的 GUI 路径。Unity UI Toolkit 和复杂控件另外评估。
 - [ ] 评估 Lemur 与 Nifty 的自定义样式、控件扩展、复杂游戏 UI 功能差异；用相同 HUD、背包/长列表和动态文本场景比较 CPU/GPU 时间、draw calls 和内存，不能预先宣称 Lemur 更快。
 - [ ] 将 Lemur 作为 SDK 默认提供的新项目库，应用显式初始化；保留旧项目的 Nifty 依赖及编辑器，不自动迁移。
 - [ ] 为 Lemur 新增独立 GUI 可视化编辑器。先确定界面资源格式、运行时加载器及撤销模型，再实现控件树、拖拽布局、属性/主题/资源编辑、自定义控件、保存重载及运行时预览。运行游戏无需依赖 SDK。

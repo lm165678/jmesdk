@@ -17,6 +17,9 @@ import com.jme3.renderer.queue.RenderQueue;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
+import com.jme3.unity.runtime.ImportedBehaviour;
+import com.jme3.unity.runtime.UnityBehaviourControl;
+import com.jme3.unity.runtime.UnityPrefabInstance;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,10 +44,16 @@ final class UnitySceneBuilder {
     private final Set<String> onceWarnings = new HashSet<>();
     private final Set<String> prefabStack = new HashSet<>();
     private Material fallbackMaterial;
+    private final UnityProjectExport export;
 
     UnitySceneBuilder(AssetManager assets, UnityAssetIndex index) {
+        this(assets, index, null);
+    }
+
+    UnitySceneBuilder(AssetManager assets, UnityAssetIndex index, UnityProjectExport export) {
         this.assets = assets;
         this.index = index;
+        this.export = export;
         this.materials = new UnityMaterialReader(assets, index, this::warn);
     }
 
@@ -70,8 +79,22 @@ final class UnitySceneBuilder {
             prefabStack.clear();
         }
         Node root = result.root;
+        attachLights(root);
+        root.setUserData("unity.import.warning.count", warnings.size());
+        root.setUserData("unity.import.warnings", String.join("\n", warnings));
+        root.setUserData("unity.coordinates", "position=(x,y,-z); quaternion=(-x,-y,z,w)");
+        return root;
+    }
+
+    private void attachLights(Node root) {
         root.updateGeometricState();
-        for (PendingLight pending : pendingLights) {
+        var iterator = pendingLights.iterator();
+        while (iterator.hasNext()) {
+            PendingLight pending = iterator.next();
+            if (pending.node() != root && !pending.node().hasAncestor(root)) {
+                continue;
+            }
+            iterator.remove();
             if (!isEffectivelyActive(pending.node())) {
                 continue;
             }
@@ -84,12 +107,14 @@ final class UnitySceneBuilder {
                 directional.setDirection(UnityCoordinates.forward(
                         pending.node().getWorldRotation()));
             }
-            root.addLight(pending.light());
+            if (export != null) {
+                // LightControl follows the node after a linked prefab changes placement.
+                pending.node().addLight(pending.light());
+                pending.node().addControl(new com.jme3.scene.control.LightControl(pending.light()));
+            } else {
+                root.addLight(pending.light());
+            }
         }
-        root.setUserData("unity.import.warning.count", warnings.size());
-        root.setUserData("unity.import.warnings", String.join("\n", warnings));
-        root.setUserData("unity.coordinates", "position=(x,y,-z); quaternion=(-x,-y,z,w)");
-        return root;
     }
 
     private boolean isEffectivelyActive(Spatial spatial) {
@@ -112,7 +137,7 @@ final class UnitySceneBuilder {
     }
 
     private BuildResult buildDocuments(List<UnityYaml.Document> documents, String name,
-            int depth) {
+            int depth) throws IOException {
         BuildResult result = new BuildResult(name);
         Map<Long, List<UnityYaml.Document>> components = new HashMap<>();
         List<UnityYaml.Document> gameObjects = new ArrayList<>();
@@ -170,11 +195,46 @@ final class UnitySceneBuilder {
                         "Ignored Unity scene document: " + document.type());
             }
         }
+        for (UnityYaml.Document document : documents) {
+            if (export != null && document.classId() == 114 && !document.stripped()) {
+                addBehaviour(document, result);
+            }
+        }
         return result;
     }
 
+    private void addBehaviour(UnityYaml.Document document, BuildResult result) throws IOException {
+        Node owner = result.objects.get(UnityYaml.ref(document.values().get("m_GameObject")).fileId());
+        if (owner == null) {
+            return;
+        }
+        UnityYaml.Ref script = UnityYaml.ref(document.values().get("m_Script"));
+        String className = export.script(script.guid(), index.find(script), this::warn);
+        ImportedBehaviour control = new ImportedBehaviour(script.guid(), className, document.fileId());
+        control.setEnabled(UnityYaml.booleanValue(document.values().get("m_Enabled"), true));
+        for (var field : document.values().entrySet()) {
+            if (UnityProjectExport.behaviourMetadata(field.getKey())) {
+                continue;
+            }
+            Object value = field.getValue();
+            if (value instanceof Map && ((Map<?, ?>) value).containsKey("fileID")) {
+                UnityYaml.Ref reference = UnityYaml.ref(value);
+                Node target = reference.guid() == null ? result.objects.get(reference.fileId()) : null;
+                if (target != null) {
+                    control.setReference(field.getKey(), target);
+                } else if (!reference.isZero()) {
+                    control.setField(field.getKey(), String.valueOf(value));
+                    warn("Unresolved behaviour reference " + document.fileId() + "." + field.getKey());
+                }
+            } else if (value != null) {
+                control.setField(field.getKey(), String.valueOf(value));
+            }
+        }
+        owner.addControl(control);
+    }
+
     private Node createGameObject(UnityYaml.Document gameObject,
-            List<UnityYaml.Document> components) {
+            List<UnityYaml.Document> components) throws IOException {
         String name = UnityYaml.stringValue(gameObject.values().get("m_Name"),
                 "GameObject-" + gameObject.fileId());
         Node node = new Node(name);
@@ -187,13 +247,16 @@ final class UnitySceneBuilder {
         UnityYaml.Document transform = findTransform(components);
         if (transform != null) {
             applyTransform(node, transform.values());
+            node.setUserData(UnityBehaviourControl.TRANSFORM_ID, transform.fileId());
         }
         UnityYaml.Document filter = findComponent(components, 33);
         UnityYaml.Document renderer = findComponent(components, 23);
         UnityYaml.Document skinned = findComponent(components, 137);
         if (renderer != null && filter != null) {
+            node.setUserData("unity.rendererID", renderer.fileId());
             addRenderer(node, filter.values().get("m_Mesh"), renderer, false);
         } else if (skinned != null) {
+            node.setUserData("unity.rendererID", skinned.fileId());
             warnOnce("skinned", "SkinnedMeshRenderer uses a clone of the complete source "
                     + "model; Unity bone remapping is not performed");
             addRenderer(node, skinned.values().get("m_Mesh"), skinned, true);
@@ -205,7 +268,8 @@ final class UnitySceneBuilder {
                 preserveCamera(component, node);
             } else if (!isTransform(component) && component.classId() != 33
                     && component.classId() != 23 && component.classId() != 137
-                    && component.classId() != 108 && component.classId() != 20) {
+                    && component.classId() != 108 && component.classId() != 20
+                    && (export == null || component.classId() != 114)) {
                 warnOnce("component:" + component.type(), "Ignored unsupported Unity "
                         + "component: " + component.type());
             }
@@ -214,15 +278,19 @@ final class UnitySceneBuilder {
     }
 
     private void addRenderer(Node node, Object meshReference, UnityYaml.Document renderer,
-            boolean completeModel) {
+            boolean completeModel) throws IOException {
         if (!UnityYaml.booleanValue(renderer.values().get("m_Enabled"), true)) {
             return;
         }
-        Spatial model = loadModel(UnityYaml.ref(meshReference), completeModel);
+        UnityYaml.Ref reference = UnityYaml.ref(meshReference);
+        Spatial model = loadModel(reference, completeModel);
         if (model == null) {
             return;
         }
         applyMaterials(model, UnityYaml.list(renderer.values().get("m_Materials")));
+        if (export != null && assets instanceof com.jme3.gde.core.assets.ProjectAssetManager manager) {
+            com.jme3.gde.core.assets.ModelTexturePreparation.prepareLinkedImport(model, manager, index.find(reference));
+        }
         node.attachChild(model);
     }
 
@@ -393,7 +461,7 @@ final class UnitySceneBuilder {
                 + "camera is not changed");
     }
 
-    private void instantiatePrefab(UnityYaml.Document instance, BuildResult scene, int depth) {
+    private void instantiatePrefab(UnityYaml.Document instance, BuildResult scene, int depth) throws IOException {
         if (depth >= 16) {
             warn("Prefab nesting limit reached at fileID=" + instance.fileId());
             return;
@@ -413,12 +481,30 @@ final class UnitySceneBuilder {
             return;
         }
         try {
-            BuildResult prefab = buildAsset(file, depth + 1);
-            Node node = prefab.primaryRoot != null && prefab.root.getQuantity() == 1
-                    ? prefab.primaryRoot : prefab.root;
             Map<String, Object> modification = UnityYaml.map(
                     instance.values().get("m_Modification"));
-            applyPrefabModifications(prefab, modification);
+            Node node;
+            if (export == null) {
+                BuildResult prefab = buildPrefabSource(file, depth + 1);
+                node = prefab.primaryRoot != null && prefab.root.getQuantity() == 1
+                        ? prefab.primaryRoot : prefab.root;
+                applyPrefabModifications(prefab, modification);
+            } else {
+                String guid = source.guid();
+                Node template = export.prefab(guid);
+                if (template == null) {
+                    BuildResult prefab = buildPrefabSource(file, depth + 1);
+                    attachLights(prefab.root);
+                    template = prefab.root;
+                    export.addPrefab(guid, template);
+                }
+                UnityPrefabInstance linked = new UnityPrefabInstance(export.prefabPath(guid),
+                        new com.jme3.util.clone.Cloner().clone(template));
+                recordOverrides(linked, modification, guid);
+                linked.applyOverrides();
+                linked.setUserData("unity.prefab.instanceID", instance.fileId());
+                node = linked;
+            }
             Node parent = scene.root;
             UnityYaml.Ref parentReference = UnityYaml.ref(modification.get("m_TransformParent"));
             Node requested = scene.objects.get(parentReference.fileId());
@@ -427,9 +513,106 @@ final class UnitySceneBuilder {
             }
             parent.attachChild(node);
         } catch (IOException | RuntimeException failure) {
+            if (export != null) {
+                throw new IOException("Cannot instantiate prefab " + path, failure);
+            }
             warn("Cannot instantiate prefab " + path + ": " + failure.getMessage());
         } finally {
             prefabStack.remove(path);
+        }
+    }
+
+    private BuildResult buildPrefabSource(FileObject file, int depth) throws IOException {
+        if (!isModel(file)) {
+            return buildAsset(file, depth);
+        }
+        BuildResult result = new BuildResult(file.getName());
+        Node modelRoot = new Node(file.getName());
+        Spatial model = assets.loadModel(new ModelKey(index.path(file)));
+        // Unity's ModelImporter uses these IDs for the imported model root.
+        long gameObjectId = 919132149155446097L;
+        long transformId = -8679921383154817045L;
+        modelRoot.setUserData(UnityBehaviourControl.FILE_ID, gameObjectId);
+        modelRoot.setUserData(UnityBehaviourControl.TRANSFORM_ID, transformId);
+        result.objects.put(gameObjectId, modelRoot);
+        result.objects.put(transformId, modelRoot);
+        modelRoot.attachChild(model);
+        result.root.attachChild(modelRoot);
+        result.primaryRoot = modelRoot;
+        applyModelImporterMaterials(file, model);
+        if (export != null && assets instanceof com.jme3.gde.core.assets.ProjectAssetManager manager) {
+            com.jme3.gde.core.assets.ModelTexturePreparation.prepareLinkedImport(model, manager, file);
+        }
+        return result;
+    }
+
+    private void applyModelImporterMaterials(FileObject file, Spatial model) throws IOException {
+        FileObject meta = file.getParent().getFileObject(file.getNameExt() + ".meta");
+        if (meta == null) {
+            return;
+        }
+        var importer = UnityYaml.map(UnityYaml.map(UnityYaml.load(meta.asText("UTF-8"))).get("ModelImporter"));
+        for (Object entry : UnityYaml.list(importer.get("externalObjects"))) {
+            var mapping = UnityYaml.map(entry);
+            var key = UnityYaml.map(mapping.get("first"));
+            String type = UnityYaml.stringValue(key.get("type"), "");
+            String name = UnityYaml.stringValue(key.get("name"), "");
+            if (!"UnityEngine:Material".equals(type)) {
+                continue;
+            }
+            Material material = materials.read(UnityYaml.ref(mapping.get("second")), null);
+            if (material == null) {
+                continue;
+            }
+            model.depthFirstTraversal(spatial -> {
+                if (spatial instanceof Geometry geometry && geometry.getMaterial() != null
+                        && name.equals(geometry.getMaterial().getName())) {
+                    applyMaterial(geometry, material.clone());
+                }
+            });
+        }
+    }
+
+    private void recordOverrides(UnityPrefabInstance linked, Map<String, Object> modification,
+            String sourceGuid) throws IOException {
+        for (Object item : UnityYaml.list(modification.get("m_Modifications"))) {
+            Map<String, Object> entry = UnityYaml.map(item);
+            UnityYaml.Ref targetRef = UnityYaml.ref(entry.get("target"));
+            long target = targetRef.fileId();
+            String property = UnityYaml.stringValue(entry.get("propertyPath"), "");
+            Object value = entry.get("value");
+            UnityYaml.Ref reference = UnityYaml.ref(entry.get("objectReference"));
+            if (property.startsWith("m_LocalEulerAnglesHint") || property.equals("m_RootOrder")) {
+                continue;
+            }
+            if (targetRef.guid() != null && !targetRef.guid().equalsIgnoreCase(sourceGuid)) {
+                warn("Prefab override targets another asset: " + targetRef.guid() + "/" + target + "." + property);
+                continue;
+            }
+            if (property.startsWith("m_Materials.Array.data[")) {
+                Material material = materials.read(reference, null);
+                if (material != null) {
+                    if (assets instanceof com.jme3.gde.core.assets.ProjectAssetManager manager) {
+                        Geometry textureOwner = new Geometry("Unity prefab override");
+                        textureOwner.setMaterial(material);
+                        com.jme3.gde.core.assets.ModelTexturePreparation.prepareLinkedImport(textureOwner, manager, null);
+                    }
+                    linked.addOverride(target, "material:" + arrayIndex(property), null, material);
+                }
+            } else if (property.matches("m_Local(Position|Scale)\\.[xyz]|m_LocalRotation\\.[xyzw]")
+                    || Set.of("m_Name", "m_IsActive", "m_Enabled").contains(property)) {
+                linked.addOverride(target, property, String.valueOf(value), null);
+            } else if (property.matches("[A-Za-z_]\\w*") && reference.guid() == null
+                    && (!reference.isZero() || value == null || "".equals(value))) {
+                linked.addOverride(target, "reference:" + property, Long.toString(reference.fileId()), null);
+            } else if (property.matches("[A-Za-z_]\\w*") && reference.isZero() && value != null) {
+                linked.addOverride(target, "field:" + property, String.valueOf(value), null);
+            } else {
+                warn("Unsupported prefab override " + target + "." + property);
+            }
+        }
+        if (!UnityYaml.list(modification.get("m_RemovedComponents")).isEmpty()) {
+            warnOnce("prefab-remove", "Prefab removed-component overrides are not converted");
         }
     }
 

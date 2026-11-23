@@ -14,7 +14,7 @@ gradle.projectsEvaluated {
             engine.delete(new File(destination, 'sdk-engine.properties'))
         }
     }
-    def modules = ['jme3-core', 'jme3-desktop', 'jme3-awt-dialogs', 'jme3-effects',
+    def modules = ['jme3-core', 'jme3-unity-runtime', 'jme3-desktop', 'jme3-awt-dialogs', 'jme3-effects',
             'jme3-networking', 'jme3-plugins', 'jme3-plugins-json',
             'jme3-plugins-json-gson', 'jme3-terrain', 'jme3-lwjgl3',
             'jme3-saferallocator', 'jme3-jbullet', 'jme3-niftygui', 'jme3-jogg',

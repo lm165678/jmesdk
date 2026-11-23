@@ -66,8 +66,9 @@ public final class ImportUnityPackage implements ActionListener {
                         JOptionPane.showMessageDialog(null, message
                                 + "No .unity/.prefab files found. Convert supported models individually.");
                     } else if (JOptionPane.showConfirmDialog(null, message + scenes.size()
-                            + " scenes/prefabs found. Convert them to J3O now?\n"
-                            + "Choose No to select individual files in the project tree.",
+                            + " scenes/prefabs found. Convert them to J3O snapshots now?\n"
+                            + "For Java controls and linked prefabs, choose No and use "
+                            + "Export Unity J3O with Controls on the desired scene or prefab.",
                             "Unity package imported", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
                         new ConvertModel(scenes).actionPerformed(event);
                     }

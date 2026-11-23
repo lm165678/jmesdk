@@ -25,8 +25,9 @@ import org.openide.filesystems.FileObject;
  * </pre>
  * Supports GameObject hierarchies, Transform/RectTransform placement, MeshRenderer,
  * basic SkinnedMeshRenderer reuse, common materials/textures, directional/point/spot
- * lights and basic prefab transform/name/activity/material overrides. Unity C# scripts,
- * terrain, UI layouts, physics, baked lightmaps, arbitrary component properties and
+ * lights and basic prefab transform/name/activity/material overrides. The separate
+ * Export Unity J3O with Controls action enables script bindings and linked prefab output.
+ * Terrain, UI layouts, physics, baked lightmaps, arbitrary component properties and
  * packed metallic/smoothness textures are not converted. Camera values are metadata only.
  * Disabled renderers are omitted. Cyclic parent links fall back to the asset root with
  * a warning; files without Unity YAML documents fail instead of producing empty J3O assets.
@@ -51,12 +52,16 @@ public class UnitySceneLoader implements AssetLoader {
 
     /** Direct entry used by the loader and the headless importer smoke test. */
     Node load(FileObject source, ProjectAssetManager manager) throws IOException {
+        return load(source, manager, null);
+    }
+
+    Node load(FileObject source, ProjectAssetManager manager, UnityProjectExport export) throws IOException {
         FileObject preferred = source.getParent();
         while (preferred != null && !preferred.equals(manager.getAssetFolder())
                 && !preferred.getNameExt().startsWith("UnityImport-")) {
             preferred = preferred.getParent();
         }
         UnityAssetIndex index = new UnityAssetIndex(manager.getAssetFolder(), preferred);
-        return new UnitySceneBuilder(manager, index).build(source);
+        return new UnitySceneBuilder(manager, index, export).build(source);
     }
 }
