@@ -1,4 +1,4 @@
-name: Build ufbx and xatlas JNI libraries
+name: Build SDK asset JNI libraries
 
 on:
   workflow_call:
@@ -51,6 +51,13 @@ jobs:
           ref: 16ace528acd2cf1f16a7c0dde99c42c486488dbe
           path: build/xatlas-jni/source
           persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: KhronosGroup/SPIRV-Cross
+          # Vulkan SDK 1.4.328.1
+          ref: 7affe74d77f93a622bb5002789d5332d32e512ee
+          path: build/spirv-cross-jni/source
+          persist-credentials: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -80,6 +87,14 @@ jobs:
             --prefix "$PWD/build/ufbx-jni/stage/$TARGET"
           test -s "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/xatlas}"
           test -s "build/ufbx-jni/stage/$TARGET/LICENSE-xatlas.txt"
+          cmake -S jme3-core/native/spirv-cross -B build/spirv-cross-jni/compile \
+            -DSPIRV_CROSS_SOURCE_DIR="$PWD/build/spirv-cross-jni/source" \
+            -DCMAKE_BUILD_TYPE=Release "${platform_args[@]}"
+          cmake --build build/spirv-cross-jni/compile --config Release --parallel
+          cmake --install build/spirv-cross-jni/compile --config Release \
+            --prefix "$PWD/build/ufbx-jni/stage/$TARGET"
+          test -s "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/spirv-cross}"
+          test -s "build/ufbx-jni/stage/$TARGET/LICENSE-spirv-cross.txt"
       - name: Load the JNI library and parse an FBX fixture
         # This artifact is cross-compiled on an x64 host.
         if: matrix.target != 'windows-arm64'
@@ -144,6 +159,25 @@ jobs:
           javac -d build/xatlas-jni/smoke build/xatlas-jni/LightmapUvGenerator.java
           java --enable-native-access=ALL-UNNAMED -cp build/xatlas-jni/smoke com.jme3.gde.core.assets.LightmapUvGenerator \
             "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/xatlas}"
+      - name: Cross-compile to desktop and ES GLSL through JNI
+        if: matrix.target != 'windows-arm64'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          LIBRARY: ${{ matrix.library }}
+        run: |
+          set -euo pipefail
+          cat > build/spirv-cross-jni/InstalledFileLocator.java <<'JAVA'
+          package org.openide.modules;
+          public abstract class InstalledFileLocator {
+              public static InstalledFileLocator getDefault() { throw new AssertionError("Use the test library override"); }
+              public abstract java.io.File locate(String path, String codeNameBase, boolean localized);
+          }
+          JAVA
+          javac -d build/spirv-cross-jni/smoke build/spirv-cross-jni/InstalledFileLocator.java \
+            jme3-core/src/com/jme3/gde/core/assets/SpirvCross.java tools/tests/SpirvCrossSmoke.java
+          java --enable-native-access=ALL-UNNAMED -cp build/spirv-cross-jni/smoke SpirvCrossSmoke \
+            "build/ufbx-jni/stage/$TARGET/${LIBRARY/ufbx/spirv-cross}"
       - uses: actions/upload-artifact@v7
         with:
           name: ufbx-jni-${{ matrix.target }}

@@ -778,9 +778,11 @@ def ufbxReleaseDir = file('jme3-autodesk/release/lib/ufbx')
 
 tasks.register('prepareUfbxNatives') {
     group = 'build setup'
-    description = 'Collects precompiled ufbx and xatlas JNI libraries for the SDK.'
+    description = 'Collects precompiled ufbx, xatlas and SPIRV-Cross JNI libraries for the SDK.'
     doLast {
         def requireAll = providers.gradleProperty('requireUfbxNatives').getOrElse('false').toBoolean()
+        def coreNativeNames = ['xatlas', 'spirv-cross']
+        def coreFiles = { String library, String name -> [library.replace('ufbx', name), 'LICENSE-' + name + '.txt'] }
         def filesByTarget = ufbxNatives.collectEntries { platform, library ->
             [(platform): [library, 'LICENSE-ufbx.txt']]
         }
@@ -789,7 +791,7 @@ tasks.register('prepareUfbxNatives') {
             if (!input.isDirectory() && !requireAll) {
                 return
             }
-            def required = requireAll ? filenames + [filenames[0].replace('ufbx', 'xatlas'), 'LICENSE-xatlas.txt'] : filenames
+            def required = requireAll ? filenames + coreNativeNames.collectMany { coreFiles(filenames[0], it) } : filenames
             required.each { name ->
                 def artifact = new File(input, name)
                 if (!artifact.isFile() || artifact.length() == 0) {
@@ -805,11 +807,12 @@ tasks.register('prepareUfbxNatives') {
                     include filenames
                     into new File(ufbxReleaseDir, platform)
                 }
-                def xatlasFiles = [filenames[0].replace('ufbx', 'xatlas'), 'LICENSE-xatlas.txt']
-                copy {
-                    from input
-                    include xatlasFiles
-                    into file("jme3-core/release/lib/xatlas/${platform}")
+                coreNativeNames.each { name ->
+                    copy {
+                        from input
+                        include coreFiles(filenames[0], name)
+                        into file("jme3-core/release/lib/${name}/${platform}")
+                    }
                 }
             }
         }

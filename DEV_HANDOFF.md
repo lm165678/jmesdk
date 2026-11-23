@@ -972,3 +972,9 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 ## 2026-11-24 Lightmap UV2 conversion dialog resources
 
 - Corrected the Editor.ConvertLightmapUv and Editor.ConvertLightmapUvTip keys used by Convert Model. The missing bundle entries stopped the dialog before conversion. Rebuilt the Core module with NetBeans Ant and verified the packaged dialog on the Swing EDT. Unity package extraction, the optional plain J3O snapshot, and Export Unity J3O with Controls remain distinct entries. Plain preview and snapshot material mapping use built-in JME definitions; automatic custom Unity shader translation remains pending.
+
+## 2026-11-24 SPIRV-Cross JNI and GLSL conversion
+
+- Tools / Convert SPIR-V to GLSL invokes the Khronos C API from SDK Core. The Java API selects a SPIR-V entry point, stage and desktop GLSL/GLSL ES version. The SDK does not yet compile Unity ShaderLab/HLSL or generate j3md/j3m from this menu.
+- Upstream pinned to 7affe74d77f93a622bb5002789d5332d32e512ee (Vulkan SDK 1.4.328.1). The existing native build matrix checks and bundles the per-target JNI and Apache license in Core release alongside xatlas. Runtime selects the installed library by platform; jme.sdk.spirvCross.library is a test override.
+- Win64 was compiled locally with MSVC and staged in jme3-core/release/lib/spirv-cross/windows-x86_64. Java verified desktop/ES output, word order and missing entry diagnostics; glslang validated the emitted text. A separate HLSL fragment named PSMain with separate image/sampler converted successfully. NetBeans menu annotation processing and the six-target workflow schema passed. An experimental macOS ARM64 build passed format/symbol checks only. Other cross-builds were stopped at the Win64 milestone or hit host native process errors. Full SDK packaging and interactive GUI execution were not run; the attempted local Core packaging process did not start. No engine-source change or remote push.
