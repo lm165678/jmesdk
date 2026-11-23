@@ -1,3 +1,8 @@
+## 2026-11-24 SDK 资源复制与粘贴
+
+- Assets 树和 Asset Browser 的 SDK 内部文件剪贴板使用 NetBeans 原生复制或移动。NetBeans 同时附带的系统文件列表不会再把这类操作送进外部导入。自动导入监听器也会跳过 SDK 自身复制或移动的输出，避免把原样复制的 PNG 等资源转换成其他格式。外部系统文件导入保留。
+- SDK 基线 da858683，现有依赖引擎 9bd8a386c。JDK 25 定向编译与 INTERNAL_ASSET_COPY_PASS 验证两条入口的导入分流、NetBeans 真实剪贴板粘贴、PNG 内容保持及磁盘新增图片仍可转换。完整导入 smoke 在原有 Editor.ConvertLightmapUv 资源键缺失处停止。未构建或启动 SDK。可用 tools/verify-external-asset-import.ps1 -ClipboardOnly 重跑专项验证。
+
 ## 2026-11-24 Continuous Lightmap coverage under temporal jitter
 
 - Engine `3d16f2729` blends partial baked coverage with live probes at runtime. Existing baked maps work after restarting the SDK. Native pixel, streaming, FSR2 and upscaling checks passed. Visual confirmation in TestScene2 is pending.

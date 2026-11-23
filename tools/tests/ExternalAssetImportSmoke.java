@@ -60,6 +60,54 @@ public final class ExternalAssetImportSmoke {
             throw new AssertionError(message);
         }
     }
+    private static void verifyInternalCopy(Path root, Path input, ProjectAssetManager manager) throws Exception {
+        Files.copy(input, root.resolve("original.png"));
+        FileUtil.refreshFor(root.toFile());
+        var assetRoot = manager.getAssetFolder();
+        var copyFolder = assetRoot.createFolder("copies");
+        var destination = org.openide.loaders.DataFolder.findFolder(copyFolder).getNodeDelegate();
+        var sourceNode = org.openide.loaders.DataObject.find(assetRoot.getFileObject("original.png"))
+                .getNodeDelegate();
+        var watchType = Class.forName("com.jme3.gde.core.assets.ExternalAssetImport$Watch");
+        var constructor = watchType.getDeclaredConstructor(ProjectAssetManager.class);
+        constructor.setAccessible(true);
+        var watcher = constructor.newInstance(manager);
+        var start = watchType.getDeclaredMethod("start");
+        var stop = watchType.getDeclaredMethod("stop");
+        start.setAccessible(true);
+        stop.setAccessible(true);
+        start.invoke(watcher);
+        try {
+            var copied = sourceNode.clipboardCopy();
+            check(copied.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.javaFileListFlavor),
+                    "NetBeans copy must exercise the overlapping file-list flavor");
+            check(ExternalAssetImport.paste(manager, copyFolder, copied) == null,
+                    "Project Assets clipboard copy was routed into external import");
+            check(!ExternalAssetImport.submit(manager, copyFolder, copied),
+                    "Asset Browser clipboard copy was routed into external import");
+            var choices = destination.getPasteTypes(copied);
+            check(choices.length > 0, "Native folder has no paste operation");
+            choices[0].paste();
+            check(Files.mismatch(input, root.resolve("copies/original.png")) == -1,
+                    "Native copy changed image contents");
+
+            // Wait for the same watcher to convert a genuine disk addition.
+            var diskFile = assetRoot.createData("clipboard-control.png");
+            try (var stream = diskFile.getOutputStream()) {
+                stream.write(Files.readAllBytes(input));
+            }
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(20);
+            while (!Files.exists(root.resolve("clipboard-control.png.dds")) && System.nanoTime() < deadline) {
+                Thread.sleep(50);
+            }
+            check(Files.exists(root.resolve("clipboard-control.png.dds")), "External disk import stopped working");
+            check(Files.exists(root.resolve("copies/original.png"))
+                    && !Files.exists(root.resolve("copies/original.png.dds")), "SDK copy was converted by watcher");
+        } finally {
+            stop.invoke(watcher);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         System.setProperty("org.openide.util.Lookup", TestLookup.class.getName());
         try {
@@ -70,6 +118,11 @@ public final class ExternalAssetImportSmoke {
             ImageIO.write(new BufferedImage(16, 8, BufferedImage.TYPE_INT_ARGB), "png", input.toFile());
             FileUtil.refreshFor(root.toFile());
             ProjectAssetManager manager = new ProjectAssetManager(FileUtil.toFileObject(root.toFile()));
+            if (args.length > 1 && args[1].equals("--clipboard-only")) {
+                verifyInternalCopy(root, input, manager);
+                System.out.println("INTERNAL_ASSET_COPY_PASS");
+                System.exit(0);
+            }
             Method run = ExternalAssetImport.class.getDeclaredMethod("run", ProjectAssetManager.class,
                     org.openide.filesystems.FileObject.class, List.class, boolean.class);
             run.setAccessible(true);

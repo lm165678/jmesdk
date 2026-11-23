@@ -1,4 +1,6 @@
 # Independent source checks only; does not build/deploy SDK modules.
+param([switch]$ClipboardOnly)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $jdk = $env:SDK_JAVA_HOME
@@ -30,7 +32,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Source compilation failed' }
     @('-ea','-Djava.awt.headless=true','--add-opens=java.base/java.net=ALL-UNNAMED','--enable-native-access=ALL-UNNAMED',
         '-cp',('"'+$output+';'+$classpath+'"'),'com.jme3.gde.core.assets.ExternalAssetImportSmoke',$output) | Set-Content "$output/run.args"
-    & "$jdk/bin/java.exe" "@$output/run.args"
+    $testOptions = @()
+    if ($ClipboardOnly) {
+        $testOptions += '--clipboard-only'
+    }
+    & "$jdk/bin/java.exe" "@$output/run.args" @testOptions
     if ($LASTEXITCODE -ne 0) { throw 'Import smoke failed' }
 } finally {
     Pop-Location

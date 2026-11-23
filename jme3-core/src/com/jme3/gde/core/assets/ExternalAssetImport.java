@@ -17,6 +17,10 @@ import javax.swing.*;
 import org.openide.DialogDisplayer;
 import org.openide.NotifyDescriptor;
 import org.openide.filesystems.*;
+import org.openide.loaders.DataLoaderPool;
+import org.openide.loaders.LoaderTransfer;
+import org.openide.loaders.OperationAdapter;
+import org.openide.loaders.OperationEvent;
 import org.openide.util.RequestProcessor;
 import org.openide.util.datatransfer.PasteType;
 
@@ -55,8 +59,7 @@ public final class ExternalAssetImport {
                         if (open.contains(watch.manager.getProject())) {
                             return false;
                         }
-                        watch.task.cancel();
-                        FileUtil.removeRecursiveListener(watch, FileUtil.toFile(watch.manager.getAssetFolder()));
+                        watch.stop();
                         return true;
                     });
                 }
@@ -130,7 +133,10 @@ public final class ExternalAssetImport {
     }
 
     public static boolean accepts(Transferable transfer) {
-        return transfer != null && transfer.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+        // NetBeans file nodes also publish an OS file list for interop. Let
+        // DataFolder handle their native clipboard operations and naming rules.
+        return transfer != null && transfer.isDataFlavorSupported(DataFlavor.javaFileListFlavor)
+                && LoaderTransfer.getDataObjects(transfer, LoaderTransfer.COPY | LoaderTransfer.MOVE) == null;
     }
 
     /** Snapshot native transfer data before the OS completes the drop. */
@@ -177,14 +183,59 @@ public final class ExternalAssetImport {
         if (root != null && FileUtil.toFile(root) != null && !WATCHES.containsKey(root.getPath())) {
             Watch watch = new Watch(manager);
             WATCHES.put(root.getPath(), watch);
-            FileUtil.addRecursiveListener(watch, FileUtil.toFile(root));
+            watch.start();
         }
     }
 
     private static final class Watch extends FileChangeAdapter {
         private final ProjectAssetManager manager;
         private final Set<Path> pending = new LinkedHashSet<>();
+        private final Set<Path> sdkOutputs = new HashSet<>();
         private final RequestProcessor.Task task;
+        private final OperationAdapter assetOperations = new OperationAdapter() {
+            @Override
+            public void operationCopy(OperationEvent.Copy event) {
+                forgetSdkFiles(event);
+            }
+
+            @Override
+            public void operationMove(OperationEvent.Move event) {
+                forgetSdkFiles(event);
+            }
+        };
+
+        private void forgetSdkFiles(OperationEvent event) {
+            // Native DataObject operations publish after the file creation event.
+            // Do not convert or remove copies already managed by the SDK.
+            synchronized (pending) {
+                for (FileObject output : event.getObject().files()) {
+                    if (!FileUtil.isParentOf(manager.getAssetFolder(), output)) {
+                        continue;
+                    }
+                    File disk = FileUtil.toFile(output);
+                    if (disk != null) {
+                        Path path = disk.toPath().toAbsolutePath().normalize();
+                        pending.removeIf(candidate -> candidate.startsWith(path));
+                        sdkOutputs.add(path);
+                    }
+                }
+                if (!sdkOutputs.isEmpty()) {
+                    task.schedule(2000);
+                }
+            }
+        }
+
+        private void start() {
+            DataLoaderPool.getDefault().addOperationListener(assetOperations);
+            FileUtil.addRecursiveListener(this, FileUtil.toFile(manager.getAssetFolder()));
+        }
+
+        private void stop() {
+            DataLoaderPool.getDefault().removeOperationListener(assetOperations);
+            FileUtil.removeRecursiveListener(this, FileUtil.toFile(manager.getAssetFolder()));
+            task.cancel();
+        }
+
         Watch(ProjectAssetManager manager) {
             this.manager = manager;
             task = WORK.create(() -> {
@@ -192,6 +243,7 @@ public final class ExternalAssetImport {
                 synchronized (pending) {
                     files = new ArrayList<>(pending);
                     pending.clear();
+                    sdkOutputs.clear();
                 }
                 if (files.stream().anyMatch(ExternalAssetImport::needsConversion)) {
                     run(manager, manager.getAssetFolder(), files, true);
@@ -211,6 +263,10 @@ public final class ExternalAssetImport {
             }
             if (!WRITING.contains(path)) {
                 synchronized (pending) {
+                    // A queued folder scan can rediscover files after operationCopy.
+                    if (sdkOutputs.contains(path)) {
+                        return;
+                    }
                     pending.add(path);
                     task.schedule(2000);
                 }
