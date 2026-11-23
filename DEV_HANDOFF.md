@@ -1,3 +1,8 @@
+## 2026-11-24 SceneComposer resource lookup
+
+- TestScene2 loaded successfully, but SceneComposer construction failed when the GI panel requested `Editor.GiSingleVisibility`. Both new GI labels now use the `Editor.` prefix used by EditorMessages.
+- Rebuilt the local Core module with Ant. The GI panel and full SceneComposer constructor passed on the Swing EDT using the installed module JARs. The scene was not reopened in the full SDK during verification. The change is SDK-only and has no new engine dependency.
+
 ## 待办：3DViewer 多选变换与 Merge（2026-11-24）
 
 - [ ] 在 3DViewer 中 Ctrl + 点击加入选择，Shift + 点击移除该物体。视口与 Scene Explorer 同步多选。变换手柄显示在最后一个仍选中的物体上，拖动手柄时对整组选中物体应用平移、旋转或缩放，以手柄位置为旋转和缩放的枢轴。验证不同父节点下的世界变换、父子同时选中时不叠加变换，以及整组操作的撤销和重做。
