@@ -1,3 +1,8 @@
+## 2026-11-24 Continuous Lightmap coverage under temporal jitter
+
+- Engine `3d16f2729` blends partial baked coverage with live probes at runtime. Existing baked maps work after restarting the SDK. Native pixel, streaming, FSR2 and upscaling checks passed. Visual confirmation in TestScene2 is pending.
+- The installed local Core engine JAR contains the matching shader. The full suite build stopped at a Windows lock on Bullet's DLL. The source and installed DLL checksums matched after the attempt.
+
 ## 2026-11-24 Lightmap chart gutters
 
 - Engine `9bd8a386c` extends newly baked chart edges into two empty texels, keeping both atlas bands aligned and preserving uncovered geometry. SDK unwrap still uses the existing xatlas padding. Imported UV2 needs room between charts at the bake resolution.
