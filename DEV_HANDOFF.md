@@ -1,3 +1,8 @@
+## 2026-11-24 Lightmap chart gutters
+
+- Engine `9bd8a386c` extends newly baked chart edges into two empty texels, keeping both atlas bands aligned and preserving uncovered geometry. SDK unwrap still uses the existing xatlas padding. Imported UV2 needs room between charts at the bake resolution.
+- Engine export and SDK `buildSdk` passed. The local SDK's runtime core JAR matches the exported binary. The RTX 5080 smoke passed. TestScene2 was not rebaked during verification, so existing Lightmap assets need a new bake.
+
 ## 2026-11-24 Static mobility for new scenes
 
 - The empty-scene J3O template now explicitly sets Scene Root to Static so inherited rigid receivers remain eligible for Lightmap baking when attached under another node. Existing assets retain their saved policy. Explicit child mobility and animation inference follow the engine's existing rules.
