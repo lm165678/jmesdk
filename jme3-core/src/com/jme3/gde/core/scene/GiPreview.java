@@ -50,6 +50,9 @@ final class GiPreview implements AutoCloseable {
     void render(SceneApplication app, Runnable draw) {
         SceneRequest request = app.getCurrentSceneRequest();
         Spatial root = request == null ? null : request.getRootNode();
+        WorldSettings previewWorld = root == null ? null : root.getControl(WorldSettings.class);
+        app.getViewPort().setHalfResolutionProbeGi(previewWorld != null && previewWorld.isHalfResolutionProbeGi());
+        app.getViewPort().setProbeGiFullFallback(previewWorld == null || previewWorld.isProbeGiFullFallback());
         if (root == null || !app.isGiPreviewEnabled()) {
             close();
             status = "GI preview disabled";

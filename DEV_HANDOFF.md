@@ -1,3 +1,14 @@
+## 2026-11-23 half-resolution GI and independent full-query fallback
+
+- Paired engine2f2e18698 / SDKe32e9a63 plus working trees. EditorGiStreamingPanel adds Half-resolution GI (default Off) and Full GI fallback (quality, default On); fallback editable only with half GI, preserves explicit choices, defaults restore Off/On. Apply mutates WorldSettings on render thread, marks scene modified on EDT; both options persist in J3O. GiPreview applies them before rendering. No bake format changes or rebake required.
+- Full fallback Off removes its engine FrameGraph pass/targets; rejected pixels use nearby half samples and may leak/miss light. Keep default quality policy. Half GI Off restores original path with no added GI passes. Source usage examples and defaults are documented; see engine GI_HALF_RESOLUTION_REPORT.md for actual dimensions/FPS/GPU/quality results and earlier coverage-rate correction.
+- Targeted GiPreview/EditorGiStreamingPanel compilation and SDK_HALF_GI_FALLBACK_EDT_PASS succeeded (initial/default, toggle, saved-state refresh, enablement linkage and restoration). Engine persistence and native odd-size/four-path/visibility restoration tests passed; default-protected comparison max1/restored0, no-fallback regional worst102. This is not universal quality certification. Old compact absolute assertion fails identically in original and protected paths.
+- Full SDK build, paired engine export, module installation and interactive SceneComposer acceptance were not done. Current installed SDK does not yet contain these source options; rebuild paired dependencies before use. User J3O/GI assets untouched; no push. Preserve unrelated generated deployment/applet archives, nbproject version and extracted baselibs/templates/testdata. Existing Lemur/dual-GUI and Agent backlog remains pending, not part of this work.
+
+## 2026-11-23 two-texel SH prototype withdrawn
+
+- Repeated idle-preview A/B testing still showed no speedup on RTX5060Ti. At user request reverted GiPreview, EditorGiStreamingPanel and bundle changes; no two-texel option remains in SDK source. Engine codec/runtime/API/example changes were also reverted. No SDK build/deployment or user asset writes occurred. Preserve unrelated generated archives, extracted libraries/templates and local revision changes. Earlier implementation details are superseded by this withdrawal; diagnostic logs remain under engine build/gi-cost-check.
+
 ## 2026-11-22 Animation toolbar overflow menu
 
 - Both animation-editor toolbar rows now fold trailing action buttons into an ellipsis menu when available width is insufficient. The menu stays at the right edge and restores buttons when widened. Root Motion, links, export and playback/save/history actions use the original button listeners and current enabled state. Composer/Entry/preference remain inline; at extremely narrow widths these fields can clip, but hidden action buttons remain available in the menu.

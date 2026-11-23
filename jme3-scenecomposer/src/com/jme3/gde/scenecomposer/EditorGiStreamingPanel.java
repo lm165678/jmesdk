@@ -11,6 +11,7 @@ import com.jme3.post.WorldSettings.GiStreaming;
 import com.jme3.scene.Spatial;
 import java.awt.EventQueue;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
@@ -19,7 +20,9 @@ import javax.swing.SpinnerNumberModel;
 /**
  * 第一步：在 SceneComposer 的 World Settings / GI streaming 调整场景预算。
  * 第二步：应用；值为 0 的细探针预算只预览粗层，恢复默认会重新请求细块。
- * 第三步：保存场景 J3O；游戏挂载场景后应用同一组配置。
+ * 第三步：Half-resolution GI 默认关闭；应用后对照边缘、薄墙和曲面。
+ * 完整回退默认开启；关闭仅作性能对照，重建失败处改用邻近缓存，可能漏光。
+ * 第四步：保存场景 J3O；游戏挂载后恢复开关，关闭可回退全分辨率，无须重烘焙。
  */
 final class EditorGiStreamingPanel extends JPanel implements SceneListener {
     private final JSpinner distance = new JSpinner(new SpinnerNumberModel(
@@ -30,6 +33,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
             GiStreaming.DEFAULTS.getAtlasMiB(), GiStreaming.MIN_ATLAS_MIB, GiStreaming.MAX_ATLAS_MIB, 1));
     private final JButton apply = new JButton(EditorMessages.text("GiStreamingApply"));
     private final JButton defaults = new JButton(EditorMessages.text("GiStreamingDefaults"));
+    private final JCheckBox halfGi = new JCheckBox(EditorMessages.text("GiHalfResolution"));
+    private final JCheckBox fullFallback = new JCheckBox(EditorMessages.text("GiFullFallback"), true);
     private SceneRequest scene;
 
     EditorGiStreamingPanel() {
@@ -39,6 +44,11 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
         add(fine);
         add(new JLabel(EditorMessages.text("GiStreamingAtlas")));
         add(atlas);
+        halfGi.setToolTipText(EditorMessages.text("GiHalfResolutionHint"));
+        add(halfGi);
+        fullFallback.setToolTipText(EditorMessages.text("GiFullFallbackHint"));
+        add(fullFallback);
+        halfGi.addActionListener(event -> fullFallback.setEnabled(halfGi.isEnabled() && halfGi.isSelected()));
         add(defaults);
         add(apply);
         InspectorColumns.install(this, "scene.giStreaming");
@@ -58,17 +68,32 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
         distance.setEnabled(editable);
         fine.setEnabled(editable);
         atlas.setEnabled(editable);
+        halfGi.setEnabled(editable);
+        fullFallback.setEnabled(editable && halfGi.isSelected());
         apply.setEnabled(editable);
         defaults.setEnabled(editable);
     }
 
     private void showSettings(GiStreaming settings) {
+        showSettings(settings, false);
+    }
+
+    private void showSettings(GiStreaming settings, boolean halfResolution) {
+        showSettings(settings, halfResolution, true);
+    }
+
+    private void showSettings(GiStreaming settings, boolean halfResolution, boolean fallback) {
+        fullFallback.setSelected(fallback);
+        fullFallback.setEnabled(halfGi.isEnabled() && halfResolution);
+        halfGi.setSelected(halfResolution);
         distance.setValue((double) settings.getPreloadDistance());
         fine.setValue(settings.getMaxFineProbes());
         atlas.setValue(settings.getAtlasMiB());
     }
 
     private void apply(GiStreaming values) {
+        boolean halfResolution = halfGi.isSelected();
+        boolean fallback = fullFallback.isSelected();
         SceneRequest request = scene;
         if (request == null) {
             return;
@@ -86,6 +111,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
                 root.addControl(world);
             }
             world.setGiStreaming(values);
+            world.setHalfResolutionProbeGi(halfResolution);
+            world.setProbeGiFullFallback(fallback);
             EventQueue.invokeLater(() -> request.getDataObject().setModified(true));
             return null;
         });
@@ -98,10 +125,12 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
             WorldSettings world = current == null || current.getRootNode() == null
                     ? null : current.getRootNode().getControl(WorldSettings.class);
             GiStreaming values = world == null ? GiStreaming.DEFAULTS : world.getGiStreaming();
+            boolean halfResolution = world != null && world.isHalfResolutionProbeGi();
+            boolean fallback = world == null || world.isProbeGiFullFallback();
             EventQueue.invokeLater(() -> {
                 if (isDisplayable() && current == app.getCurrentSceneRequest()) {
                     scene = current;
-                    showSettings(values);
+                    showSettings(values, halfResolution, fallback);
                     setEditable(current != null && current.getDataObject() != null && current.getRootNode() != null);
                 }
             });
