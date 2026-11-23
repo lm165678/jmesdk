@@ -233,6 +233,7 @@ public final class SceneComposerTopComponent extends TopComponent implements
         for (javax.swing.JPanel section : new javax.swing.JPanel[]{tools, cameraPanel,
                 foldSection("Spawn", spawnPanel),
                 foldSection(ui("GiStreamingWorldSettings"), new EditorGiStreamingPanel()),
+                foldSection("GPU Scene LOD", new EditorGpuLodPanel()),
                 foldSection(ui("PostProcessing"), new EditorPostProcessingPanel()),
                 foldSection(ui("Advanced"), advanced),
                 foldSection(ui("PhysicsEffects"), jPanel4), foldSection(ui("SceneInformation"), sceneInfoPanel)}) {

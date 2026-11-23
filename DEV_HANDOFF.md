@@ -1,3 +1,8 @@
+## 2026-11-24 GPU Scene LOD
+
+- SceneComposer → GPU Scene LOD edits the decreasing projected diameters in pixels. Apply marks the scene modified. Save J3O persists an override under WorldSettings. Use defaults restores 80, 30, 10 and 3. A blank field followed by Apply also restores defaults.
+- Pair with engine implementation `00e02fdb1`. Targeted SDK Java compilation passed. The GPU example verified defaults, J3O override and detaching on RTX 5080. Full SDK packaging and interactive editor acceptance remain to be run.
+
 ## 2026-11-24 tagged Lightmap assets and read-only preview
 
 - Pair with engine `6f6f25694ec61a7dc6942bb9198dd103d300ab8f`. New bake outputs have a `ProbeLightmapAsset` root and publish by atomic rename when supported. Geometry's control still stores only the external asset path and streaming settings. Runtime unwraps the texture or reads the previous bare `Texture2D` files. Linear RGBA16F remains the transport format; there is no Android ASTC conversion for this asset type.
