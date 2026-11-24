@@ -1,5 +1,29 @@
 /**
- * Host-side compression and standalone mip inspection for the SDK.
+ * Host-side compression, mip inspection and pure-Java skin authoring tools for the SDK.
+ *
+ * <p>Tools / Textures / Pre-integrated Skin Tools contains LUT generation and
+ * normal-prefilter tabs. Both share an editable diffusion profile: the published
+ * reference fit plus explicitly artistic light/medium/dark starting points.
+ * Normal filtering operates on signed vectors, with exact Gaussian and fast
+ * approximations, explicit source texels/mm, clamp/wrap boundaries, and an
+ * original detail-map copy. Two-normal exports use one smooth normal basis;
+ * four-normal exports bind separate R/G/B diffuse maps. Previews offer normal
+ * data and lighting, wheel zoom, dragging and Fit. Pigmentation uses material
+ * BaseColor/BaseColorMap; normal filtering does not generate curvature or unwrap UVs.</p>
+ *
+ * <pre>
+ * 第一步：在 LUT 页选择参考/美术预设，或编辑高斯曲线与 RGB 距离。
+ * 第二步：在法线页选择 PNG/JPEG，设置源 texels/mm 与输出尺寸，点击 Generate。
+ * 第三步：选择双法线近似或四法线，导出配套 .j3m、线性 LUT、法线图和参数文件。
+ * 第四步：在材质编辑器设置底色。Load profile 可恢复导出的扩散参数。
+ * 第五步：用 tools/verify-skin-lut.ps1 -JdkHome &lt;JDK25&gt; 运行独立 CPU/EDT 检查。
+ * </pre>
+ * <p>This path uses no native texture codec and launches no child process at
+ * runtime. Outputs stay below the chosen asset root; publication backs up owned
+ * assets, refuses unrelated files and publishes material references last.
+ * It does not modify source textures, scene models, DDS mappings or Lightmaps.
+ * Consume the matching engine API through the user's normal engine export/SDK
+ * build; this tool's verification script does not build or launch the SDK.</p>
  *
  * <p>The editor first looks for an installed JNI codec in
  * {@code release/texture-tools/jni}. This path encodes and decodes on the current
