@@ -20,6 +20,8 @@
 
 ## Implementation and validation
 
+- The user owns SDK builds. Do not export/build/package/install/launch the SDK unless explicitly requested. Use targeted compilation or isolated diagnostic programs for verification; do not replace installed SDK modules.
+
 - Preserve unrelated user modifications. Use four-space indentation and braces;
   keep independent statements on separate lines.
 - Document changed user-visible behavior and defaults in relevant source comments;
