@@ -13,6 +13,7 @@ import java.util.List;
 
 /** Render-thread marker builder. Sampling halos never create duplicate markers. */
 final class GiProbeMarkers {
+    private static final ColorRGBA VALID_COARSE = new ColorRGBA(0.45f, 0.7f, 1f, 1f);
     record Buffers(FloatBuffer positions, FloatBuffer colors, FloatBuffer movement) { }
 
     private record Brick(GiProbeData data, GiProbeGrid grid, Vector3f min, Vector3f max) { }
@@ -121,11 +122,11 @@ final class GiProbeMarkers {
             return;
         }
         Vector3f actual = nominal.clone();
-        ColorRGBA color = ColorRGBA.Cyan;
+        ColorRGBA color = ColorRGBA.Gray;
         if (data != null) {
             data.getProbeOffset(index, actual).addLocal(nominal);
             boolean valid = data.isProbeValid(index);
-            color = valid ? (fine ? new ColorRGBA(0.25f, 0.55f, 1, 1) : ColorRGBA.Green) : ColorRGBA.Red;
+            color = valid ? (fine ? ColorRGBA.Green : VALID_COARSE) : ColorRGBA.Red;
             Vector3f original = source == null ? nominal : source;
             // Half-precision metadata can leave a small resampling residual.
             float tolerance = Math.max(0.0001f, data.getGrid().getSpacing().length() * 0.001f);

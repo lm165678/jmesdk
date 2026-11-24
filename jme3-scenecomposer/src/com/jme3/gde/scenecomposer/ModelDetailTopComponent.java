@@ -1,5 +1,7 @@
 package com.jme3.gde.scenecomposer;
 
+import com.jme3.gde.core.assets.LightmapUvGenerator;
+import com.jme3.environment.gi.ProbeLightmapControl;
 import com.jme3.gde.core.scene.SceneApplication;
 import com.jme3.gde.core.scene.SceneRequest;
 import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
@@ -37,6 +39,12 @@ import org.openide.windows.TopComponent;
  * 第三步：配置比例后点击 Bake，自动给生成多个层级的几何体添加 LodControl。
  * 第四步：等待完成，Ctrl+Z 撤销，Ctrl+S 保存到当前 j3o。
  * 第五步：View 选择 SDF 查看已烘焙距离场表面；修改模型后重新烘焙并 Refresh。
+ * 第六步：选中单个 Geometry，打开 Lightmap UV 页，设置目标分辨率、每岛边距和图边。
+ * 点击 Regenerate UV2 替换已有 UV2；UV0 保持，旧静态 Lightmap 失效，需要重新烘焙。
+ * View UV2 打开独立二维视图；Ctrl+滚轮缩放，滚动条移动查看，未生成时显示提示。
+ * UV2、分辨率设置及旧 Lightmap 引用一起支持撤销/重做，Ctrl+S 保存 J3O。
+ * 默认 512 像素、每岛 4 纹素、图边 2 纹素。边距预留不等于烘焙后的颜色扩边。
+ * 原模型转换和自动补缺失 UV2 的路径不变；只对刚体三角形 Mesh 提供重新展开。
  * </pre>
  */
 @TopComponent.Description(preferredID = "ModelDetailTopComponent", persistenceType = TopComponent.PERSISTENCE_NEVER)
@@ -100,6 +108,43 @@ public final class ModelDetailTopComponent extends TopComponent {
     private void enableModelInputs(boolean enabled) {
         setInputsEnabled(tabs, enabled);
         bake.setEnabled(enabled && editor != null && cancellation == null && tabs.getSelectedComponent() != physics);
+        if (enabled) {
+            refreshBakeEnabled();
+        }
+    }
+
+    private boolean isUvPage() {
+        return tabs.getSelectedComponent() instanceof JComponent page
+                && Integer.valueOf(4).equals(page.getClientProperty("bakeOperation"));
+    }
+
+    private void refreshBakeEnabled() {
+        bake.setText(isUvPage() ? "Regenerate UV2" : ui("Bake"));
+        bake.setEnabled(editor != null && cancellation == null && hasGeometry
+                && tabs.getSelectedComponent() != physics && (!isUvPage() || selected instanceof Geometry));
+        viewUv.setEnabled(selected instanceof Geometry && hasGeometry);
+    }
+
+    private void refreshUvView(boolean activate) {
+        long generation = ++uvViewGeneration;
+        if (!(selected instanceof Geometry geometry)) {
+            return;
+        }
+        if (!activate && (uvView == null || !uvView.isOpened())) {
+            return;
+        }
+        SceneApplication.getApplication().enqueue(() -> {
+            LightmapUvView.Snapshot snapshot = LightmapUvView.capture(geometry);
+            SwingUtilities.invokeLater(() -> {
+                if (selected == geometry && generation == uvViewGeneration) {
+                    if (uvView == null) {
+                        uvView = new LightmapUvView();
+                    }
+                    uvView.showSnapshot(snapshot, activate);
+                }
+            });
+            return null;
+        });
     }
 
     private static void setInputsEnabled(java.awt.Component component, boolean enabled) {
@@ -127,6 +172,12 @@ public final class ModelDetailTopComponent extends TopComponent {
     private final JButton cancel = new JButton(ui("Cancel"));
     private final JTabbedPane tabs = new JTabbedPane();
     private final ModelPhysicsPanel physics = new ModelPhysicsPanel();
+    private final JSpinner uvResolution = spinner(512, 64, 4096, 64);
+    private final JSpinner uvPadding = spinner(4, 0, 64, 1);
+    private final JSpinner uvBorder = spinner(2, 0, 64, 1);
+    private final JButton viewUv = new JButton("View UV2");
+    private LightmapUvView uvView;
+    private long uvViewGeneration;
     private final JComboBox<String> lodPreview = new JComboBox<>();
     private boolean updatingLodPreview;
     private final JLabel lodPreviewInfo = new JLabel();
@@ -168,6 +219,13 @@ public final class ModelDetailTopComponent extends TopComponent {
         tabs.addTab(ui("Surface"), rows("Pixels / card", resolution, "Payload budget (MiB)", budget,
                 "Material/texture revision", revision,
                 "GPU capture; may pause preview", new JLabel("Albedo / normal / material / depth")));
+        viewUv.setToolTipText("Inspect only the selected Geometry's lightmap UV2 in a separate view");
+        viewUv.addActionListener(event -> refreshUvView(true));
+        uvPadding.setToolTipText("Reserved margin on EACH island, in target-resolution texels; not color dilation");
+        uvBorder.setToolTipText("Additional reserved border around the entire UV atlas, in texels");
+        tabs.addTab("Lightmap UV", rows("Target resolution", uvResolution,
+                "Margin / island (texels)", uvPadding, "Atlas border (texels)", uvBorder,
+                "UV2 preview", viewUv, "Selected Geometry only", new JLabel("Regeneration invalidates old Lightmaps")));
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         // Reparenting a tab into a scroll pane removes it from JTabbedPane.
         // Snapshot and detach all tabs first, otherwise indices shift mid-loop.
@@ -192,7 +250,7 @@ public final class ModelDetailTopComponent extends TopComponent {
         tabs.addChangeListener(event -> {
             boolean meshOperation = tabs.getSelectedComponent() != physics;
             bottom.setVisible(meshOperation || cancellation != null);
-            bake.setEnabled(meshOperation && hasGeometry && editor != null && cancellation == null);
+            refreshBakeEnabled();
         });
         add(tabs, BorderLayout.CENTER);
         setMinimumSize(new java.awt.Dimension(100, 80));
@@ -277,7 +335,28 @@ public final class ModelDetailTopComponent extends TopComponent {
             panel.resetLodPreview();
         }
         SceneApplication.getApplication().setSdfPreviewSelection(spatial);
+        boolean uvSelectionChanged = panel.selected != spatial;
+        panel.uvViewGeneration++;
         panel.selected = spatial;
+        if (spatial instanceof Geometry geometry && uvSelectionChanged) {
+            SceneApplication.getApplication().enqueue(() -> {
+                Integer size = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
+                Integer margin = geometry.getUserData(LightmapUvGenerator.PADDING_KEY);
+                Integer border = geometry.getUserData(LightmapUvGenerator.BORDER_KEY);
+                SwingUtilities.invokeLater(() -> {
+                    if (panel.selected == geometry) {
+                        panel.uvResolution.setValue(size == null ? 512 : size);
+                        panel.uvPadding.setValue(margin == null ? 4 : margin);
+                        panel.uvBorder.setValue(border == null ? 2 : border);
+                        panel.refreshUvView(false);
+                    }
+                });
+                return null;
+            });
+        } else if (!(spatial instanceof Geometry) && panel.uvView != null && panel.uvView.isOpened()) {
+            panel.uvView.showSnapshot(new LightmapUvView.Snapshot("No Geometry selected", new float[0],
+                    new int[0], 256, "Select a Geometry"), false);
+        }
         panel.editor = controller;
         panel.bake.setEnabled(false);
         panel.hasGeometry = false;
@@ -410,13 +489,24 @@ public final class ModelDetailTopComponent extends TopComponent {
         final int operation = (Integer) pageOperation;
         final float[] ratios;
         try {
-            String[] values = lod.getText().split(",");
+            String[] values = operation == 0 ? lod.getText().split(",") : new String[0];
             ratios = new float[values.length];
             for (int i = 0; i < values.length; i++) {
                 ratios[i] = Float.parseFloat(values[i].trim());
             }
         } catch (NumberFormatException error) {
             status.setText("Invalid LOD ratios: e.g. 0.5,0.25,0.125");
+            return;
+        }
+        final LightmapUvGenerator.Settings uvSettings;
+        try {
+            uvSettings = operation == 4 ? new LightmapUvGenerator.Settings((int) uvResolution.getValue(),
+                    (int) uvPadding.getValue(), (int) uvBorder.getValue()) : null;
+            if (operation == 4 && !(target instanceof Geometry)) {
+                throw new IllegalArgumentException("Select one Geometry to regenerate UV2.");
+            }
+        } catch (IllegalArgumentException error) {
+            status.setText(error.getMessage());
             return;
         }
         SdfSettings settings = new SdfSettings((int) x.getValue(), (int) y.getValue(), (int) z.getValue(),
@@ -457,6 +547,13 @@ public final class ModelDetailTopComponent extends TopComponent {
                                 ModelBakeSupport.lod(copy, ratios);
                             } else if (operation == 1) {
                                 ModelBakeSupport.normalsAndTangents(copy, rebuildNormals, rebuildTangents);
+                            } else if (operation == 4) {
+                                Geometry geometry = (Geometry) copy;
+                                if (token.get()) {
+                                    throw new CancellationException("UV regeneration cancelled");
+                                }
+                                geometry.setMesh(LightmapUvGenerator.regenerate(geometry.getMesh(), uvSettings));
+                                updateProgress(token, 1f);
                             } else {
                                 volume = SdfGenerator.generate(copy, settings, fraction -> updateProgress(token, fraction));
                             }
@@ -470,10 +567,14 @@ public final class ModelDetailTopComponent extends TopComponent {
                                     }
                                     if (operation == 2) {
                                         applyData(target, SdfVolume.USER_DATA_KEY, result, currentEditor);
+                                    } else if (operation == 4) {
+                                        applyLightmapUv((Geometry) target, ((Geometry) copy).getMesh(), uvSettings, currentEditor);
                                     } else {
                                         applyMeshes(originalGeometries, ModelBakeSupport.geometries(copy), operation == 0, currentEditor);
                                     }
-                                    finish(token, "Bake complete. Ctrl+S to save; Ctrl+Z to undo. Refresh diagnostic views after changes.");
+                                    finish(token, operation == 4
+                                            ? "UV2 regenerated. Old Lightmap invalidated; rebake GI. Ctrl+Z to undo; Ctrl+S to save."
+                                            : "Bake complete. Ctrl+S to save; Ctrl+Z to undo. Refresh diagnostic views after changes.");
                                 } catch (Exception error) {
                                     finish(token, error.toString());
                                 }
@@ -514,11 +615,51 @@ public final class ModelDetailTopComponent extends TopComponent {
             if (cancellation == token) {
                 cancellation = null;
                 cancel.setEnabled(false);
-                bake.setEnabled(selected != null && editor != null && hasGeometry && tabs.getSelectedComponent() != physics);
+                refreshBakeEnabled();
                 status.setText(message);
                 refreshLodPreviewChoices();
+                refreshUvView(false);
             }
         });
+    }
+
+    private void applyLightmapUv(Geometry geometry, Mesh result, LightmapUvGenerator.Settings settings,
+            SceneEditorController currentEditor) {
+        Mesh previous = geometry.getMesh();
+        int previousLod = geometry.getLodLevel();
+        ProbeLightmapControl lightmap = geometry.getControl(ProbeLightmapControl.class);
+        Object oldSize = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
+        Object oldPadding = geometry.getUserData(LightmapUvGenerator.PADDING_KEY);
+        Object oldBorder = geometry.getUserData(LightmapUvGenerator.BORDER_KEY);
+        Runnable refresh = () -> SwingUtilities.invokeLater(() -> refreshUvView(false));
+        Runnable undo = () -> {
+            geometry.setMesh(previous);
+            if (previous.getNumLodLevels() > 0) {
+                geometry.setLodLevel(previousLod);
+            }
+            geometry.setUserData(LightmapUvGenerator.RESOLUTION_KEY, oldSize);
+            geometry.setUserData(LightmapUvGenerator.PADDING_KEY, oldPadding);
+            geometry.setUserData(LightmapUvGenerator.BORDER_KEY, oldBorder);
+            if (lightmap != null) {
+                geometry.addControl(lightmap);
+            }
+            geometry.updateModelBound();
+            refresh.run();
+        };
+        Runnable redo = () -> {
+            geometry.removeControl(ProbeLightmapControl.class);
+            geometry.setResidentProbeLightmap(null);
+            geometry.setMesh(result);
+            if (result.getNumLodLevels() > 0) {
+                geometry.setLodLevel(0);
+            }
+            geometry.setUserData(LightmapUvGenerator.RESOLUTION_KEY, settings.resolution());
+            geometry.setUserData(LightmapUvGenerator.PADDING_KEY, settings.padding());
+            geometry.setUserData(LightmapUvGenerator.BORDER_KEY, settings.border());
+            geometry.updateModelBound();
+            refresh.run();
+        };
+        commit(undo, redo, currentEditor);
     }
 
     private void applyData(Spatial target, String key, Object result, SceneEditorController currentEditor) {

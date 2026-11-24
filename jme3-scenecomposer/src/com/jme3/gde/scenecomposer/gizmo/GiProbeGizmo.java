@@ -15,8 +15,8 @@ import java.nio.FloatBuffer;
 
 /** Tool-only adaptive coverage visualization; never saved with source geometry.
  * Uses resident streaming payloads rather than losing relocation after export.
- * Green=coarse, blue=fine, yellow=physically relocated, red=invalid,
- * cyan=unbaked/not resident. Each brick is capped at 4096 displayed points.
+ * Light blue=valid coarse, green=valid fine, yellow=physically relocated, red=invalid,
+ * gray=unbaked/not resident, orange=surface probes. The fine grid is capped at 4096 displayed points.
  */
 final class GiProbeGizmo {
     private GiProbeGizmo() {

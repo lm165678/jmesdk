@@ -250,7 +250,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             placement.setEnabled(!adaptive.isSelected());
         });
         placement.setToolTipText("Reject interior probes; exact triangle distance enforces clearance, including edges and corners. Every relocation is rechecked.");
-        adaptive.setToolTipText("Surface-coverage refinement; classification and safe relocation are required. Uncovered areas retain coarse GI. Visualize GI volumes: green=valid, blue=fine, yellow=relocated, red=invalid, cyan=not resident.");
+        adaptive.setToolTipText("Surface-coverage refinement; classification and safe relocation are required. Uncovered areas retain coarse GI. Visualize GI volumes: light blue=valid coarse, green=valid fine, yellow=relocated, red=invalid, gray=unbaked or not resident, orange=surface probes.");
         visibility.setToolTipText("Directional distance atlas resolution. 16 by default; 32 for difficult geometry. Requires rebaking.");
         Map<String, JComponent> bakeOptions = new LinkedHashMap<>();
         bakeOptions.put("captureSize", capture);

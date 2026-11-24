@@ -17,7 +17,9 @@ import com.jme3.scene.*;
  * are included; the owner's own world transform is applied by RigidBodyControl.
  * The compound child offset preserves models whose mesh is away from its pivot.
  * Sphere uses a one-sphere MultiSphere to support nonuniform model scaling.
- * Its radius encloses the local bounding box; scaled spheres become ellipsoids.
+ * Its radius encloses mesh vertices around the local bounding-box center;
+ * scaled spheres become ellipsoids. Meshes without positions use their bounds.
+ * Existing saved shapes retain their size until Rebuild collision is invoked.
  * Call on the render thread. No scene transforms or shared mesh bounds are changed.
  * <pre>{@code
  * // 第一步：在渲染线程生成单个包围盒形体；true 改为包围球形体。
@@ -63,10 +65,47 @@ public final class ModelCollisionShapes {
         BoundingBox box = bounds(owner);
         Vector3f half = new Vector3f(Math.max(.001f, box.getXExtent()),
                 Math.max(.001f, box.getYExtent()), Math.max(.001f, box.getZExtent()));
-        CollisionShape primitive = sphere ? new MultiSphere(half.length()) : new BoxCollisionShape(half);
+        CollisionShape primitive = sphere
+                ? new MultiSphere(Math.max(.001f, (float) Math.sqrt(radiusSquared(owner,
+                        new Transform(), box.getCenter()))))
+                : new BoxCollisionShape(half);
         CompoundCollisionShape compound = new CompoundCollisionShape(1);
         compound.addChildShape(primitive, box.getCenter());
         return compound;
+    }
+
+    private static float radiusSquared(Spatial spatial, Transform relative, Vector3f center) {
+        float radiusSquared = 0f;
+        if (spatial instanceof Geometry geometry && geometry.getMesh() != null) {
+            Mesh mesh = geometry.getMesh();
+            VertexBuffer positions = mesh.getBuffer(VertexBuffer.Type.Position);
+            Vector3f vertex = new Vector3f();
+            if (positions != null && positions.getNumComponents() >= 3
+                    && positions.getNumElements() > 0) {
+                for (int i = 0; i < positions.getNumElements(); i++) {
+                    vertex.set(((Number) positions.getElementComponent(i, 0)).floatValue(),
+                            ((Number) positions.getElementComponent(i, 1)).floatValue(),
+                            ((Number) positions.getElementComponent(i, 2)).floatValue());
+                    relative.transformVector(vertex, vertex);
+                    radiusSquared = Math.max(radiusSquared, vertex.distanceSquared(center));
+                }
+            } else if (mesh.getBound() != null) {
+                BoundingVolume transformed = mesh.getBound().transform(relative, null);
+                BoundingBox box = new BoundingBox(transformed.getCenter(), 0, 0, 0);
+                box.mergeLocal(transformed);
+                vertex.set(Math.abs(box.getCenter().x - center.x) + box.getXExtent(),
+                        Math.abs(box.getCenter().y - center.y) + box.getYExtent(),
+                        Math.abs(box.getCenter().z - center.z) + box.getZExtent());
+                radiusSquared = vertex.lengthSquared();
+            }
+        }
+        if (spatial instanceof Node node) {
+            for (Spatial child : node.getChildren()) {
+                Transform next = child.getLocalTransform().clone().combineWithParent(relative);
+                radiusSquared = Math.max(radiusSquared, radiusSquared(child, next, center));
+            }
+        }
+        return radiusSquared;
     }
 
     /**

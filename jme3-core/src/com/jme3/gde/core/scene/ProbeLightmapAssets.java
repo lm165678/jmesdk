@@ -38,6 +38,15 @@ import org.openide.util.RequestProcessor;
  * // 第二步：每个渲染帧调用 maps.step()，任务完成后保存场景引用。
  * }</pre>
  * Receivers outside supported coverage continue using live probes. The scene is saved through the editor.
+ * Manual Geometry UV2 regeneration stores LightmapUvGenerator.RESOLUTION_KEY;
+ * subsequent bakes use that 64..4096 target size. Absent metadata retains 256.
+ * UV island margins reserve space; the baker's color dilation policy is unchanged.
+ * Regenerate and rebake on the scene's render thread, then save through the editor.
+ * <pre>{@code
+ * // 第一步：Properties -> Lightmap UV，重新生成所选 Geometry 的 UV2 并设置分辨率。
+ * // 第二步：Bake & Apply 重新烘焙探针与静态 Lightmap；本任务使用记录的目标尺寸。
+ * // 第三步：Ctrl+S 保存引用。恢复旧尺寸时撤销 UV 编辑，或删除分辨率覆盖后重新烘焙。
+ * }</pre>
  */
 public final class ProbeLightmapAssets implements AutoCloseable {
     private static final int RESOLUTION = 256;
@@ -170,9 +179,21 @@ public final class ProbeLightmapAssets implements AutoCloseable {
             Transform transform = geometry.getWorldTransform().clone();
             proxy.setLocalTransform(transform);
             proxy.setIgnoreTransform(geometry.isIgnoreTransform());
+            // Keep source UV0 material inputs while rasterizing the generated UV2 mesh.
+            proxy.setMaterial(geometry.getMaterial());
+            for (var override : geometry.getWorldMatParamOverrides()) {
+                proxy.addMatParamOverride(override);
+            }
             proxy.updateGeometricState();
+            // Explicit UV regeneration records its texel scale on the receiver.
+            // Legacy receivers retain the original 256-pixel bake resolution.
+            Integer uvResolution = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
+            int lightmapResolution = uvResolution == null ? RESOLUTION : uvResolution;
+            if (lightmapResolution < 64 || lightmapResolution > 4096) {
+                throw new IOException("Invalid receiver Lightmap UV resolution: " + lightmapResolution);
+            }
             Texture2D texture = ProbeLightmapBaker.bakeField(app.getRenderManager(), scene.getManager(),
-                    proxy, field, RESOLUTION, RESOLUTION);
+                    proxy, field, lightmapResolution, lightmapResolution);
             String key = revision + UUID.randomUUID() + ".j3o";
             outputs.add(new Entry(geometry, source, mesh, transform, key));
             write = new CompletableFuture<>();

@@ -24,6 +24,7 @@ final class EditorCollisionSync {
     private final Node root;
     private boolean updatingControls;
     private final Set<Spatial> changed = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<Spatial> renderingChanged = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<Spatial> visited = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Map<PhysicsCollisionObject, CollisionShape> editableShapes = new WeakHashMap<>();
     private final Vector3f scale = new Vector3f();
@@ -40,9 +41,10 @@ final class EditorCollisionSync {
             }
             if (change == SceneChangeListener.Change.TRANSFORM
                     || change == SceneChangeListener.Change.ATTACHED
-                    || change == SceneChangeListener.Change.DETACHING
-                    || change == SceneChangeListener.Change.RENDERING) {
+                    || change == SceneChangeListener.Change.DETACHING) {
                 changed.add(spatial);
+            } else if (change == SceneChangeListener.Change.RENDERING) {
+                renderingChanged.add(spatial);
             }
         });
     }
@@ -77,22 +79,29 @@ final class EditorCollisionSync {
     }
 
     void flush(PhysicsSpace previewSpace, PhysicsPreview preview) {
-        if (changed.isEmpty()) {
+        if (changed.isEmpty() && renderingChanged.isEmpty()) {
             return;
         }
         Spatial[] work = changed.toArray(Spatial[]::new);
+        Spatial[] renderingWork = renderingChanged.toArray(Spatial[]::new);
         changed.clear();
+        renderingChanged.clear();
         try {
             for (Spatial spatial : work) {
                 boolean present = spatial == root || spatial.hasAncestor(root);
-                syncSubtree(spatial, present, previewSpace, preview);
+                syncSubtree(spatial, present, previewSpace, preview, false);
+            }
+            for (Spatial spatial : renderingWork) {
+                boolean present = spatial == root || spatial.hasAncestor(root);
+                syncSubtree(spatial, present, previewSpace, preview, true);
             }
         } finally {
             visited.clear();
         }
     }
 
-    private void syncSubtree(Spatial spatial, boolean present, PhysicsSpace previewSpace, PhysicsPreview preview) {
+    private void syncSubtree(Spatial spatial, boolean present, PhysicsSpace previewSpace,
+            PhysicsPreview preview, boolean renderingOnly) {
         if (!visited.add(spatial)) {
             return;
         }
@@ -103,7 +112,11 @@ final class EditorCollisionSync {
                         control.setPhysicsSpace(null);
                     }
                 } else {
-                    synchronize(spatial, control);
+                    // Diagnostic cull/material changes are not authored pose edits.
+                    // New controls still need synchronization before space registration.
+                    if (!renderingOnly || previewSpace == null || control.getPhysicsSpace() != previewSpace) {
+                        synchronize(spatial, control);
+                    }
                     if (previewSpace != null && control.getPhysicsSpace() == null) {
                         if (preview != null) {
                             preview.capture(spatial, control);
@@ -115,12 +128,16 @@ final class EditorCollisionSync {
         }
         if (spatial instanceof Node node) {
             for (Spatial child : node.getChildren()) {
-                syncSubtree(child, present, previewSpace, preview);
+                syncSubtree(child, present, previewSpace, preview, renderingOnly);
             }
         }
     }
 
     private void synchronize(Spatial spatial, PhysicsControl control) {
+        // Minie clones can retain the original owner; rebind before applying poses.
+        if (control instanceof RigidBodyControl body) {
+            body.setSpatial(spatial);
+        }
         if (control instanceof RigidBodyControl body) {
             boolean local = body.isApplyPhysicsLocal();
             updateScale(body, local ? spatial.getLocalScale() : spatial.getWorldScale());

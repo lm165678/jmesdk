@@ -121,6 +121,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     protected FlyByCamera flyCam;
     protected boolean showSettings = true;
     private volatile SceneRequest currentSceneRequest;
+    private volatile SceneOpenPresentation openingScene;
     private ConcurrentLinkedQueue<SceneListener> listeners = new ConcurrentLinkedQueue<>();
     private ScenePreviewProcessor previewProcessor;
     private ApplicationLogHandler logHandler = new ApplicationLogHandler();
@@ -200,12 +201,12 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     /**
      * EDT-safe diagnostic selection. AUTO shows published fine regions and coarse
-     * fallback elsewhere. FINE marks unloaded fine positions cyan rather than
+     * fallback elsewhere. FINE marks unloaded fine positions gray rather than
      * forcing I/O; COARSE shows only the fallback. Single-layer bakes keep their
      * original layout in every mode. Lighting and saved J3O data are unchanged.
      * <pre>
      * // 第一步：Visualize → Probe display，默认 Auto 跟随细块驻留。
-     * // 第二步：选择 Coarse 或 Fine 固定显示层级，青色表示尚未加载。
+     * // 第二步：选择 Coarse 或 Fine 固定显示层级，灰色表示尚未加载，浅蓝色表示有效粗层，绿色表示有效细层。
      * // 第三步：选择 Auto 恢复；Show probe volumes 独立控制整体显隐。
      * </pre>
      */
@@ -788,6 +789,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     @Override
     public void destroy() {
+        SceneOpenPresentation pending = openingScene;
+        if (pending != null) {
+            pending.close();
+        }
         giPreview.close();
         fakeApp.stopFakeApp();
         initFailed = false;
@@ -864,6 +869,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                         overlayRoot.updateGeometricState();
                     }
                 }
+                SceneOpenPresentation opening = openingScene;
                 boolean capture = com.jme3.gde.core.renderdoc.RenderDocSupport.beginFrame();
                 boolean rendered = false;
                 try {
@@ -875,6 +881,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
                     }
                 }
                 getStateManager().postRender();
+                if (opening != null && opening == openingScene
+                        && opening.request == currentSceneRequest && context.isRenderable()) {
+                    opening.rendered(panel);
+                }
             } catch (NullPointerException e) {
                 handleError("NullPointerException: " + e.getMessage(), e);
             } catch (Exception | Error e) {
@@ -958,6 +968,8 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     private void showSceneOnEdt(SceneRequest request) {
         var opening = com.jme3.gde.core.assets.AssetOpenProgress.current(request.getDataObject());
         currentSceneRequest = request;
+        SceneOpenPresentation pending = opening == null ? null : new SceneOpenPresentation(request, opening);
+        openingScene = pending;
         if (request.getDataNode() != null) {
             setCurrentFileNode(request.getDataNode());
         } else {
@@ -983,6 +995,12 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         request.setFakeApp(fakeApp);
         fakeApp.newAssetManager(manager);
         var attachment = enqueue(() -> {
+            if (request != currentSceneRequest) {
+                if (pending != null) {
+                    pending.close();
+                }
+                return null;
+            }
             if (manager != null) {
                 assetManager = manager;
             }
@@ -1000,14 +1018,23 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
         });
         com.jme3.gde.core.sceneviewer.SceneViewerTopComponent.findInstance().resetSceneLightingButtons();
         notifyOpen(request);
-        if (opening != null) {
+        if (pending != null) {
+            // Listener callbacks enqueue camera, viewport and helper setup.
+            // Arm only after those tasks, never on attachment alone.
+            enqueue(() -> {
+                if (request == currentSceneRequest && openingScene == pending) {
+                    pending.attached();
+                } else {
+                    pending.close();
+                }
+                return null;
+            });
             org.openide.util.RequestProcessor.getDefault().post(() -> {
                 try {
                     attachment.get();
                 } catch (Exception exception) {
+                    pending.close();
                     Exceptions.printStackTrace(exception);
-                } finally {
-                    opening.close();
                 }
             });
         }
@@ -1044,6 +1071,11 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
             if (manager != null) {
                 manager.discardAllEdits();
             }
+        }
+        SceneOpenPresentation pending = openingScene;
+        if (pending != null && pending.request == oldRequest) {
+            openingScene = null;
+            pending.close();
         }
         currentSceneRequest = null;
         notifyClose(oldRequest);
@@ -1370,6 +1402,10 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     @Override
     public void handleError(String msg, Throwable t) {
+        SceneOpenPresentation pending = openingScene;
+        if (pending != null) {
+            pending.close();
+        }
         if (msg == null) {
             msg = t.getMessage();
         }

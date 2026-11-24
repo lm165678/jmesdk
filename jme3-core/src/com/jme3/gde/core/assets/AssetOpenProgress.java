@@ -18,7 +18,7 @@ import org.openide.windows.WindowManager;
 /**
  * One opening operation per file, shared by editor routing and scene attachment.
  * 第一步：点击时 begin；返回 null 表示已有请求，不再启动工作线程。
- * 第二步：将同一个实例作为路由事件 source 交给场景编辑器；第三步：挂载完成或失败后 close。
+ * 第二步：将同一个实例作为路由事件 source 交给场景编辑器；第三步：首帧呈现或失败后 close。
  * begin/close may run on any thread; Swing is always dispatched to EDT. The
  * modeless dialog shows activity, not a fabricated percentage or cancellation.
  */
@@ -72,6 +72,15 @@ public final class AssetOpenProgress implements AutoCloseable {
         handle.setInitialDelay(0);
         handle.start();
         EventQueue.invokeLater(this::show);
+    }
+
+    /**
+     * Reports the rendering phase without finishing the opening operation.
+     * 第一步：完成资源读取后调用本方法；第二步：等待当前场景首帧呈现；
+     * 第三步：呈现、失败或放弃该请求时 close。可从任意线程调用。
+     */
+    public void waitingForFirstFrame() {
+        phase("Preparing first frame...");
     }
 
     void phase(String message) {

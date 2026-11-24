@@ -25,6 +25,23 @@ import org.openide.modules.InstalledFileLocator;
  * Existing UV2 is returned unchanged. Conversion leaves skinned meshes unchecked by default.
  */
 public final class LightmapUvGenerator {
+    /** Saved on Geometry; the SDK Lightmap bake uses this explicit target size. */
+    public static final String RESOLUTION_KEY = "jme.lightmap.uvResolution";
+    public static final String PADDING_KEY = "jme.lightmap.uvPadding";
+    public static final String BORDER_KEY = "jme.lightmap.uvBorder";
+
+    /** Texel margins refer to the target resolution, not texture color dilation. */
+    public record Settings(int resolution, int padding, int border) {
+        public static final Settings DEFAULT = new Settings(512, 4, 2);
+
+        public Settings {
+            if (resolution < 64 || resolution > 4096 || padding < 0 || padding > 64
+                    || border < 0 || border > 64 || 2L * (padding + border) + 1 >= resolution) {
+                throw new IllegalArgumentException("UV resolution: 64..4096; padding/border: 0..64 and must fit the atlas");
+            }
+        }
+    }
+
     private static boolean loaded;
 
     private LightmapUvGenerator() {
@@ -34,6 +51,39 @@ public final class LightmapUvGenerator {
         if (source.getBuffer(Type.TexCoord2) != null) {
             return source;
         }
+        return generate(source, null);
+    }
+
+    /**
+     * Replaces existing UV2 in a new mesh; UV0 and other vertex attributes are
+     * remapped, including existing LOD indices. The source stays unchanged.
+     * xatlas creates islands; deterministic Java rectangle packing reserves the
+     * requested per-island margin and atlas border using the existing native ABI.
+     * This may pack less densely than native shape packing. Rigid triangles only.
+     * Run on a worker with a private mesh snapshot; install on the render thread.
+     * Existing static Lightmaps must be invalidated after replacing UV2.
+     * <pre>{@code
+     * // 第一步：在渲染线程复制所选 Geometry 的 Mesh，再交给工作线程。
+     * Mesh snapshot = geometry.getMesh().deepClone();
+     * // 第二步：工作线程重新展开，512 分辨率，每岛预留 4 纹素，图边 2 纹素。
+     * Settings settings = new Settings(512, 4, 2);
+     * Mesh regenerated = regenerate(snapshot, settings);
+     * // 第三步：渲染线程通过可撤销编辑安装，并移除旧 Lightmap 控制器。
+     * geometry.removeControl(com.jme3.environment.gi.ProbeLightmapControl.class);
+     * geometry.setMesh(regenerated);
+     * geometry.setUserData(RESOLUTION_KEY, settings.resolution());
+     * // 第四步：重新烘焙 Lightmap，保存场景；取消时不安装 regenerated。
+     * }</pre>
+     * @param source private source snapshot, not a live renderer mesh
+     * @param settings target resolution and reserved texel margins
+     * @return a separately owned mesh, even when UV2 already exists
+     * @throws IOException if the native library, mesh or atlas is unsupported
+     */
+    public static Mesh regenerate(Mesh source, Settings settings) throws IOException {
+        return generate(source, java.util.Objects.requireNonNull(settings));
+    }
+
+    private static Mesh generate(Mesh source, Settings settings) throws IOException {
         if (source.isAnimated() || source.getMorphTargets().length != 0
                 || source.getMode() != Mesh.Mode.Triangles || source.getTriangleCount() == 0) {
             throw new IOException("Lightmap UVs require a rigid triangle mesh");
@@ -60,7 +110,7 @@ public final class LightmapUvGenerator {
         float[] uv = new float[vertices * 2];
         Mesh result = source.clone();
         for (VertexBuffer buffer : source.getBufferList()) {
-            if (buffer.getBufferType() == Type.Index) {
+            if (buffer.getBufferType() == Type.Index || buffer.getBufferType() == Type.TexCoord2) {
                 continue;
             }
             if (buffer.getData() == null || buffer.getStride() != 0 || buffer.isInstanced()
@@ -82,6 +132,9 @@ public final class LightmapUvGenerator {
             uv[i * 2 + 1] = Float.intBitsToFloat(packet[3 + i * 3]);
         }
         System.arraycopy(packet, 1 + vertices * 3, indices, 0, indices.length);
+        if (settings != null) {
+            LightmapUvPacking.repack(uv, indices, settings);
+        }
         result.setLodLevels(remapLods(source, packet, vertices));
         result.clearBuffer(Type.Index);
         result.setBuffer(Type.Index, 3, indices);

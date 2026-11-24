@@ -22,12 +22,13 @@ import java.io.ByteArrayOutputStream;
 public final class EditorPhysicsSmoke {
     public static void main(String[] args) throws Exception {
         NativeLibraryLoader.loadNativeLibrary("bulletjme", true);
-        verifyPreview();
+        verifyPreview(false);
+        verifyPreview(true);
         verifyConversion();
         System.out.println("EDITOR_PHYSICS_PASS");
     }
 
-    private static void verifyPreview() throws Exception {
+    private static void verifyPreview(boolean removeBeforePlay) throws Exception {
         var root = new Node("Scene");
         var sync = new EditorCollisionSync(root);
         var box = new Geometry("Dynamic", new Box(.5f, .5f, .5f));
@@ -39,6 +40,15 @@ public final class EditorPhysicsSmoke {
         var velocity = new Vector3f(.5f, 0f, 0f);
         body.setLinearVelocity(velocity);
         sync.flush(null);
+        var copy = box.clone(true);
+        root.attachChild(copy);
+        copy.setLocalTranslation(4f, 5f, 0f);
+        root.updateGeometricState();
+        sync.flush(null);
+        if (removeBeforePlay) {
+            copy.removeFromParent();
+            sync.flush(null);
+        }
         var preview = new PhysicsPreview(root);
         var space = new PhysicsSpace(PhysicsSpace.BroadphaseType.DBVT);
         try {
@@ -50,8 +60,13 @@ public final class EditorPhysicsSmoke {
                 root.updateGeometricState();
                 // BulletAppState steps during render, after spatial controls update.
                 space.update(1f / 60);
+                root.setCullHint(com.jme3.scene.Spatial.CullHint.Always);
+                root.setCullHint(com.jme3.scene.Spatial.CullHint.Inherit);
             }
             check(box.getLocalTranslation().y < 4.5f, "Bullet preview did not move the dynamic object");
+            if (!removeBeforePlay) {
+                check(copy.getLocalTranslation().y < 4.5f, "Copy did not fall");
+            }
             body.setAngularVelocity(new Vector3f(4f, 5f, 6f));
             preview.restore(space);
             var saved = reload(root);
@@ -63,6 +78,7 @@ public final class EditorPhysicsSmoke {
             check(restoredBody.getAngularVelocity(null).equals(Vector3f.ZERO), "J3O kept preview angular velocity");
             check(body.getPhysicsSpace() == null && restoredBody.getMass() == 5f, "Reset removed authored physics");
             check(!body.isGravityProtected(), "Reset changed gravity protection");
+            copy.removeFromParent();
             sync.flush(null);
             space.addAll(root);
             for (int tick = 0; tick < 35; tick++) {
@@ -70,6 +86,8 @@ public final class EditorPhysicsSmoke {
                 sync.updateControls(() -> root.updateLogicalState(1f / 60));
                 root.updateGeometricState();
                 space.update(1f / 60);
+                root.setCullHint(com.jme3.scene.Spatial.CullHint.Always);
+                root.setCullHint(com.jme3.scene.Spatial.CullHint.Inherit);
             }
             check(box.getLocalTranslation().y < 4.5f, "Replay did not fall");
         } finally {
