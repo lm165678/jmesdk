@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "upstreamRevisions": {
+    "ufbx": "26a482ae66871d7de36eb722aa060bce95bce274",
+    "xatlas": "16ace528acd2cf1f16a7c0dde99c42c486488dbe",
+    "spirv-cross": "7affe74d77f93a622bb5002789d5332d32e512ee"
+  },
+  "buildRun": "https://github.com/lm165678/jmesdk/actions/runs/45323017392",
+  "nativeSmokeTargets": [
+    "windows-x86_64",
+    "linux-x86_64",
+    "linux-arm64",
+    "macos-x86_64",
+    "macos-arm64"
+  ],
+  "crossCompiledOnly": [
+    "windows-arm64"
+  ],
+  "files": [
+    {
+      "path": "windows-x86_64/jme-ufbx.dll",
+      "sha256": "f1d73f061bb2628cf858136f2927b8cfcc84279da9318621d4be6bc8409b1374"
+    },
+    {
+      "path": "windows-x86_64/LICENSE-ufbx.txt",
+      "sha256": "e52669716973273fb77033552cf6d8dbb88d3dad8600fa4d78088a5f92b3fd65"
+    },
+    {
+      "path": "windows-x86_64/jme-xatlas.dll",
+      "sha256": "2de1ca3e928fd45277056adcc7bc6fb368eb42883118213ed090d0946298379e"
+    },
+    {
+      "path": "windows-x86_64/LICENSE-xatlas.txt",
+      "sha256": "e5a169df33973d376510bbf384cd9eb3cf44278bd6f4bedfc2fff5403f03dde2"
+    },
+    {
+      "path": "windows-x86_64/jme-spirv-cross.dll",
+      "sha256": "b38015122e6d19a22b0a136303c9fce2797c63a76591d59e4b47ede2d2d220b1"
+    },
+    {
+      "path": "windows-x86_64/LICENSE-spirv-cross.txt",
+      "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
+    },
+    {
+      "path": "windows-arm64/jme-ufbx.dll",
+      "sha256": "544c93d0ebbe9d96607eeb846889a3dadaea9b5a980cc22b53466be3fdd85d99"
+    },
+    {
+      "path": "windows-arm64/LICENSE-ufbx.txt",
+      "sha256": "e52669716973273fb77033552cf6d8dbb88d3dad8600fa4d78088a5f92b3fd65"
+    },
+    {
+      "path": "windows-arm64/jme-xatlas.dll",
+      "sha256": "1d2c56630939d423309101a0c10c489e29f3ee5ae8cea551a36e55b7c87bff4f"
+    },
+    {
+      "path": "windows-arm64/LICENSE-xatlas.txt",
+      "sha256": "e5a169df33973d376510bbf384cd9eb3cf44278bd6f4bedfc2fff5403f03dde2"
+    },
+    {
+      "path": "windows-arm64/jme-spirv-cross.dll",
+      "sha256": "31be76f41589f5c6d4e0d542514ef6ebe16cdc77e9d9f9aa70fe158980b246e6"
+    },
+    {
+      "path": "windows-arm64/LICENSE-spirv-cross.txt",
+      "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
+    },
+    {
+      "path": "linux-x86_64/libjme-ufbx.so",
+      "sha256": "3f6bb5172b591fed98d1be121a4050ab0b436663b4ad38226e80de44ea12a6b4"
+    },
+    {
+      "path": "linux-x86_64/LICENSE-ufbx.txt",
+      "sha256": "0dd48ebadf52273c736256325c8f078c03c8bb4facee22a4122de0ad3f615391"
+    },
+    {
+      "path": "linux-x86_64/libjme-xatlas.so",
+      "sha256": "1a26440d5f9bc6f6f2ecd8f6aecb463c01dfdc4f674dfa6c069529b8f90b8b27"
+    },
+    {
+      "path": "linux-x86_64/LICENSE-xatlas.txt",
+      "sha256": "2c16d5b1c2808277fe975b4f70f0fd9afc9b3bcf04e6c676665a82cb2d5579e3"
+    },
+    {
+      "path": "linux-x86_64/libjme-spirv-cross.so",
+      "sha256": "9862bbc3188e9f87c5316fdccdeaac181843cbefaa5a8b8ec0a63f2d700af77e"
+    },
+    {
+      "path": "linux-x86_64/LICENSE-spirv-cross.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "linux-arm64/libjme-ufbx.so",
+      "sha256": "b1e20f81e97242076ddc9f9defe17df5825681d62db3ef100bb3dcd37b184070"
+    },
+    {
+      "path": "linux-arm64/LICENSE-ufbx.txt",
+      "sha256": "0dd48ebadf52273c736256325c8f078c03c8bb4facee22a4122de0ad3f615391"
+    },
+    {
+      "path": "linux-arm64/libjme-xatlas.so",
+      "sha256": "03b92e0285e126c7f765cd097c4d9506239d8e792b757ffb015033ff13762998"
+    },
+    {
+      "path": "linux-arm64/LICENSE-xatlas.txt",
+      "sha256": "2c16d5b1c2808277fe975b4f70f0fd9afc9b3bcf04e6c676665a82cb2d5579e3"
+    },
+    {
+      "path": "linux-arm64/libjme-spirv-cross.so",
+      "sha256": "41ab43cd3805f5661d2dddc7f40f195f16ec37127b704f5a18ede427bab6605d"
+    },
+    {
+      "path": "linux-arm64/LICENSE-spirv-cross.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "macos-x86_64/libjme-ufbx.dylib",
+      "sha256": "95e3c1d642996b927d3fd73393a00d3dac4efd7d0f76bf851e6f60a321460464"
+    },
+    {
+      "path": "macos-x86_64/LICENSE-ufbx.txt",
+      "sha256": "0dd48ebadf52273c736256325c8f078c03c8bb4facee22a4122de0ad3f615391"
+    },
+    {
+      "path": "macos-x86_64/libjme-xatlas.dylib",
+      "sha256": "4e37e332b497cf85286451509b5918a431d20e3bd8ad8d28dc460b7b79cec89f"
+    },
+    {
+      "path": "macos-x86_64/LICENSE-xatlas.txt",
+      "sha256": "2c16d5b1c2808277fe975b4f70f0fd9afc9b3bcf04e6c676665a82cb2d5579e3"
+    },
+    {
+      "path": "macos-x86_64/libjme-spirv-cross.dylib",
+      "sha256": "4bf46b44c203dd71ac4a9e7528ab5e79f32a342ab66c8fbfea6118c29344f692"
+    },
+    {
+      "path": "macos-x86_64/LICENSE-spirv-cross.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "macos-arm64/libjme-ufbx.dylib",
+      "sha256": "3be1af5a4c18d22477ef7607dd7d0087b165a189db1ba26a242a44b8ecbe3712"
+    },
+    {
+      "path": "macos-arm64/LICENSE-ufbx.txt",
+      "sha256": "0dd48ebadf52273c736256325c8f078c03c8bb4facee22a4122de0ad3f615391"
+    },
+    {
+      "path": "macos-arm64/libjme-xatlas.dylib",
+      "sha256": "47893749fa4e7196fb6776ad8f837167b777df1a63204d22b25d05b6cf07fa22"
+    },
+    {
+      "path": "macos-arm64/LICENSE-xatlas.txt",
+      "sha256": "2c16d5b1c2808277fe975b4f70f0fd9afc9b3bcf04e6c676665a82cb2d5579e3"
+    },
+    {
+      "path": "macos-arm64/libjme-spirv-cross.dylib",
+      "sha256": "bae805f8a43b74d1400517487821ac7b5264c986cbaa8d9aa2bc4d1b7b91527c"
+    },
+    {
+      "path": "macos-arm64/LICENSE-spirv-cross.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  ]
+}

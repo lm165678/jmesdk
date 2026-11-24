@@ -1,7 +1,6 @@
 package com.jme3.gde.scenecomposer.gizmo;
 
 import com.jme3.asset.AssetManager;
-import com.jme3.environment.gi.GiProbeGrid;
 import com.jme3.environment.gi.GiProbeData;
 import com.jme3.environment.gi.GiProbeVolume;
 import com.jme3.material.Material;
@@ -12,12 +11,11 @@ import com.jme3.renderer.ViewPort;
 import com.jme3.scene.*;
 import com.jme3.scene.control.AbstractControl;
 import com.jme3.scene.debug.WireBox;
-import com.jme3.util.BufferUtils;
 import java.nio.FloatBuffer;
 
 /** Tool-only adaptive coverage visualization; never saved with source geometry.
  * Uses resident streaming payloads rather than losing relocation after export.
- * Green=coarse, blue=refined, yellow=relocated (line from original), red=invalid,
+ * Green=coarse, blue=fine, yellow=physically relocated, red=invalid,
  * cyan=unbaked/not resident. Each brick is capped at 4096 displayed points.
  */
 final class GiProbeGizmo {
@@ -51,11 +49,18 @@ final class GiProbeGizmo {
             private Vector3f previousCoverage;
             private Vector3f previousCounts;
             private GiProbeData previousData;
+            private Object previousDirectory;
+            private com.jme3.gde.core.scene.SceneApplication.ProbeDisplayMode previousMode;
+            private java.util.List<com.jme3.environment.gi.GiProbeStreamer.ResidentBrick> previousBricks = java.util.List.of();
+            private Vector3f previousScale;
             private final java.util.Map<GiProbeVolume, Spatial> refinements = new java.util.IdentityHashMap<>();
 
             @Override
             protected void controlUpdate(float tpf) {
-                gizmo.setCullHint(com.jme3.gde.core.scene.SceneApplication.getApplication().isGiVolumesVisible()
+                var application = com.jme3.gde.core.scene.SceneApplication.getApplication();
+                boolean refined = Boolean.TRUE.equals(volume.getUserData("jme.gi.adaptive.refinement"));
+                gizmo.setCullHint(application.isGiVolumesVisible()
+                        && !(refined && application.getProbeDisplayMode() == com.jme3.gde.core.scene.SceneApplication.ProbeDisplayMode.COARSE)
                         ? Spatial.CullHint.Inherit : Spatial.CullHint.Always);
                 Node parent = gizmo.getParent();
                 gizmo.setLocalTranslation(parent == null ? volume.getWorldTranslation()
@@ -84,56 +89,33 @@ final class GiProbeGizmo {
                 Vector3f coverage = volume.getCoverage();
                 Vector3f counts = volume.getProbeCounts();
                 GiProbeData data = com.jme3.gde.core.scene.SceneApplication.getApplication().getGiProbePreviewData(volume);
-                if (coverage.equals(previousCoverage) && counts.equals(previousCounts) && data == previousData) {
+                var app = com.jme3.gde.core.scene.SceneApplication.getApplication();
+                var mode = app.getProbeDisplayMode();
+                var bricks = app.getGiProbePreviewBricks(volume);
+                if (coverage.equals(previousCoverage) && counts.equals(previousCounts) && data == previousData
+                        && previousDirectory == volume.getStreamingData() && mode == previousMode
+                        && bricks.equals(previousBricks) && volume.getWorldScale().equals(previousScale)) {
                     return;
                 }
                 previousCoverage = coverage;
                 previousCounts = counts;
                 previousData = data;
+                previousDirectory = volume.getStreamingData();
+                previousMode = mode;
+                previousBricks = bricks;
+                previousScale = volume.getWorldScale().clone();
                 bounds.setMesh(new WireBox(coverage.x * 0.5f, coverage.y * 0.5f, coverage.z * 0.5f));
                 bounds.setLocalTranslation(coverage.mult(0.5f));
-                GiProbeGrid grid = volume.getGrid();
-                if (volume.getStreamingData() != null && data != null) {
-                    GiProbeGrid coarse = data.getGrid();
-                    Vector3f dimensions = coarse.getCounts();
-                    Vector3f scale = volume.getWorldScale();
-                    grid = new GiProbeGrid(coarse.getOrigin().divide(scale), coarse.getSpacing().divide(scale),
-                            (int) dimensions.x, (int) dimensions.y, (int) dimensions.z);
+                GiProbeMarkers.Buffers markers = GiProbeMarkers.build(volume, data, bricks, mode);
+                if (mode == com.jme3.gde.core.scene.SceneApplication.ProbeDisplayMode.FINE
+                        && !refined && !refinements.isEmpty() && volume.getStreamingData() == null) {
+                    markers.positions().limit(0);
+                    markers.colors().limit(0);
+                    markers.movement().limit(0);
                 }
-                int stride = Math.max(1, (grid.getProbeCount() + 4095) / 4096);
-                int shown = (grid.getProbeCount() + stride - 1) / stride;
-                FloatBuffer positions = BufferUtils.createFloatBuffer(shown * 3);
-                FloatBuffer movement = BufferUtils.createFloatBuffer(shown * 6);
-                FloatBuffer colors = BufferUtils.createFloatBuffer(shown * 4);
-                Vector3f point = new Vector3f();
-                Vector3f offset = new Vector3f();
-                for (int i = 0; i < grid.getProbeCount(); i += stride) {
-                    if (data != null && data.isSurfaceLayout() && !data.isProbeValid(i)) {
-                        continue;
-                    }
-                    grid.position(i, point);
-                    ColorRGBA color = ColorRGBA.Cyan;
-                    if (data != null) {
-                        data.getProbeOffset(i, offset);
-                        Vector3f original = point.clone();
-                        point.addLocal(offset.divide(volume.getWorldScale()));
-                        boolean valid = data.isProbeValid(i);
-                        boolean fine = Boolean.TRUE.equals(volume.getUserData("jme.gi.adaptive.refinement"));
-                        color = valid ? (fine ? new ColorRGBA(0.25f, 0.55f, 1, 1) : ColorRGBA.Green) : ColorRGBA.Red;
-                        if (valid && !data.isSurfaceLayout() && offset.lengthSquared() > 1.0e-8f) {
-                            color = ColorRGBA.Yellow;
-                            movement.put(original.x).put(original.y).put(original.z);
-                            movement.put(point.x).put(point.y).put(point.z);
-                        }
-                    }
-                    if (data != null && data.isSurfaceLayout()) {
-                        color = new ColorRGBA(1, 0.55f, 0.15f, 1);
-                    }
-                    positions.put(point.x).put(point.y).put(point.z);
-                    colors.put(color.r).put(color.g).put(color.b).put(color.a);
-                }
-                positions.flip();
-                colors.flip();
+                FloatBuffer positions = markers.positions();
+                FloatBuffer colors = markers.colors();
+                FloatBuffer movement = markers.movement();
                 Mesh mesh = new Mesh();
                 mesh.setMode(Mesh.Mode.Points);
                 mesh.setBuffer(VertexBuffer.Type.Position, 3, positions);
@@ -143,7 +125,6 @@ final class GiProbeGizmo {
                 if (probes.getParent() == null) {
                     gizmo.attachChild(probes);
                 }
-                movement.flip();
                 relocations.setCullHint(movement.remaining() == 0 ? Spatial.CullHint.Always : Spatial.CullHint.Inherit);
                 if (movement.remaining() > 0) {
                     Mesh vectors = new Mesh();

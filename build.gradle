@@ -773,15 +773,32 @@ def ufbxNatives = [
         'macos-x86_64': 'libjme-ufbx.dylib',
         'macos-arm64': 'libjme-ufbx.dylib'
 ]
-def ufbxBundleDir = providers.gradleProperty('ufbxNativeBundles').getOrElse('build/ufbx-jni/bundles')
+def ufbxBundleDir = providers.gradleProperty('ufbxNativeBundles').getOrElse('native-bundles')
 def ufbxReleaseDir = file('jme3-autodesk/release/lib/ufbx')
 
 tasks.register('prepareUfbxNatives') {
     group = 'build setup'
     description = 'Collects precompiled ufbx, xatlas and SPIRV-Cross JNI libraries for the SDK.'
     doLast {
-        def requireAll = providers.gradleProperty('requireUfbxNatives').getOrElse('false').toBoolean()
+        def requireAll = providers.gradleProperty('requireUfbxNatives').getOrElse('true').toBoolean()
         def coreNativeNames = ['xatlas', 'spirv-cross']
+        def manifestFile = new File(ufbxBundleDir, 'manifest.json')
+        if (requireAll && !manifestFile.isFile()) {
+            throw new GradleException("Missing tracked JNI manifest: ${manifestFile}. Pull native-bundles with the SDK sources.")
+        }
+        if (manifestFile.isFile()) {
+            def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
+            manifest.files.each { entry ->
+                def library = new File(ufbxBundleDir, entry.path)
+                if (!library.isFile()) {
+                    throw new GradleException("Missing tracked JNI file: ${library}")
+                }
+                def actual = java.security.MessageDigest.getInstance('SHA-256').digest(library.bytes).encodeHex().toString()
+                if (actual != entry.sha256) {
+                    throw new GradleException("JNI checksum mismatch: ${library}; rebuild/import the pinned bundle and update its manifest.")
+                }
+            }
+        }
         def coreFiles = { String library, String name -> [library.replace('ufbx', name), 'LICENSE-' + name + '.txt'] }
         def filesByTarget = ufbxNatives.collectEntries { platform, library ->
             [(platform): [library, 'LICENSE-ufbx.txt']]

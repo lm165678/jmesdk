@@ -60,6 +60,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private final List<Entry> outputs = new ArrayList<>();
     private CompletableFuture<String> write;
     private int skipped;
+    private String firstFailure;
 
     private record Entry(Geometry geometry, Mesh source, Mesh mesh, Transform transform, String key) {
     }
@@ -70,8 +71,8 @@ public final class ProbeLightmapAssets implements AutoCloseable {
         this.volume = volume;
         data = volume.getData();
         WorldSettings world = scene.getRootNode().getControl(WorldSettings.class);
-        singleVisibility = world != null && world.isSingleProbeVisibility();
-        octahedral = world != null && world.isOctahedralProbeIrradiance();
+        singleVisibility = world == null ? WorldSettings.DEFAULT_SINGLE_PROBE_VISIBILITY : world.isSingleProbeVisibility();
+        octahedral = world == null ? WorldSettings.DEFAULT_OCTAHEDRAL_PROBE_IRRADIANCE : world.isOctahedralProbeIrradiance();
         budget = (long) (world == null ? WorldSettings.GiStreaming.DEFAULTS : world.getGiStreaming()).getAtlasMiB() << 20;
         var folder = scene.getManager().getAssetFolder();
         var local = folder == null ? null : FileUtil.toFile(folder);
@@ -201,6 +202,9 @@ public final class ProbeLightmapAssets implements AutoCloseable {
             });
         } catch (IOException | RuntimeException failure) {
             skipped++;
+            if (firstFailure == null) {
+                firstFailure = failure.getMessage();
+            }
             java.util.logging.Logger.getLogger(getClass().getName()).warning(
                     "Lightmap skipped for " + geometry.getName() + ": " + failure.getMessage());
         }
@@ -252,6 +256,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
 
     public String summary() {
         return completed == 0 && skipped == 0 ? ""
-                : " Lightmaps saved: " + completed + "; continued with live probes: " + skipped + ".";
+                : " Lightmaps saved: " + completed + "; continued with live probes: " + skipped + "."
+                        + (firstFailure == null ? "" : " First Lightmap failure: " + firstFailure + ".");
     }
 }

@@ -45,6 +45,15 @@ final class GiPreview implements AutoCloseable {
         return stream.getResidentData(source.id());
     }
 
+    List<GiProbeStreamer.ResidentBrick> getProbeBricks(GiProbeVolume volume) {
+        Source source = sources.get(volume);
+        if (stream == null || source == null || source.bricks() != volume.getStreamingData()
+                || !source.offset().equals(volume.getWorldTranslation())) {
+            return List.of();
+        }
+        return stream.getResidentFineBricks(source.id());
+    }
+
     String getStatus() {
         return status;
     }
@@ -92,8 +101,8 @@ final class GiPreview implements AutoCloseable {
                 stream.setUnloadMultiplier(1.3);
             }
             stream.setFineStreaming(settings.getPreloadDistance(), settings.getMaxFineProbes());
-            stream.setSingleProbeVisibility(previewWorld != null && previewWorld.isSingleProbeVisibility());
-            stream.setOctahedralProbeIrradiance(previewWorld != null && previewWorld.isOctahedralProbeIrradiance());
+            stream.setSingleProbeVisibility(previewWorld == null ? WorldSettings.DEFAULT_SINGLE_PROBE_VISIBILITY : previewWorld.isSingleProbeVisibility());
+            stream.setOctahedralProbeIrradiance(previewWorld == null ? WorldSettings.DEFAULT_OCTAHEDRAL_PROBE_IRRADIANCE : previewWorld.isOctahedralProbeIrradiance());
             Set<GiProbeVolume> seen = Collections.newSetFromMap(new IdentityHashMap<>());
             Set<Material> materials = Collections.newSetFromMap(new IdentityHashMap<>());
             Set<com.jme3.environment.gi.ProbeLightmapControl> seenLightmaps =

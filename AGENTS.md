@@ -58,3 +58,15 @@
 ## Comment style
 
 - Match the surrounding author style. Keep comments concise and focused on purpose, non-obvious reasons and constraints; avoid template-like narration and redundant descriptions.
+
+## Required JNI delivery (user policy, 2026-11-24)
+
+- Ship JNI integrations like Bullet: commit the bridge sources AND all supported
+  precompiled DLL/SO/dylib variants, their licenses and a pinned checksum manifest
+  under `native-bundles`. CI artifacts or ignored build/release directories alone
+  do not deliver the dependency to another machine.
+- The supported desktop matrix is Windows/Linux/macOS on x86_64 and ARM64.
+  SDK builds stage those tracked binaries and verify completeness and hashes.
+  Record cross-compilation separately from native runtime verification.
+- Future JNI development must update and push this complete package with the
+  matching source changes; do not require users to install a native compiler.

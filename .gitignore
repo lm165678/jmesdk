@@ -42,3 +42,7 @@ installers/linux-aarch64/jdk-aarch64_linux.tar.gz
 
 # Locally compiled ufbx JNI libraries and their license copies.
 /jme3-autodesk/release/lib/ufbx/
+
+# Runtime copies come from tracked native-bundles; commit the bundle, not these outputs.
+/jme3-core/release/lib/xatlas/
+/jme3-core/release/lib/spirv-cross/

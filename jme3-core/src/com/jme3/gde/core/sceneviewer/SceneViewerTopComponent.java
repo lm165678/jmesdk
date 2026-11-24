@@ -636,6 +636,8 @@ public final class SceneViewerTopComponent extends TopComponent {
         showGi.setToolTipText(ui("GiVolumeTip"));
         showGi.addActionListener(event -> app.setGiVolumesVisible(showGi.isSelected()));
         giMenu.add(showGi);
+        ProbeDisplayMenu probeDisplay = new ProbeDisplayMenu(app);
+        giMenu.add(probeDisplay);
         for (com.jme3.light.Light.Type type : new com.jme3.light.Light.Type[]{
                 com.jme3.light.Light.Type.Probe, com.jme3.light.Light.Type.Directional,
                 com.jme3.light.Light.Type.Point, com.jme3.light.Light.Type.Spot}) {
@@ -655,6 +657,7 @@ public final class SceneViewerTopComponent extends TopComponent {
         giMenu.add(gbuffer);
         gi.addActionListener(event -> {
             showGi.setSelected(app.isGiVolumesVisible());
+            probeDisplay.refreshSelection();
             applyGi.setSelected(app.isGiPreviewEnabled());
             gbuffer.setSelected(app.isGBufferVisible());
             applyGi.setToolTipText(app.getGiPreviewStatus());

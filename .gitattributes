@@ -1,0 +1,2 @@
+# Preserve exact artifact and license bytes across Windows/Linux checkouts.
+native-bundles/** -text whitespace=cr-at-eol

@@ -50,6 +50,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
         add(halfGi);
         fullFallback.setToolTipText(EditorMessages.text("GiFullFallbackHint"));
         add(fullFallback);
+        singleVisibility.setToolTipText(EditorMessages.text("GiSingleVisibilityHint"));
+        octahedral.setToolTipText(EditorMessages.text("GiOctahedralIrradianceHint"));
         add(singleVisibility);
         add(octahedral);
         halfGi.addActionListener(event -> fullFallback.setEnabled(halfGi.isEnabled() && halfGi.isSelected()));
@@ -85,7 +87,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
     }
 
     private void showSettings(GiStreaming settings, boolean halfResolution) {
-        showSettings(settings, halfResolution, true, false, false);
+        showSettings(settings, halfResolution, true, WorldSettings.DEFAULT_SINGLE_PROBE_VISIBILITY,
+                WorldSettings.DEFAULT_OCTAHEDRAL_PROBE_IRRADIANCE);
     }
 
     private void showSettings(GiStreaming settings, boolean halfResolution, boolean fallback, boolean single, boolean oct) {
@@ -139,8 +142,8 @@ final class EditorGiStreamingPanel extends JPanel implements SceneListener {
             GiStreaming values = world == null ? GiStreaming.DEFAULTS : world.getGiStreaming();
             boolean halfResolution = world != null && world.isHalfResolutionProbeGi();
             boolean fallback = world == null || world.isProbeGiFullFallback();
-            boolean single = world != null && world.isSingleProbeVisibility();
-            boolean oct = world != null && world.isOctahedralProbeIrradiance();
+            boolean single = world == null ? WorldSettings.DEFAULT_SINGLE_PROBE_VISIBILITY : world.isSingleProbeVisibility();
+            boolean oct = world == null ? WorldSettings.DEFAULT_OCTAHEDRAL_PROBE_IRRADIANCE : world.isOctahedralProbeIrradiance();
             EventQueue.invokeLater(() -> {
                 if (isDisplayable() && current == app.getCurrentSceneRequest()) {
                     scene = current;

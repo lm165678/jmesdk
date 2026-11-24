@@ -175,6 +175,12 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     }
 
     private final GiPreview giPreview = new GiPreview();
+    /** Editor-only probe layer policy; never serialized into a scene. */
+    public enum ProbeDisplayMode {
+        AUTO, COARSE, FINE
+    }
+
+    private volatile ProbeDisplayMode probeDisplayMode = ProbeDisplayMode.AUTO;
     private volatile boolean giVolumesVisible = true;
     private volatile boolean giPreviewEnabled = true;
 
@@ -185,6 +191,32 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
     public com.jme3.environment.gi.GiProbeData getGiProbePreviewData(
             com.jme3.environment.gi.GiProbeVolume volume) {
         return giPreview.getProbeData(volume);
+    }
+
+    /** Returns the editor probe display policy, initially AUTO. */
+    public ProbeDisplayMode getProbeDisplayMode() {
+        return probeDisplayMode;
+    }
+
+    /**
+     * EDT-safe diagnostic selection. AUTO shows published fine regions and coarse
+     * fallback elsewhere. FINE marks unloaded fine positions cyan rather than
+     * forcing I/O; COARSE shows only the fallback. Single-layer bakes keep their
+     * original layout in every mode. Lighting and saved J3O data are unchanged.
+     * <pre>
+     * // 第一步：Visualize → Probe display，默认 Auto 跟随细块驻留。
+     * // 第二步：选择 Coarse 或 Fine 固定显示层级，青色表示尚未加载。
+     * // 第三步：选择 Auto 恢复；Show probe volumes 独立控制整体显隐。
+     * </pre>
+     */
+    public void setProbeDisplayMode(ProbeDisplayMode mode) {
+        probeDisplayMode = java.util.Objects.requireNonNull(mode);
+    }
+
+    /** Borrow published fine payloads on the render thread for this frame only. */
+    public java.util.List<com.jme3.environment.gi.GiProbeStreamer.ResidentBrick> getGiProbePreviewBricks(
+            com.jme3.environment.gi.GiProbeVolume volume) {
+        return giPreview.getProbeBricks(volume);
     }
 
     public String getGiPreviewStatus() {
