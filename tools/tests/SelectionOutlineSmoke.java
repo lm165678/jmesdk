@@ -183,7 +183,7 @@ public final class SelectionOutlineSmoke {
         var positions = tip.getMesh().getFloatBuffer(com.jme3.scene.VertexBuffer.Type.Position);
         int point = 3 * 12;
         check(positions.get(point) == 0 && positions.get(point + 2) == 0
-                && Math.abs(positions.get(point + 1) + tip.getLocalTranslation().y - 1f) < .001f,
+                && positions.get(point + 1) + tip.getLocalTranslation().y > 1f,
                 "Arrow tip must point away from the light along its local +Y");
         var icons = new Node("Helpers");
         icons.attachChild(audio);

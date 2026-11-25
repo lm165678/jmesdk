@@ -431,7 +431,7 @@ public final class SceneViewerTopComponent extends TopComponent {
         app.enqueue(() -> {
             debugPreview = new com.jme3.gde.core.scene.processors.PreviewDebugProcessor(
                     app.getAssetManager(), app.getRootNode(), message -> java.awt.EventQueue.invokeLater(() -> {
-                        boolean sdfMessage = message.contains("SDF") || message.contains("Ray-marched");
+                        boolean sdfMessage = message.contains("SDF") || message.contains("Ray-marched") || message.contains("Lightmap");
                         status.setText(sdfMessage ? (message.length() > 64
                                 ? message.substring(0, 61) + "..." : message) : "ⓘ");
                         status.setToolTipText(message);
@@ -632,6 +632,14 @@ public final class SceneViewerTopComponent extends TopComponent {
         javax.swing.JButton gi = new javax.swing.JButton(ui("Visualize"));
         gi.setToolTipText(ui("VisualizeTip"));
         javax.swing.JPopupMenu giMenu = new javax.swing.JPopupMenu();
+        javax.swing.JCheckBoxMenuItem lightmapMipView = new javax.swing.JCheckBoxMenuItem("Lightmap mip view");
+        lightmapMipView.addActionListener(event -> modes.setSelectedItem(lightmapMipView.isSelected()
+                ? com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.LightmapMip
+                : com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.Lit));
+        modes.addActionListener(event -> lightmapMipView.setSelected(modes.getSelectedItem()
+                == com.jme3.gde.core.scene.processors.PreviewDebugProcessor.Mode.LightmapMip));
+        giMenu.add(lightmapMipView);
+        giMenu.addSeparator();
         javax.swing.JCheckBoxMenuItem showGi = new javax.swing.JCheckBoxMenuItem(ui("GiShow"), app.isGiVolumesVisible());
         showGi.setToolTipText(ui("GiVolumeTip"));
         showGi.addActionListener(event -> app.setGiVolumesVisible(showGi.isSelected()));
@@ -1033,6 +1041,7 @@ public final class SceneViewerTopComponent extends TopComponent {
 
     /** Drops a material using logical AWT coordinates, including HiDPI conversion. */
     public void applyMaterial(String assetName, Vector2f cursorPosition) {
+        var observers = com.jme3.gde.core.sceneexplorer.SceneExplorerTopComponent.findInstance().getLastSelected();
         Vector2f pixels = dropPixels(cursorPosition);
         SceneRequest request = app.getCurrentSceneRequest();
         app.enqueue(() -> {
@@ -1061,9 +1070,11 @@ public final class SceneViewerTopComponent extends TopComponent {
                         previous.put(geometry, geometry.getMaterial());
                     }
                 });
-                spatial.setMaterial(material);
-                registerDropEdit(request, () -> previous.forEach(com.jme3.scene.Geometry::setMaterial),
-                        () -> spatial.setMaterial(material));
+                java.util.Map<com.jme3.scene.Geometry, Material> replacements = new java.util.IdentityHashMap<>();
+                previous.keySet().forEach(geometry -> replacements.put(geometry, material));
+                MaterialDropSupport.apply(replacements, observers);
+                registerDropEdit(request, () -> MaterialDropSupport.apply(previous, observers),
+                        () -> MaterialDropSupport.apply(replacements, observers));
             }
             return null;
         });

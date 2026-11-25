@@ -12,7 +12,7 @@ import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JFileChooser;
+
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -27,7 +27,12 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import org.openide.filesystems.FileUtil;
 
-/** CPU normal-map filtering UI. Swing state belongs to EDT, I/O/convolution to workers. */
+/** CPU normal-map filtering UI. Swing state belongs to EDT, I/O/convolution to workers.
+ * 第一步：在 LUT 页导出皮肤材质，或在本页 Browse/拖入已有皮肤 J3M。
+ * 第二步：选择源法线和两/四法线模式，Generate 在后台读取目标保存的 profile。
+ * 第三步：Export assets 导出 DDS 并更新目标槽位，保留 LUT、颜色及已有参数。
+ * 缺少 profile 侧车文件时使用 LUT 页当前设置；取消选择不更改目标。
+ */
 final class SkinNormalPanel extends JPanel {
     private final Callable<SkinGenerationSettings> settings;
     private final Supplier<String> profileName;
@@ -43,6 +48,7 @@ final class SkinNormalPanel extends JPanel {
     private final JSlider lightAngle = new JSlider(-180, 180, 30);
     private final JTextField root = new JTextField();
     private final JTextField key = new JTextField("Textures/Skin/SkinNormals");
+    private final JTextField targetMaterial = new JTextField("Textures/Skin/SkinLut.j3m");
     private final JButton generate = new JButton("Generate");
     private final JButton cancel = new JButton("Cancel");
     private final JButton export = new JButton("Export assets...");
@@ -67,6 +73,8 @@ final class SkinNormalPanel extends JPanel {
         setBorder(javax.swing.BorderFactory.createEmptyBorder(10, 10, 10, 10));
         source.setName("skin.normal.source");
         root.setName("skin.normal.root");
+        key.setName("skin.normal.key");
+        targetMaterial.setName("skin.normal.material");
         generate.setName("skin.normal.generate");
         export.setName("skin.normal.export");
         preview.setName("skin.normal.preview");
@@ -76,7 +84,9 @@ final class SkinNormalPanel extends JPanel {
         JButton browse = new JButton("Browse...");
         browse.addActionListener(event -> chooseSource());
         sourceRow.add(browse, BorderLayout.EAST);
-        addRow("Source normal PNG / JPEG", sourceRow);
+        addRow("Source normal texture", sourceRow);
+        SkinTextureInput.install(source, browse, sourceRow, preview);
+        source.setToolTipText("Drop a texture from SDK Assets or the system file manager; Browse selects an open project");
         addRow("Diffuse output maximum size", resolution);
         addRow("Source texels per millimeter", density);
         addRow("Filter quality", quality);
@@ -108,7 +118,7 @@ final class SkinNormalPanel extends JPanel {
         profile.setText("Profile: " + profileName.get());
         add(profile, BorderLayout.NORTH);
         JPanel bottom = new JPanel(new BorderLayout(4, 4));
-        JPanel paths = new JPanel(new GridLayout(2, 2, 6, 4));
+        JPanel paths = new JPanel(new GridLayout(3, 2, 6, 4));
         paths.add(new JLabel("Project assets folder"));
         JPanel rootRow = new JPanel(new BorderLayout(4, 4));
         rootRow.add(root, BorderLayout.CENTER);
@@ -116,7 +126,16 @@ final class SkinNormalPanel extends JPanel {
         chooseRoot.addActionListener(event -> chooseRoot());
         rootRow.add(chooseRoot, BorderLayout.EAST);
         paths.add(rootRow);
-        paths.add(new JLabel("Output asset key (no extension)"));
+        paths.add(new JLabel("Target skin material"));
+        JPanel targetRow = new JPanel(new BorderLayout(4, 4));
+        targetRow.add(targetMaterial, BorderLayout.CENTER);
+        JButton chooseMaterial = new JButton("Browse...");
+        chooseMaterial.addActionListener(event -> chooseMaterial());
+        targetRow.add(chooseMaterial, BorderLayout.EAST);
+        paths.add(targetRow);
+        installMaterialDrop(targetRow, chooseMaterial);
+        targetMaterial.setToolTipText("Choose or drop an existing skin J3M. Export updates normal slots and preserves its LUT and other parameters.");
+        paths.add(new JLabel("Normal texture key (no extension)"));
         paths.add(key);
         bottom.add(paths, BorderLayout.NORTH);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -141,6 +160,7 @@ final class SkinNormalPanel extends JPanel {
         source.getDocument().addDocumentListener(changed(this::inputsChanged));
         root.getDocument().addDocumentListener(changed(this::updateExport));
         key.getDocument().addDocumentListener(changed(this::updateExport));
+        targetMaterial.getDocument().addDocumentListener(changed(this::inputsChanged));
         resolution.addActionListener(event -> inputsChanged());
         quality.addActionListener(event -> inputsChanged());
         boundary.addActionListener(event -> inputsChanged());
@@ -172,21 +192,85 @@ final class SkinNormalPanel extends JPanel {
         };
     }
 
+    void shareDestination(javax.swing.text.Document assetRoot, javax.swing.text.Document outputKey) {
+        root.setDocument(assetRoot);
+        assetRoot.addDocumentListener(changed(this::updateExport));
+    }
+
+    javax.swing.text.Document materialDocument() {
+        return targetMaterial.getDocument();
+    }
+
+    private void chooseMaterial() {
+        if (busy) {
+            return;
+        }
+        SkinAssetSelection bridge = org.openide.util.Lookup.getDefault().lookup(SkinAssetSelection.class);
+        Path selected = bridge == null ? null : bridge.chooseMaterial(this);
+        if (selected != null) {
+            assignMaterial(selected);
+        }
+    }
+
+    private boolean assignMaterial(Path selected) {
+        try {
+            SkinAssetSelection bridge = org.openide.util.Lookup.getDefault().lookup(SkinAssetSelection.class);
+            Path assetRoot = bridge == null ? null : bridge.projectForAsset(selected);
+            if (assetRoot == null && !root.getText().isBlank()) {
+                assetRoot = Path.of(root.getText()).toAbsolutePath().normalize();
+            }
+            if (assetRoot == null) {
+                throw new IllegalArgumentException("Select an open project containing this material first");
+            }
+            String relative = assetRoot.relativize(selected.toAbsolutePath().normalize()).toString().replace('\\', '/');
+            SkinNormalAssets.targetMaterial(assetRoot, relative);
+            root.setText(assetRoot.toString());
+            targetMaterial.setText(relative);
+            status.setText("Target selected. Generate uses its saved diffusion profile when available.");
+            return true;
+        } catch (Exception ex) {
+            status.setText("Cannot select material: " + ex.getMessage());
+            return false;
+        }
+    }
+
+    private void installMaterialDrop(javax.swing.JComponent... surfaces) {
+        var handler = new javax.swing.TransferHandler() {
+            @Override
+            public boolean canImport(TransferSupport support) {
+                return !busy;
+            }
+            @Override
+            public boolean importData(TransferSupport support) {
+                if (busy) {
+                    return false;
+                }
+                try {
+                    Path file = SkinTextureInput.resolve(support.getTransferable());
+                    return file != null && assignMaterial(file);
+                } catch (Exception ex) {
+                    status.setText("Cannot assign material: " + ex.getMessage());
+                    return false;
+                }
+            }
+        };
+        targetMaterial.setTransferHandler(handler);
+        for (var surface : surfaces) {
+            surface.setTransferHandler(handler);
+        }
+    }
+
     private void chooseSource() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Choose a tangent-space RGB normal map");
-        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Normal PNG / JPEG", "png", "jpg", "jpeg"));
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            source.setText(chooser.getSelectedFile().getAbsolutePath());
+        Path selected = SkinTextureInput.chooseTexture(this);
+        if (selected != null) {
+            source.setText(selected.toString());
         }
     }
 
     private void chooseRoot() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("Select the project assets root");
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            root.setText(chooser.getSelectedFile().getAbsolutePath());
+        Path selected = SkinTextureInput.chooseProject(this);
+        if (selected != null) {
+            root.setText(selected.toString());
         }
     }
 
@@ -228,6 +312,8 @@ final class SkinNormalPanel extends JPanel {
             status.setText("Cannot generate: " + ex.getMessage());
             return;
         }
+        final Path target = root.getText().isBlank() || targetMaterial.getText().isBlank() ? null
+                : Path.of(root.getText()).resolve(targetMaterial.getText()).normalize();
         int version = revision;
         int size = (Integer) resolution.getSelectedItem();
         SkinNormalFilter.Boundary edge = (SkinNormalFilter.Boundary) boundary.getSelectedItem();
@@ -237,7 +323,9 @@ final class SkinNormalPanel extends JPanel {
         worker = new SwingWorker<SkinNormalAssets.Product, Void>() {
             @Override
             protected SkinNormalAssets.Product doInBackground() throws Exception {
-                return SkinNormalAssets.generate(path, snapshot, size, texels, edge, mode);
+                SkinGenerationSettings matching = target != null && Files.isRegularFile(target)
+                        ? SkinNormalAssets.targetSettings(target, snapshot) : snapshot;
+                return SkinNormalAssets.generate(path, matching, size, texels, edge, mode);
             }
             @Override
             protected void done() {
@@ -269,12 +357,14 @@ final class SkinNormalPanel extends JPanel {
         }
         final Path assetRoot;
         final String output = key.getText().trim();
+        final String materialKey = targetMaterial.getText().trim();
         final boolean replace;
         try {
             assetRoot = Path.of(root.getText().trim()).toAbsolutePath().normalize();
             if (!Files.isDirectory(assetRoot)) {
                 throw new IllegalArgumentException("Select an existing project assets folder");
             }
+            SkinNormalAssets.targetMaterial(assetRoot, materialKey);
             List<Path> targets = SkinLutExport.targets(assetRoot, output);
             boolean exists = targets.stream().anyMatch(Files::exists);
             replace = exists && JOptionPane.showConfirmDialog(this, "Replace generated skin assets?",
@@ -291,11 +381,11 @@ final class SkinNormalPanel extends JPanel {
         boolean directX = convention.getSelectedIndex() == 1;
         publishing = true;
         setBusy(true);
-        status.setText("Writing normal maps, matching LUT and material...");
+        status.setText("Writing DDS normals and updating " + materialKey + "...");
         worker = new SwingWorker<List<Path>, Void>() {
             @Override
             protected List<Path> doInBackground() throws Exception {
-                return SkinNormalAssets.write(assetRoot, output, snapshot, four, directX, replace);
+                return SkinNormalAssets.writeToMaterial(assetRoot, output, materialKey, snapshot, four, directX, replace);
             }
             @Override
             protected void done() {
@@ -304,7 +394,7 @@ final class SkinNormalPanel extends JPanel {
                     List<Path> paths = get();
                     FileUtil.refreshFor(paths.stream().map(Path::toFile).toArray(java.io.File[]::new));
                     if (!closed) {
-                        status.setText("Exported " + output + ".j3m with " + (four ? "four" : "two") + " normals and matching LUT");
+                        status.setText("Updated " + materialKey + " with " + (four ? "four" : "two") + " normals; existing LUT and tuning retained");
                     }
                 } catch (Exception ex) {
                     if (!closed) {
@@ -412,6 +502,9 @@ final class SkinNormalPanel extends JPanel {
     private void setBusy(boolean value) {
         busy = value;
         source.setEnabled(!value);
+        targetMaterial.setEnabled(!value);
+        root.setEnabled(!value);
+        key.setEnabled(!value);
         resolution.setEnabled(!value);
         density.setEnabled(!value);
         quality.setEnabled(!value);
@@ -423,7 +516,7 @@ final class SkinNormalPanel extends JPanel {
     }
 
     private void updateExport() {
-        export.setEnabled(!busy && product != null && !root.getText().isBlank() && !key.getText().isBlank());
+        export.setEnabled(!busy && product != null && !root.getText().isBlank() && !key.getText().isBlank() && !targetMaterial.getText().isBlank());
     }
 
     private static String cause(Exception error) {

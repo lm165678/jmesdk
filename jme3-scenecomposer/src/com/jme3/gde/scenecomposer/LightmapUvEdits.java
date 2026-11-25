@@ -8,10 +8,13 @@ import com.jme3.scene.VertexBuffer.Type;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /** Private snapshots for a single, reversible UV edit of a selected subtree. */
 final class LightmapUvEdits {
-    private record Item(Geometry geometry, Mesh source, Mesh snapshot, int lod,
+    record Progress(int completed, int total, String geometryName) { }
+
+    private record Item(Geometry geometry, String name, Mesh source, Mesh snapshot, int lod,
             ProbeLightmapControl lightmap, Object resolution, Object padding, Object border) {
     }
 
@@ -23,7 +26,7 @@ final class LightmapUvEdits {
     LightmapUvEdits(Spatial root) {
         this.root = root;
         for (Geometry geometry : receivers(root)) {
-            items.add(new Item(geometry, geometry.getMesh(), geometry.getMesh().deepClone(),
+            items.add(new Item(geometry, geometry.getName(), geometry.getMesh(), geometry.getMesh().deepClone(),
                     geometry.getLodLevel(), geometry.getControl(ProbeLightmapControl.class),
                     geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY),
                     geometry.getUserData(LightmapUvGenerator.PADDING_KEY),
@@ -60,12 +63,23 @@ final class LightmapUvEdits {
 
     /** Worker-only generation; no original Geometry or Mesh is edited. */
     void build(LightmapUvGenerator.Settings requested, int maximum, BooleanSupplier cancelled) throws Exception {
+        build(requested, maximum, cancelled, progress -> { });
+    }
+
+    /** Progress is reported on the worker before each geometry and after the last one. */
+    void build(LightmapUvGenerator.Settings requested, int maximum, BooleanSupplier cancelled,
+            Consumer<Progress> progress) throws Exception {
         settings = requested;
         IdentityHashMap<Mesh, LightmapUvGenerator.BakeLayout> shared = new IdentityHashMap<>();
         for (Item item : items) {
             if (cancelled.getAsBoolean()) {
                 throw new CancellationException("UV edit cancelled");
             }
+            String name = item.name();
+            if (name == null || name.isBlank()) {
+                name = "Unnamed Geometry";
+            }
+            progress.accept(new Progress(results.size(), items.size(), name));
             var result = shared.get(item.source());
             if (result == null) {
                 if (requested == null) {
@@ -79,6 +93,10 @@ final class LightmapUvEdits {
             }
             results.put(item.geometry(), result);
         }
+        if (cancelled.getAsBoolean()) {
+            throw new CancellationException("UV edit cancelled");
+        }
+        progress.accept(new Progress(results.size(), items.size(), null));
     }
 
     /** Render-thread stale-result check, ignoring animated output position/normal buffers. */
@@ -89,6 +107,9 @@ final class LightmapUvEdits {
         for (Item item : items) {
             if (item.geometry().getMesh() != item.source() || !sameInput(item.source(), item.snapshot())) {
                 throw new CancellationException("Mesh changed during UV generation: " + item.geometry().getName());
+            }
+            if (item.geometry().getControl(ProbeLightmapControl.class) != item.lightmap()) {
+                throw new CancellationException("Lightmap binding changed during UV generation: " + item.name());
             }
         }
     }

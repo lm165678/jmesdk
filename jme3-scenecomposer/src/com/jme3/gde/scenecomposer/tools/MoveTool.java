@@ -16,11 +16,16 @@ import com.jme3.math.Vector3f;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
 import org.openide.loaders.DataObject;
-import org.openide.util.Lookup;
 
 /**
  * Drag an arrow to move along one axis, or a square to move in its plane.
  * When the arrow points into the screen, dragging up moves away from the view.
+ * Edge-on planes use a bounded screen basis for the entire gesture.
+ * <pre>
+ * 第一步：按 W，选择平移轴线或平面方块。
+ * 第二步：轴线朝向相机时可上下拖动。平面侧对相机时，沿平面投影线或横过投影线拖动。
+ * 第三步：松开左键提交一次平移，右键取消。
+ * </pre>
  *
  * @author Brent Owens
  */
@@ -28,10 +33,10 @@ public class MoveTool extends SceneEditTool {
 
     private Vector3f pickedMarker;
     private AxisTranslationDrag axisDrag;
+    private PlaneTranslationDrag planeDrag;
     private boolean wasDragging = false;
     private Vector3f startPosition;
     private Vector3f lastPosition;
-    private PickManager pickManager;
     private GroupMoveGesture groupMove;
     private boolean duplicateGesture;
     private Spatial duplicateSource;
@@ -166,7 +171,6 @@ public class MoveTool extends SceneEditTool {
     @Override
     public void activate(AssetManager manager, Node toolNode, Node onTopToolNode, Spatial selectedSpatial, SceneComposerToolController toolController) {
         super.activate(manager, toolNode, onTopToolNode, selectedSpatial, toolController);
-        pickManager = Lookup.getDefault().lookup(PickManager.class);
         displayPlanes();
         displayCones();
     }
@@ -177,8 +181,8 @@ public class MoveTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             axisDrag = null;
+            planeDrag = null;
             finishMove();
-            pickManager.reset();
         } else {
             if (toolController.getSelectedSpatial() == null) {
                 return;
@@ -190,17 +194,19 @@ public class MoveTool extends SceneEditTool {
                     return;
                 }
 
+                var markerRotation = axisMarker.getWorldRotation();
+                Vector3f pivot = axisMarker.getWorldTranslation();
                 if (pickedMarker.equals(QUAD_XY)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XY, getTransformType(), camera, screenCoord);
+                    planeDrag = new PlaneTranslationDrag(camera, pivot, markerRotation.mult(Vector3f.UNIT_Z),
+                            markerRotation.mult(Vector3f.UNIT_X), screenCoord);
                 } else if (pickedMarker.equals(QUAD_XZ)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XZ, getTransformType(), camera, screenCoord);
+                    planeDrag = new PlaneTranslationDrag(camera, pivot, markerRotation.mult(Vector3f.UNIT_Y),
+                            markerRotation.mult(Vector3f.UNIT_X), screenCoord);
                 } else if (pickedMarker.equals(QUAD_YZ)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_YZ, getTransformType(), camera, screenCoord);
+                    planeDrag = new PlaneTranslationDrag(camera, pivot, markerRotation.mult(Vector3f.UNIT_X),
+                            markerRotation.mult(Vector3f.UNIT_Y), screenCoord);
                 } else {
-                    Vector3f axis = pickedMarker.equals(ARROW_X) ? Vector3f.UNIT_X
-                            : pickedMarker.equals(ARROW_Y) ? Vector3f.UNIT_Y : Vector3f.UNIT_Z;
-                    axisDrag = new AxisTranslationDrag(camera, axisMarker.getWorldTranslation(),
-                            axisMarker.getWorldRotation().mult(axis), screenCoord);
+                    axisDrag = new AxisTranslationDrag(camera, pivot, markerRotation.mult(pickedMarker), screenCoord);
                 }
                 duplicateGesture = toolController.isRotationSnapEnabled();
                 startPosition = toolController.getSelectedSpatial().getLocalTranslation().clone();
@@ -223,11 +229,8 @@ public class MoveTool extends SceneEditTool {
     @Override
     public void mouseMoved(Vector2f screenCoord, JmeNode rootNode, DataObject currentDataObject) {
 
-        if (pickedMarker == null) {
+        if (!wasDragging) {
             highlightAxisMarker(camera, screenCoord, axisPickType);
-        } else if (!wasDragging) {
-            pickedMarker = null;
-            pickManager.reset();
         }
     }
 
@@ -237,17 +240,10 @@ public class MoveTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             axisDrag = null;
+            planeDrag = null;
             finishMove();
-            pickManager.reset();
         } else if (wasDragging) {
-            Vector3f diff;
-            if (axisDrag != null) {
-                diff = axisDrag.translation(screenCoord);
-            } else if (pickManager.updatePick(camera, screenCoord)) {
-                diff = pickManager.getTranslation();
-            } else {
-                return;
-            }
+            Vector3f diff = axisDrag == null ? planeDrag.translation(screenCoord) : axisDrag.translation(screenCoord);
             if (groupMove != null) {
                 if (diff.lengthSquared() > 1e-10f) {
                     groupMove.move(diff);
@@ -302,7 +298,7 @@ public class MoveTool extends SceneEditTool {
             setDefaultAxisMarkerColors();
             pickedMarker = null; // mouse released, reset selection
             axisDrag = null;
-            pickManager.reset();
+            planeDrag = null;
         }
     }
 

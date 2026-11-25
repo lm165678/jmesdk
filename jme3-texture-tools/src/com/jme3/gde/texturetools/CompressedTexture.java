@@ -13,7 +13,7 @@ import java.util.List;
 import javax.imageio.ImageIO;
 
 /**
- * Single-face 2D DDS (BC1/2/3/4/5/7), raw ASTC and ASTC KTX1 mip inspection.
+ * Single-face 2D DDS (BC1/2/3/4/5/7 or RGBA16F), raw ASTC and ASTC KTX1 mip inspection.
  * Unsupported arrays, cubes, volumes and formats fail explicitly. CPU decoding
  * works independently of renderer capabilities. Mip replacement preserves every
  * other compressed level byte-for-byte and requires a matching source size.
@@ -76,6 +76,8 @@ public final class CompressedTexture {
             } else {
                 header = 128;
                 format = switch (fourcc) {
+                    case 113 -> "RGBA16F";
+                    case 0 -> "RGBA8";
                     case 0x31545844 -> "BC1";
                     case 0x33545844 -> "BC2";
                     case 0x35545844 -> "BC3";
@@ -85,8 +87,12 @@ public final class CompressedTexture {
                 };
             }
             srgb = color;
-            block = 4;
-            stride = format.equals("BC1") || format.equals("BC4") ? 8 : 16;
+            if (format.equals("RGBA8") && (buffer.getInt(88) != 32 || buffer.getInt(92) != 0xff
+                    || buffer.getInt(96) != 0xff00 || buffer.getInt(100) != 0xff0000 || buffer.getInt(104) != 0xff000000)) {
+                throw new IOException("Unsupported raw DDS channel layout");
+            }
+            block = format.startsWith("RGBA") ? 1 : 4;
+            stride = format.equals("RGBA8") ? 4 : format.equals("RGBA16F") || format.equals("BC1") || format.equals("BC4") ? 8 : 16;
             validateDimensions(count);
             int offset = header;
             for (int level = 0; level < count; level++) {
@@ -207,6 +213,21 @@ public final class CompressedTexture {
 
     /** Decodes a selected mip using the bundled CPU tools, without a GPU context. */
     public BufferedImage preview(int level, TextureToolchain tools) throws IOException, InterruptedException {
+        if (format.equals("RGBA16F")) {
+            return halfPreview(level);
+        }
+        if (format.equals("RGBA8")) {
+            BufferedImage image = new BufferedImage(mipWidth(level), mipHeight(level), BufferedImage.TYPE_INT_RGB);
+            int offset = offsets.get(level);
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) {
+                    int rgb = (data[offset] & 255) << 16 | (data[offset + 1] & 255) << 8 | (data[offset + 2] & 255);
+                    image.setRGB(x, y, rgb);
+                    offset += 4;
+                }
+            }
+            return image;
+        }
         if (tools.useNativeCodec()) {
             return decodeNative(level, srgb);
         }
@@ -231,6 +252,26 @@ public final class CompressedTexture {
         byte[] blocks = Arrays.copyOfRange(data, offset, offset + sizes.get(level));
         return NativeTextureCodec.decode(blocks, mipWidth(level), mipHeight(level),
                 astc ? 0 : NativeTextureCodec.bcId(format), block, srgbProfile);
+    }
+
+    private BufferedImage halfPreview(int level) {
+        BufferedImage image = new BufferedImage(mipWidth(level), mipHeight(level), BufferedImage.TYPE_INT_RGB);
+        ByteBuffer pixels = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        pixels.position(offsets.get(level));
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                int rgb = 0;
+                for (int c = 0; c < 4; c++) {
+                    float linear = com.jme3.math.FastMath.convertHalfToFloat(pixels.getShort());
+                    if (c < 3) {
+                        double display = linear <= .0031308 ? linear * 12.92 : 1.055 * Math.pow(linear, 1.0 / 2.4) - .055;
+                        rgb = rgb << 8 | Math.max(0, Math.min(255, (int) Math.round(display * 255)));
+                    }
+                }
+                image.setRGB(x, y, rgb);
+            }
+        }
+        return image;
     }
 
     private byte[] singleLevel(int level) {
@@ -261,6 +302,9 @@ public final class CompressedTexture {
     /** Re-encodes one mip from an exact-size image; other mip bytes stay intact. */
     public void replaceMip(int level, Path source, Path destination, TextureToolchain tools)
             throws IOException, InterruptedException {
+        if (format.startsWith("RGBA")) {
+            throw new IOException("Regenerate raw DDS through the source tool; compressed mip replacement does not apply");
+        }
         BufferedImage image = ImageIO.read(source.toFile());
         if (image == null || image.getWidth() != mipWidth(level) || image.getHeight() != mipHeight(level)) {
             throw new IOException("Replacement image must match selected mip dimensions");

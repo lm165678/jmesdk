@@ -73,6 +73,73 @@ public final class TextureToolchain {
         return new TextureToolchain(location.toPath());
     }
 
+    /**
+     * Encodes linear RGB16F/RGBA16F as uncompressed RGBA16F DDS, with no mips,
+     * gamma conversion, quantization or native-code dependency. Source rows are
+     * preserved. Used for numeric LUTs rather than lossy BC color compression.
+     * 第一步：后台生成线性浮点 Image。第二步：调用 linearHalfDds 得到完整 DDS。
+     * 第三步：随材质原子发布，使用 TextureKey 和 BilinearNoMipMaps 读取。
+     * @param image linear half-float two-dimensional image
+     * @return legacy FourCC113 DDS bytes, compatible with DDSLoader
+     */
+    public static byte[] linearHalfDds(com.jme3.texture.Image image) throws IOException {
+        boolean rgb = image.getFormat() == com.jme3.texture.Image.Format.RGB16F;
+        if ((!rgb && image.getFormat() != com.jme3.texture.Image.Format.RGBA16F)
+                || image.getColorSpace() != com.jme3.texture.image.ColorSpace.Linear
+                || image.getDepth() > 1 || image.getData().size() != 1 || image.hasMipmaps()) {
+            throw new IOException("Linear single-level RGB16F/RGBA16F Image required");
+        }
+        int width = image.getWidth();
+        int height = image.getHeight();
+        ByteBuffer out = ByteBuffer.allocate(Math.addExact(128, Math.multiplyExact(Math.multiplyExact(width, height), 8)))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        out.putInt(0x20534444).putInt(124).putInt(0x100f).putInt(height).putInt(width)
+                .putInt(width * 8).putInt(0).putInt(1);
+        out.position(76);
+        out.putInt(32).putInt(4).putInt(113);
+        out.position(108);
+        out.putInt(0x1000);
+        out.position(128);
+        ByteBuffer source = image.getData(0).duplicate().order(image.getData(0).order());
+        source.rewind();
+        for (int i = 0; i < width * height; i++) {
+            out.putShort(source.getShort()).putShort(source.getShort()).putShort(source.getShort());
+            out.putShort(rgb ? (short) 0x3c00 : source.getShort());
+        }
+        return out.array();
+    }
+
+    /**
+     * Writes raw linear RGBA8 DDS. This preserves normal-map vector bytes and
+     * avoids the external PNG import/conversion lifecycle. No lossy BC codec or
+     * implicit gamma conversion is involved. Material sampling may generate mips.
+     * 第一步：后台准备 RGB 法线图。第二步：linearRgbaDds 编码为 DDS。
+     * 第三步：材质以 -LINEAR 参数绑定返回文件，源图保持不变。
+     */
+    public static byte[] linearRgbaDds(BufferedImage image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        ByteBuffer out = ByteBuffer.allocate(Math.addExact(128, Math.multiplyExact(Math.multiplyExact(width, height), 4)))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        out.putInt(0x20534444).putInt(124).putInt(0x100f).putInt(height).putInt(width)
+                .putInt(width * 4).putInt(0).putInt(1);
+        out.position(76);
+        out.putInt(32).putInt(0x41).putInt(0).putInt(32).putInt(0xff).putInt(0xff00)
+                .putInt(0xff0000).putInt(0xff000000).putInt(0x1000);
+        out.position(128);
+        var raster = image.getRaster();
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                for (int c = 0; c < 3; c++) {
+                    int bits = raster.getSampleModel().getSampleSize(c);
+                    out.put((byte) Math.round(raster.getSampleDouble(x, y, c) * 255 / (Math.pow(2, bits) - 1)));
+                }
+                out.put((byte) 255);
+            }
+        }
+        return out.array();
+    }
+
     /** Encodes BC1 through BC5 or BC7 on the CPU with the requested DDS mip count. */
     public void dds(Path input, Path output, String format, int levels) throws IOException, InterruptedException {
         if (!List.of("BC1", "BC2", "BC3", "BC4", "BC5", "BC7").contains(format) || levels < 1 || levels > 20) {

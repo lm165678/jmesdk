@@ -9,7 +9,6 @@ import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
 import com.jme3.gde.core.undoredo.AbstractUndoableSceneEdit;
 import com.jme3.gde.scenecomposer.SceneComposerToolController;
 import com.jme3.gde.scenecomposer.SceneEditTool;
-import com.jme3.math.Quaternion;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
 import com.jme3.scene.Node;
@@ -18,13 +17,19 @@ import org.openide.loaders.DataObject;
 import org.openide.util.Lookup;
 
 /**
- *
+ * Scales along a picked handle using a frozen pointer projection.
+ * <pre>
+ * 第一步：按 R 切换缩放工具，按下 X、Y 或 Z 轴方块。
+ * 第二步：沿显示的轴线拖动。轴线接近视线时向上拖动可增加轴向缩放。
+ * 第三步：松开左键提交一次缩放，右键取消。平面方块仍使用原有缩放手势。
+ * </pre>
  * @author sploreg, dokthar
  */
 public class ScaleTool extends SceneEditTool {
 
     private Vector3f pickedMarker;
-    private Vector3f constraintAxis; //used for one axis scale
+    private AxisTranslationDrag axisDrag;
+    private Vector3f localScaleAxis;
     private Vector3f startScale;
     private Vector3f lastScale;
     private boolean wasDragging = false;
@@ -46,16 +51,7 @@ public class ScaleTool extends SceneEditTool {
     @Override
     public void actionPrimary(Vector2f screenCoord, boolean pressed, JmeNode rootNode, DataObject dataObject) {
         if (!pressed) {
-            setDefaultAxisMarkerColors();
-            pickedMarker = null; // mouse released, reset selection
-            constraintAxis = Vector3f.UNIT_XYZ; // no axis constraint
-            if (wasDragging) {
-                if (!startScale.equals(lastScale)) {
-                    actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
-                }
-                wasDragging = false;
-            }
-            pickManager.reset();
+            endScale();
         } else {
             if (toolController.getSelectedSpatial() == null) {
                 return;
@@ -69,15 +65,11 @@ public class ScaleTool extends SceneEditTool {
                 if (pickedMarker.equals(QUAD_XY) || pickedMarker.equals(QUAD_XZ) || pickedMarker.equals(QUAD_YZ)) {
                     pickManager.initiatePick(toolController.getSelectedSpatial(), camera.getRotation(),
                             SceneComposerToolController.TransformationType.camera, camera, screenCoord);
-                } else if (pickedMarker.equals(ARROW_X)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XY, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_X; // scale only X
-                } else if (pickedMarker.equals(ARROW_Y)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_YZ, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_Y; // scale only Y
-                } else if (pickedMarker.equals(ARROW_Z)) {
-                    pickManager.initiatePick(toolController.getSelectedSpatial(), PickManager.PLANE_XZ, getTransformType(), camera, screenCoord);
-                    constraintAxis = Vector3f.UNIT_Z; // scale only Z
+                } else {
+                    Vector3f worldAxis = axisMarker.getWorldRotation().mult(pickedMarker);
+                    axisDrag = AxisTranslationDrag.forScale(camera, axisMarker.getWorldTranslation(), worldAxis, screenCoord);
+                    localScaleAxis = toolController.getSelectedSpatial().getWorldRotation().inverse()
+                            .mult(worldAxis).multLocal(.5f);
                 }
                 startScale = toolController.getSelectedSpatial().getLocalScale().clone();
                 lastScale = startScale.clone();
@@ -95,47 +87,28 @@ public class ScaleTool extends SceneEditTool {
 
     @Override
     public void mouseMoved(Vector2f screenCoord, JmeNode rootNode, DataObject currentDataObject) {
-        if (pickedMarker == null) {
+        if (!wasDragging) {
             highlightAxisMarker(camera, screenCoord, axisPickType, true);
-        } else {
-            pickedMarker = null;
-            pickManager.reset();
         }
     }
 
     @Override
     public void draggedPrimary(Vector2f screenCoord, boolean pressed, JmeNode rootNode, DataObject currentDataObject) {
         if (!pressed) {
-            setDefaultAxisMarkerColors();
-            pickedMarker = null; // mouse released, reset selection
-            constraintAxis = Vector3f.UNIT_XYZ; // no axis constraint
-            if (wasDragging) {
-                if (!startScale.equals(lastScale)) {
-                    actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
-                }
-                wasDragging = false;
-            }
-            pickManager.reset();
+            endScale();
         } else if (wasDragging) {
-            if (!pickManager.updatePick(camera, screenCoord)) {
+            Vector3f scale;
+            if (axisDrag != null) {
+                scale = startScale.add(localScaleAxis.mult(axisDrag.distance(screenCoord)));
+            } else if (pickManager.updatePick(camera, screenCoord)) {
+                Vector3f radialDirection = pickManager.getStartOffset().normalize();
+                float distance = pickManager.getLocalTranslation(radialDirection).dot(radialDirection);
+                scale = startScale.mult(1f + distance);
+            } else {
                 return;
             }
-            if (pickedMarker.equals(QUAD_XY) || pickedMarker.equals(QUAD_XZ) || pickedMarker.equals(QUAD_YZ)) {
-                constraintAxis = pickManager.getStartOffset().normalize();
-                float diff = pickManager.getLocalTranslation(constraintAxis).dot(constraintAxis);
-                diff += 1f;
-                Vector3f scale = startScale.mult(diff);
-                lastScale = scale;
-                toolController.updateSelectedScale(scale, pickedMarker);
-            } else if (pickedMarker.equals(ARROW_X) || pickedMarker.equals(ARROW_Y) || pickedMarker.equals(ARROW_Z)) {
-                // Get the translation in the spatial Space
-                Quaternion worldToSpatial = toolController.getSelectedSpatial().getWorldRotation().inverse();
-                Vector3f diff = worldToSpatial.mult(pickManager.getTranslation(constraintAxis));
-                diff.multLocal(0.5f);
-                Vector3f scale = startScale.add(diff);
-                toolController.updateSelectedScale(scale, pickedMarker);
-                lastScale = scale;
-            }
+            toolController.updateSelectedScale(scale, pickedMarker);
+            lastScale = scale;
             updateToolsTransformation();
         }
     }
@@ -147,13 +120,27 @@ public class ScaleTool extends SceneEditTool {
         }
     }
 
+    private void endScale() {
+        if (wasDragging && !startScale.equals(lastScale)) {
+            actionPerformed(new ScaleUndo(toolController.getSelectedSpatial(), startScale, lastScale));
+        }
+        resetDrag();
+    }
+
+    private void resetDrag() {
+        wasDragging = false;
+        setDefaultAxisMarkerColors();
+        pickedMarker = null;
+        axisDrag = null;
+        localScaleAxis = null;
+        pickManager.reset();
+    }
+
     private void cancel() {
         if (wasDragging) {
-            wasDragging = false;
             toolController.getSelectedSpatial().setLocalScale(startScale);
-            setDefaultAxisMarkerColors();
-            pickedMarker = null; // mouse released, reset selection
-            pickManager.reset();
+            resetDrag();
+            updateToolsTransformation();
         }
     }
 

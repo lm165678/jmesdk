@@ -35,7 +35,7 @@ import java.util.function.Consumer;
  * </pre>
  */
 public final class PreviewDebugProcessor implements SceneProcessor {
-    public enum Mode { Lit, Unlit, Normals, Wireframe, SDFSelected, SDFGlobal, Collision }
+    public enum Mode { Lit, Unlit, Normals, Wireframe, SDFSelected, SDFGlobal, Collision, LightmapMip }
     private final AssetManager assets;
     private final Node root;
     private final Consumer<String> status;
@@ -56,6 +56,7 @@ public final class PreviewDebugProcessor implements SceneProcessor {
     private float sdfCell = 0.5f;
     private String sdfStatus;
     private boolean sdfFailed;
+    private LightmapMipDebug lightmapMipDebug;
 
     /**
      * Render-thread preview options. Defaults: automatic three-level selection,
@@ -91,6 +92,10 @@ public final class PreviewDebugProcessor implements SceneProcessor {
     /** Sets a preview mode; call between frames on the render thread. */
     public void setMode(Mode value) {
         restore();
+        if (lightmapMipDebug != null) {
+            lightmapMipDebug.clear();
+            lightmapMipDebug = null;
+        }
         mode = Objects.requireNonNull(value);
         applyPath();
         refresh();
@@ -233,6 +238,23 @@ public final class PreviewDebugProcessor implements SceneProcessor {
 
     @Override
     public void postQueue(RenderQueue queue) {
+        if (mode == Mode.LightmapMip) {
+            if (!manager.getRenderer().getCaps().contains(com.jme3.renderer.Caps.GLSL400)) {
+                reportSdf("Lightmap mip view requires desktop OpenGL 4.0+; original materials retained");
+                return;
+            }
+            if (lightmapMipDebug == null) {
+                lightmapMipDebug = new LightmapMipDebug(assets);
+            }
+            reportSdf(LightmapMipDebug.LEGEND);
+            root.depthFirstTraversal(spatial -> {
+                if (spatial instanceof Geometry geometry && geometry.getMaterial() != null) {
+                    originals.put(geometry, geometry.getMaterial());
+                    geometry.setMaterial(lightmapMipDebug.material(geometry));
+                }
+            });
+            return;
+        }
         if (mode == Mode.Unlit || mode == Mode.Normals || mode == Mode.Wireframe) {
             root.depthFirstTraversal(spatial -> {
                 if (spatial instanceof Geometry geometry && geometry.getMaterial() != null) {
@@ -307,6 +329,10 @@ public final class PreviewDebugProcessor implements SceneProcessor {
         debug.detachAllChildren();
         bodies.clear();
         replacements.clear();
+        if (lightmapMipDebug != null) {
+            lightmapMipDebug.clear();
+            lightmapMipDebug = null;
+        }
         view = null;
     }
 

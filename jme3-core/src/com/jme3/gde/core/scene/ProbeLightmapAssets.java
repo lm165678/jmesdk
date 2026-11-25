@@ -34,8 +34,14 @@ import org.openide.util.RequestProcessor;
  * Exports independent, region-streamed lightmaps alongside a completed probe bake.
  * <pre>{@code
  * // 第一步：在 SceneComposer 烘焙探针，完成后在渲染线程创建导出任务。
- * ProbeLightmapAssets maps = new ProbeLightmapAssets(app, scene, volume);
- * // 第二步：每个渲染帧调用 maps.step()，任务完成后保存场景引用。
+ * // 默认平滑 UV2 接缝；最后一个参数传 false 可关闭以对照本次烘焙结果。
+ * ProbeLightmapAssets maps = new ProbeLightmapAssets(app, scene, volume, true);
+ * // 第二步：将 maps 保存为任务状态。每一渲染帧执行一次下面的检查。
+ * if (maps.step()) {
+ *     maps.close();
+ *     // 停止执行此任务；保存场景可保留新的 Lightmap 引用。
+ * }
+ * // 取消任务或关闭场景时也在渲染线程调用 maps.close()。
  * }</pre>
  * Receivers outside supported coverage continue using live probes. The scene is saved through the editor.
  * Manual Geometry UV2 regeneration stores LightmapUvGenerator.RESOLUTION_KEY;
@@ -59,6 +65,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private final GiProbeData data;
     private final boolean singleVisibility;
     private final boolean octahedral;
+    private final boolean blendSeams;
     private final long budget;
     private final List<ProbeLightmapRegion.Source> sources = new ArrayList<>();
     private List<ProbeLightmapRegion.Source> activeSources = List.of();
@@ -77,8 +84,15 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private record Entry(Geometry geometry, Mesh source, Mesh mesh, Transform transform, String key, int resolution) {
     }
 
+    /** Creates a render-thread bake task with UV2 seam smoothing enabled. */
     public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume) {
+        this(app, scene, volume, true);
+    }
+
+    /** Creates a render-thread bake task with the submitted seam smoothing setting. */
+    public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume, boolean blendSeams) {
         this.app = app;
+        this.blendSeams = blendSeams;
         this.scene = scene;
         this.volume = volume;
         data = volume.getData();
@@ -207,7 +221,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                 throw new IOException("Invalid receiver Lightmap UV resolution: " + lightmapResolution);
             }
             Texture2D texture = ProbeLightmapBaker.bakeField(app.getRenderManager(), scene.getManager(),
-                    proxy, field, lightmapResolution, lightmapResolution);
+                    proxy, field, lightmapResolution, lightmapResolution, blendSeams);
             String key = revision + UUID.randomUUID() + ".j3o";
             outputs.add(new Entry(geometry, source, mesh, transform, key, lightmapResolution));
             write = new CompletableFuture<>();
@@ -295,6 +309,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     public String summary() {
         return completed == 0 && skipped == 0 ? ""
                 : " Lightmaps saved: " + completed + "; continued with live probes: " + skipped + "."
+                        + (completed == 0 ? "" : " Lightmap seam smoothing: " + (blendSeams ? "on." : "off."))
                         + (firstFailure == null ? "" : " First Lightmap failure: " + firstFailure + ".");
     }
 }

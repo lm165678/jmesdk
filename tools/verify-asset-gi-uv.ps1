@@ -32,6 +32,11 @@ function Compile-Sources([string]$label, [string[]]$sources, [switch]$Java11) {
     }
 }
 Compile-Sources 'core' @(
+    "$EngineRoot/jme3-core/src/main/java/com/jme3/environment/gi/ProbeLightmapBaker.java",
+    "$EngineRoot/jme3-core/src/main/java/com/jme3/environment/gi/ProbeLightmapChartOwnership.java",
+    "$EngineRoot/jme3-core/src/main/java/com/jme3/environment/gi/ProbeLightmapMipChain.java",
+    "$EngineRoot/jme3-core/src/main/java/com/jme3/environment/gi/ProbeLightmapControl.java",
+    "$EngineRoot/jme3-core/src/main/java/com/jme3/post/WorldSettings.java",
     "$EngineRoot/jme3-core/src/main/java/com/jme3/post/Filter.java",
     "$EngineRoot/jme3-core/src/main/java/com/jme3/renderer/gpuscene/GpuScenePipeline.java"
 ) -Java11
@@ -40,9 +45,13 @@ $relative = @(
     'jme3-core/src/com/jme3/gde/core/assets/LightmapUvPacking.java',
     'jme3-core/src/com/jme3/gde/core/assets/ModelConversionPreparation.java',
     'jme3-core/src/com/jme3/gde/core/scene/ProbeLightmapAssets.java',
+    'jme3-core/src/com/jme3/gde/core/scene/GiPreview.java',
     'jme3-core/src/com/jme3/gde/core/scene/GiBakeReconstructionGuard.java',
     'jme3-core/src/com/jme3/gde/core/sceneexplorer/nodes/actions/impl/BakeGiProbeVolumeAction.java',
     'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/LightmapUvEdits.java',
+    'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/SceneLightmapEdit.java',
+    'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/EditorLightmapPanel.java',
+    'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/SceneComposerTopComponent.java',
     'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/ModelDetailTopComponent.java',
     'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/LightmapUvView.java',
     'jme3-assetbrowser/src/com/jme3/gde/assetbrowser/AssetDependencies.java',
@@ -51,6 +60,7 @@ $relative = @(
     'tools/tests/AssetDependencyRefreshSmoke.java',
     'tools/tests/AssetDependencyDialogSmoke.java',
     'tools/tests/GiBakeReconstructionSmoke.java',
+    'tools/tests/GiInspectorBakeCheck.java',
     'tools/tests/LightmapUvSubtreeSmoke.java',
     'tools/tests/LightmapUvRegenerationSmoke.java'
 )
@@ -94,6 +104,7 @@ Run-Check 'com.jme3.gde.assetbrowser.AssetDependencyRefreshSmoke' 'dependencies'
 Run-Check 'com.jme3.gde.core.scene.GiBakeReconstructionSmoke' 'reconstruction'
 Run-Check 'com.jme3.gde.scenecomposer.LightmapUvSubtreeSmoke' 'uv-subtree'
 if (-not $SkipVisual) {
+    Run-Check 'com.jme3.gde.core.sceneexplorer.nodes.actions.impl.GiInspectorBakeCheck' 'gi-inspector' @("$out/artifacts")
     Run-Check 'com.jme3.gde.assetbrowser.AssetDependencyDialogSmoke' 'dependency-dialog'
     Run-Check 'com.jme3.gde.scenecomposer.LightmapUvRegenerationSmoke' 'uv-render' @("$out/artifacts")
     Run-Check 'jme3test.post.TestUpscaling' 'upscaling-render'

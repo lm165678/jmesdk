@@ -1,0 +1,32 @@
+MaterialDef SDK Lightmap Mip Debug {
+    MaterialParameters {
+        Texture2D Lightmap -LINEAR
+        Boolean HasUV2
+        Boolean MipSampling
+        Float MaxMip
+        Float AtlasInset
+        Int State
+        Boolean UseInstancing
+        Int NumberOfBones
+        Matrix4Array BoneMatrices
+        FloatArray MorphWeights
+        Int NumberOfMorphTargets
+        Int NumberOfTargetsBuffers
+    }
+    Technique {
+        VertexShader GLSL400: com/jme3/gde/core/scene/processors/LightmapMipDebug.vert
+        FragmentShader GLSL400: com/jme3/gde/core/scene/processors/LightmapMipDebug.frag
+        WorldParameters {
+            WorldViewProjectionMatrix
+            ViewProjectionMatrix
+            ViewMatrix
+        }
+        Defines {
+            HAS_UV2 : HasUV2
+            INSTANCING : UseInstancing
+            NUM_BONES : NumberOfBones
+            NUM_MORPH_TARGETS : NumberOfMorphTargets
+            NUM_TARGETS_BUFFERS : NumberOfTargetsBuffers
+        }
+    }
+}

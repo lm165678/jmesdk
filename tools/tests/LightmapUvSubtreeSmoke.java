@@ -16,6 +16,66 @@ public final class LightmapUvSubtreeSmoke {
             throw new AssertionError(message);
         }
     }
+    private static void testInspectorProgress() throws Exception {
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            try {
+                ModelDetailTopComponent panel = new ModelDetailTopComponent();
+                Class<?> type = panel.getClass();
+                var update = type.getDeclaredMethod("setUvProgress", int.class, int.class, String.class);
+                var select = type.getDeclaredMethod("cancelOnSelectionChange", Spatial.class,
+                        com.jme3.gde.core.scene.SceneRequest.class);
+                update.setAccessible(true);
+                select.setAccessible(true);
+                var scene = new com.jme3.gde.core.scene.SceneRequest(panel, null);
+                var token = new java.util.concurrent.atomic.AtomicBoolean();
+                setField(panel, "cancellation", token);
+                setField(panel, "uvEditToken", token);
+                setField(panel, "uvScene", scene);
+                Node original = new Node("Scene Root");
+                setField(panel, "selected", original);
+                var model = new javax.swing.JPanel();
+                var layout = new java.awt.CardLayout();
+                var cards = new javax.swing.JPanel(layout);
+                cards.add(model, "model");
+                cards.add(new javax.swing.JPanel(), "none");
+                setField(panel, "embedded", model);
+                setField(panel, "contexts", layout);
+                setField(panel, "contextual", cards);
+                var showContext = type.getDeclaredMethod("showContext", String.class);
+                showContext.setAccessible(true);
+                update.invoke(panel, 1, 2, "Generating UV2: Rigid");
+                select.invoke(panel, new Node("Other node"), scene);
+                showContext.invoke(panel, "none");
+                var footer = (javax.swing.JPanel) getField(panel, "uvProgressFooter");
+                var bar = (javax.swing.JProgressBar) getField(panel, "uvBackgroundProgress");
+                check(!token.get() && footer.isVisible() && bar.getString().equals("1 / 2")
+                        && bar.getToolTipText().endsWith("Rigid"), "Changing selection lost the UV progress");
+                showContext.invoke(panel, "model");
+                var inline = (javax.swing.JProgressBar) getField(panel, "progress");
+                check(!footer.isVisible() && inline.getValue() == 1, "Returning to the original card lost UV progress");
+                select.invoke(panel, original, new com.jme3.gde.core.scene.SceneRequest(panel, null));
+                check(token.get(), "Replacing the scene must cancel UV regeneration");
+                var minimum = (javax.swing.JSpinner) getField(panel, "uvResolution");
+                check((int) minimum.getValue() == 512, "Inspector must default to a 512 pixel minimum");
+            } catch (ReflectiveOperationException failure) {
+                throw new AssertionError(failure);
+            }
+        });
+    }
+
+    private static Object getField(ModelDetailTopComponent panel, String name) throws ReflectiveOperationException {
+        var field = panel.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(panel);
+    }
+
+    private static void setField(ModelDetailTopComponent panel, String name, Object value)
+            throws ReflectiveOperationException {
+        var field = panel.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(panel, value);
+    }
+
     public static void main(String[] args) throws Exception {
         Node root = new Node("SceneRoot");
         Mesh skin = new Box(1, 1, 1);
@@ -56,7 +116,13 @@ public final class LightmapUvSubtreeSmoke {
         check(LightmapUvEdits.receivers(root).size() == 2, "Deformable/helper subtree not excluded");
         Mesh originalRigid = rigid.getMesh();
         LightmapUvEdits edit = new LightmapUvEdits(root);
-        edit.build(new LightmapUvGenerator.Settings(64, 4, 2), 512, () -> false);
+        var progress = new java.util.ArrayList<LightmapUvEdits.Progress>();
+        edit.build(new LightmapUvGenerator.Settings(64, 4, 2), 512, () -> false, progress::add);
+        check(progress.equals(java.util.List.of(
+                new LightmapUvEdits.Progress(0, 2, "Rigid"),
+                new LightmapUvEdits.Progress(1, 2, "Dynamic rigid"),
+                new LightmapUvEdits.Progress(2, 2, null))), "Progress must identify each eligible geometry");
+        check(rigid.getMesh() == originalRigid, "Progress changed live mesh before commit");
         edit.validate();
         edit.redo();
         check(rigid.getMesh() != originalRigid && rigid.getMesh().getBuffer(Type.TexCoord2) != null
@@ -79,6 +145,25 @@ public final class LightmapUvSubtreeSmoke {
                 "An excluded object was modified");
         Node saved = BinaryExporter.saveAndLoad(new com.jme3.asset.DesktopAssetManager(), root);
         check(((Geometry) saved.getChild("Rigid")).getMesh().getBuffer(Type.TexCoord2) != null, "UV2 not saved");
+        ProbeLightmapControl rigidMap = new ProbeLightmapControl("rigid.j3o", rigid.getWorldTransform(), 100);
+        rigid.addControl(rigidMap);
+        var modified = new java.util.concurrent.atomic.AtomicBoolean();
+        SceneLightmapEdit unlink = new SceneLightmapEdit(root, () -> modified.set(true));
+        check(unlink.size() == 2, "Clear Scene Lightmaps missed a receiver");
+        unlink.sceneRedo();
+        check(modified.get() && actor.getControl(ProbeLightmapControl.class) == null
+                && rigid.getControl(ProbeLightmapControl.class) == null, "Clear Scene Lightmaps did not unlink receivers");
+        check(rigid.getMesh().getBuffer(Type.TexCoord2) != null && volume.getParent() == helpers,
+                "Clear Scene Lightmaps changed UV2 or probes");
+        Node savedWithoutLightmaps = BinaryExporter.saveAndLoad(new com.jme3.asset.DesktopAssetManager(), root);
+        check(savedWithoutLightmaps.getChild("Rigid").getControl(ProbeLightmapControl.class) == null,
+                "Cleared Lightmap binding present after J3O reload");
+        unlink.sceneUndo();
+        check(rigid.getControl(ProbeLightmapControl.class) == rigidMap
+                && actor.getControl(ProbeLightmapControl.class) == actorMap, "Undo did not restore Lightmap bindings");
+        unlink.sceneRedo();
+        check(rigid.getControl(ProbeLightmapControl.class) == null, "Redo did not clear Lightmap binding");
+        testInspectorProgress();
         try {
             new LightmapUvEdits(actor);
             throw new AssertionError("Deformable-only selection accepted");

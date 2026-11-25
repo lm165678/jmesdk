@@ -71,6 +71,8 @@ final class SkinLutPanel extends JPanel {
     SkinLutPanel() {
         super(new BorderLayout(10, 10));
         preset.setName("skin.preset");
+        root.setName("skin.root");
+        outputKey.setName("skin.key");
         setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         width.setSelectedItem(256);
         height.setSelectedItem(128);
@@ -333,12 +335,18 @@ final class SkinLutPanel extends JPanel {
         worker.execute();
     }
 
+    javax.swing.text.Document assetRootDocument() {
+        return root.getDocument();
+    }
+
+    javax.swing.text.Document outputKeyDocument() {
+        return outputKey.getDocument();
+    }
+
     private void chooseRoot() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Select the project's assets root");
-        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            root.setText(chooser.getSelectedFile().getAbsolutePath());
+        Path selected = SkinTextureInput.chooseProject(this);
+        if (selected != null) {
+            root.setText(selected.toString());
         }
     }
 

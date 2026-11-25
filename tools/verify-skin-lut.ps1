@@ -1,5 +1,5 @@
 # Compiles only the skin tool and its smoke test into an isolated directory.
-# No Ant/Gradle SDK build, installation, engine export or native process is used.
+# No Ant/Gradle SDK build, installation or engine export. Optional DDS inputs may use the bundled CPU decoder.
 param([string]$JdkHome, [string]$NormalSource)
 
 $ErrorActionPreference = 'Stop'
@@ -27,8 +27,12 @@ try {
     $sources = @("$source/SkinLutAction.java", "$source/SkinLutPanel.java", "$source/SkinLutExport.java",
         "$source/SkinToolsPanel.java", "$source/SkinGenerationSettings.java", "$source/SkinNormalAssets.java",
         "$source/SkinNormalPanel.java", "$source/SkinTexturePreview.java",
-        'tools/tests/SkinLutSmoke.java')
-    $compile = @('-encoding','UTF-8','-implicit:none','-proc:full','-processor','org.netbeans.modules.openide.awt.ActionProcessor',
+        "$source/SkinAssetSelection.java", "$source/SkinTextureInput.java", "$source/SkinTextureReader.java",
+        "$source/TextureToolchain.java", "$source/CompressedTexture.java",
+        'jme3-core/src/com/jme3/gde/core/assets/SkinProjectAssetSelection.java',
+        (Join-Path $engineRoot 'jme3-core/src/plugins/java/com/jme3/texture/plugins/DDSLoader.java'),
+        'tools/tests/SkinLutSmoke.java', 'tools/tests/SkinTextureWorkflowSmoke.java', 'tools/tests/SkinDdsGpuSmoke.java')
+    $compile = @('-encoding','UTF-8','-implicit:none','-proc:full','-processor','org.netbeans.modules.openide.awt.ActionProcessor,org.netbeans.modules.openide.util.ServiceProviderProcessor',
         '-sourcepath',('"'+$moduleSource+'"'),
         '-cp',('"'+$classpath+'"'),'-d',('"'+$classes+'"')) + $sources
     [IO.File]::WriteAllLines((Join-Path $output 'compile.args'), @($compile | ForEach-Object { $_.Replace('\','/') }))

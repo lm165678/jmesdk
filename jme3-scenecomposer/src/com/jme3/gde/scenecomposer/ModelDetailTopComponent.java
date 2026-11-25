@@ -22,8 +22,9 @@ import org.openide.windows.TopComponent;
 /**
  * Geometry detail/bake inspector. Selection and widgets belong to Swing; capture
  * and commit belong to the render thread. CPU work uses private meshes, while
- * GPU surface capture is enqueued at a frame boundary. Cancelling or changing
- * selection discards results. Mesh/source fingerprints reject stale CPU work.
+ * GPU surface capture is enqueued at a frame boundary. UV edits belong to
+ * the original scene and subtree. Other bake operations follow selection.
+ * Mesh/source fingerprints reject stale CPU work.
  * All commits support Undo/Redo and mark the current asset modified; Ctrl+S saves.
  * SDF defaults to 64^3, 5% padding, unsigned distances for open models. Surface
  * capture defaults to 128 pixels/card with a 256 MiB payload cap. Neither operation
@@ -43,11 +44,14 @@ import org.openide.windows.TopComponent;
  * Dynamic 刚体可处理；骨骼、Morph 对象及其子树全部跳过，不修改其任何数据。
  * 也跳过粒子、天空和探针辅助对象。Minimum resolution 按容量/密度增长，最高 2048/GPU 上限。
  * Clear UV2 可整组移除 UV2、尺寸覆盖和旧 Lightmap 绑定；下次 GI 烘焙自动为静态接收体生成。
- * 节点操作整体撤销/重做；取消、切换选择或源网格变化会丢弃尚未安装的结果。
+ * 节点操作整体撤销/重做。生成后可以换选区，按钮下方继续显示当前 Geometry 和数量。
+ * 取消、关闭或切换场景、目标被移除或源网格变化时，丢弃尚未安装的结果。
  * 点击 Regenerate UV2 替换已有 UV2；UV0 保持，旧静态 Lightmap 失效，需要重新烘焙。
  * View UV2 打开独立二维视图；Ctrl+滚轮缩放，滚动条移动查看，未生成时显示提示。
  * UV2、分辨率设置及旧 Lightmap 引用一起支持撤销/重做，Ctrl+S 保存 J3O。
- * 默认 512 像素、每岛 4 纹素、图边 2 纹素。边距预留不等于烘焙后的颜色扩边。
+ * 默认最小分辨率 512 像素、每岛 4 纹素、图边 2 纹素，可手动调整。
+ * 重新选择子树会恢复默认起点；单个 Geometry 已保存的更高分辨率优先。
+ * 边距预留不等于烘焙后的颜色扩边。
  * 原模型转换和自动补缺失 UV2 的路径不变；只对刚体三角形 Mesh 提供重新展开。
  * </pre>
  */
@@ -62,6 +66,12 @@ public final class ModelDetailTopComponent extends TopComponent {
     private JPanel embedded;
     private final JPanel bottom = new JPanel(new BorderLayout(6, 6));
     private JPanel contextual;
+    private final JPanel uvProgressFooter = new JPanel(new BorderLayout(6, 2));
+    private final JProgressBar uvBackgroundProgress = new JProgressBar();
+    private final JLabel uvBackgroundStatus = new JLabel();
+    private volatile AtomicBoolean uvEditToken;
+    private SceneRequest uvScene;
+    private int defaultProgressMaximum;
     private java.awt.CardLayout contexts;
     private JPanel giPanel;
     private Spatial giTarget;
@@ -94,12 +104,15 @@ public final class ModelDetailTopComponent extends TopComponent {
         }
         properties.removeAll();
         properties.setLayout(new BorderLayout());
+        JPanel lower = new JPanel(new BorderLayout());
+        lower.add(contextual, BorderLayout.CENTER);
+        lower.add(uvProgressFooter, BorderLayout.SOUTH);
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT,
-                original, contextual);
+                original, lower);
         split.setResizeWeight(0.5);
         split.setDividerSize(5);
         original.setMinimumSize(new java.awt.Dimension(0, 0));
-        contextual.setMinimumSize(new java.awt.Dimension(0, 0));
+        lower.setMinimumSize(new java.awt.Dimension(0, 0));
         split.setDividerLocation(0.5);
         properties.add(split, BorderLayout.CENTER);
         properties.revalidate();
@@ -178,7 +191,8 @@ public final class ModelDetailTopComponent extends TopComponent {
     private final JButton cancel = new JButton(ui("Cancel"));
     private final JTabbedPane tabs = new JTabbedPane();
     private final ModelPhysicsPanel physics = new ModelPhysicsPanel();
-    private final JSpinner uvResolution = spinner(512, 64, 2048, 64);
+    private static final LightmapUvGenerator.Settings UV_DEFAULTS = LightmapUvGenerator.Settings.DEFAULT;
+    private final JSpinner uvResolution = spinner(UV_DEFAULTS.resolution(), 64, 2048, 64);
     private final JSpinner uvPadding = spinner(4, 0, 64, 1);
     private final JSpinner uvBorder = spinner(2, 0, 64, 1);
     private final JButton viewUv = new JButton("View UV2");
@@ -278,12 +292,15 @@ public final class ModelDetailTopComponent extends TopComponent {
         bake.setEnabled(false);
         cancel.setEnabled(false);
         bake.addActionListener(event -> startBake());
-        cancel.addActionListener(event -> {
-            if (cancellation != null) {
-                cancellation.set(true);
-                status.setText("Cancelling; previous data remains unchanged.");
-            }
-        });
+        cancel.addActionListener(event -> cancelOperation());
+        JButton backgroundCancel = new JButton(ui("Cancel"));
+        backgroundCancel.addActionListener(event -> cancelOperation());
+        uvBackgroundProgress.setStringPainted(true);
+        uvBackgroundStatus.setMinimumSize(new java.awt.Dimension(0, 0));
+        uvProgressFooter.add(uvBackgroundStatus, BorderLayout.NORTH);
+        uvProgressFooter.add(uvBackgroundProgress, BorderLayout.CENTER);
+        uvProgressFooter.add(backgroundCancel, BorderLayout.EAST);
+        uvProgressFooter.setVisible(false);
     }
 
     @Override
@@ -336,10 +353,10 @@ public final class ModelDetailTopComponent extends TopComponent {
         ModelDetailTopComponent panel = instance;
         panel.embedInProperties();
         panel.enableModelInputs(false);
-        if (panel.contexts != null && panel.selected != spatial) { panel.contexts.show(panel.contextual, "none"); }
-        if (panel.selected != spatial && panel.cancellation != null) {
-            panel.cancellation.set(true);
+        if (panel.contexts != null && panel.selected != spatial) {
+            panel.showContext("none");
         }
+        panel.cancelOnSelectionChange(spatial, SceneApplication.getApplication().getCurrentSceneRequest());
         if (panel.selected != spatial) {
             panel.resetLodPreview();
         }
@@ -347,6 +364,11 @@ public final class ModelDetailTopComponent extends TopComponent {
         boolean uvSelectionChanged = panel.selected != spatial;
         panel.uvViewGeneration++;
         panel.selected = spatial;
+        if (uvSelectionChanged) {
+            panel.uvResolution.setValue(UV_DEFAULTS.resolution());
+            panel.uvPadding.setValue(UV_DEFAULTS.padding());
+            panel.uvBorder.setValue(UV_DEFAULTS.border());
+        }
         if (spatial instanceof Geometry geometry && uvSelectionChanged) {
             SceneApplication.getApplication().enqueue(() -> {
                 Integer size = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
@@ -354,9 +376,11 @@ public final class ModelDetailTopComponent extends TopComponent {
                 Integer border = geometry.getUserData(LightmapUvGenerator.BORDER_KEY);
                 SwingUtilities.invokeLater(() -> {
                     if (panel.selected == geometry) {
-                        panel.uvResolution.setValue(size == null ? 512 : Math.min(2048, size));
-                        panel.uvPadding.setValue(margin == null ? 4 : margin);
-                        panel.uvBorder.setValue(border == null ? 2 : border);
+                        if (size != null) {
+                            panel.uvResolution.setValue(Math.min(2048, Math.max(UV_DEFAULTS.resolution(), size)));
+                        }
+                        panel.uvPadding.setValue(margin == null ? UV_DEFAULTS.padding() : margin);
+                        panel.uvBorder.setValue(border == null ? UV_DEFAULTS.border() : border);
                         panel.refreshUvView(false);
                     }
                 });
@@ -402,11 +426,11 @@ public final class ModelDetailTopComponent extends TopComponent {
                                 panel.giPanel.add(giScroll, BorderLayout.CENTER);
                                 panel.giTarget = spatial;
                             }
-                            panel.contexts.show(panel.contextual, "gi");
+                            panel.showContext("gi");
                         } else {
                             panel.giTarget = null;
                             panel.giPanel.removeAll();
-                            panel.contexts.show(panel.contextual, count > 0 ? "model" : "none");
+                            panel.showContext(count > 0 ? "model" : "none");
                         }
                     }
                     if (count > 0) {
@@ -619,15 +643,21 @@ public final class ModelDetailTopComponent extends TopComponent {
         if (target == null || currentEditor == null || cancellation != null) {
             return;
         }
+        SceneApplication app = SceneApplication.getApplication();
+        SceneRequest request = app.getCurrentSceneRequest();
         AtomicBoolean token = new AtomicBoolean();
         cancellation = token;
+        uvEditToken = token;
+        uvScene = request;
         bake.setEnabled(false);
         clearUv.setEnabled(false);
         cancel.setEnabled(true);
-        status.setText(settings == null ? "Clearing subtree UV2..." : "Generating subtree UV2 on private meshes...");
-        SceneApplication app = SceneApplication.getApplication();
+        bottom.setVisible(true);
+        defaultProgressMaximum = progress.getMaximum();
+        progress.setStringPainted(true);
+        setUvProgress(0, 0, settings == null ? "Preparing UV2 clear..." : "Preparing UV2 generation...");
+        refreshUvProgressVisibility();
         app.enqueue(() -> {
-            SceneRequest request = app.getCurrentSceneRequest();
             try {
                 checkCurrent(app, request, target, token);
                 LightmapUvEdits edit = new LightmapUvEdits(target);
@@ -635,7 +665,8 @@ public final class ModelDetailTopComponent extends TopComponent {
                         .getOrDefault(com.jme3.renderer.Limits.TextureSize, 0) / 2);
                 WORKER.submit(() -> {
                     try {
-                        edit.build(settings, maximum, token::get);
+                        edit.build(settings, maximum, () -> token.get() || app.getCurrentSceneRequest() != request,
+                                step -> showUvProgress(token, step, settings != null));
                         app.enqueue(() -> {
                             try {
                                 checkCurrent(app, request, target, token);
@@ -659,8 +690,63 @@ public final class ModelDetailTopComponent extends TopComponent {
         });
     }
 
+    private void showContext(String card) {
+        contexts.show(contextual, card);
+        refreshUvProgressVisibility();
+    }
+
+    private void refreshUvProgressVisibility() {
+        uvProgressFooter.setVisible(uvEditToken != null && embedded != null && !embedded.isVisible());
+    }
+
+    private void cancelOnSelectionChange(Spatial next, SceneRequest request) {
+        if (cancellation != null && (cancellation == uvEditToken ? uvScene != request : selected != next)) {
+            cancelOperation();
+        }
+    }
+
+    private void cancelOperation() {
+        if (cancellation != null) {
+            cancellation.set(true);
+            String message = "Cancelling; previous data remains unchanged.";
+            status.setText(message);
+            if (cancellation == uvEditToken) {
+                uvBackgroundStatus.setText(message);
+            }
+        }
+    }
+
+    private void showUvProgress(AtomicBoolean token, LightmapUvEdits.Progress step, boolean regenerate) {
+        SwingUtilities.invokeLater(() -> {
+            if (uvEditToken != token || token.get()) {
+                return;
+            }
+            String message = step.geometryName() == null ? "Applying UV2 changes..."
+                    : (regenerate ? "Generating UV2: " : "Clearing UV2: ") + step.geometryName();
+            setUvProgress(step.completed(), step.total(), message);
+        });
+    }
+
+    private void setUvProgress(int completed, int total, String message) {
+        String count = total == 0 ? "Preparing..." : completed + " / " + total;
+        for (JProgressBar bar : new JProgressBar[]{progress, uvBackgroundProgress}) {
+            bar.setIndeterminate(total == 0);
+            bar.setMaximum(Math.max(1, total));
+            bar.setValue(completed);
+            bar.setString(count);
+            bar.setToolTipText(message);
+        }
+        status.setText(message);
+        uvBackgroundStatus.setText(message);
+        uvBackgroundStatus.setToolTipText(message);
+    }
+
     private boolean updateProgress(AtomicBoolean token, float fraction) {
-        SwingUtilities.invokeLater(() -> progress.setValue(Math.round(fraction * 100)));
+        SwingUtilities.invokeLater(() -> {
+            if (cancellation == token) {
+                progress.setValue(Math.round(fraction * 100));
+            }
+        });
         return !token.get();
     }
 
@@ -672,14 +758,27 @@ public final class ModelDetailTopComponent extends TopComponent {
                 break;
             }
         }
-        if (!attached || !ModelBakeSupport.isEditableSceneModel(target) || token.get() || selected != target || app.getCurrentSceneRequest() != request) {
-            throw new CancellationException("Bake cancelled / selection changed; previous data preserved.");
+        boolean selectionChanged = token != uvEditToken && selected != target;
+        if (!attached || !ModelBakeSupport.isEditableSceneModel(target) || token.get()
+                || selectionChanged || app.getCurrentSceneRequest() != request) {
+            throw new CancellationException("Bake cancelled or target changed; previous data preserved.");
         }
     }
 
     private void finish(AtomicBoolean token, String message) {
         SwingUtilities.invokeLater(() -> {
             if (cancellation == token) {
+                if (uvEditToken == token) {
+                    uvEditToken = null;
+                    uvScene = null;
+                    progress.setIndeterminate(false);
+                    progress.setStringPainted(false);
+                    progress.setString(null);
+                    progress.setMaximum(defaultProgressMaximum);
+                    progress.setValue(message.startsWith("UV2 ") ? defaultProgressMaximum : 0);
+                    refreshUvProgressVisibility();
+                    bottom.setVisible(tabs.getSelectedComponent() != physics);
+                }
                 cancellation = null;
                 cancel.setEnabled(false);
                 refreshBakeEnabled();

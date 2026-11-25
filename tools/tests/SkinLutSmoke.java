@@ -50,7 +50,18 @@ public final class SkinLutSmoke {
         check(texture.getImage().getWidth() == 33 && texture.getImage().getHeight() == 17, "Image dimensions");
         check(texture.getImage().getColorSpace() == ColorSpace.Linear, "Linear LUT");
         check(texture.getMinFilter() == Texture.MinFilter.BilinearNoMipMaps, "No LUT mipmaps");
-        check(texture.getImage().equals(lut.createTexture().getImage()), "Exported LUT data");
+        var raster = com.jme3.texture.image.ImageRaster.create(texture.getImage(), 0, 0, false);
+        var expectedRaster = com.jme3.texture.image.ImageRaster.create(lut.createTexture().getImage(), 0, 0, false);
+        for (int y = 0; y < lut.getHeight(); y++) {
+            for (int x = 0; x < lut.getWidth(); x++) {
+                var actual = raster.getPixel(x, y);
+                var expected = expectedRaster.getPixel(x, y);
+                check(actual.r == expected.r && actual.g == expected.g && actual.b == expected.b && actual.a == 1,
+                        "DDS half-float LUT values/orientation");
+            }
+        }
+        check(paths.get(0).toString().endsWith(".dds"), "LUT must export DDS");
+        check(CompressedTexture.read(paths.get(0)).preview(0, null) != null, "Float DDS CPU preview");
         byte[][] before = new byte[3][];
         for (int i = 0; i < 3; i++) {
             before[i] = Files.readAllBytes(paths.get(i));
@@ -75,7 +86,7 @@ public final class SkinLutSmoke {
         SkinLutExport.Settings restored = SkinLutExport.read(paths.get(2));
         check(restored.width == 17 && restored.height == 9 && restored.profile.size() == profile.size(), "Profile reload");
         check(restored.profile.variance(0) == profile.variance(0), "Profile precision");
-        Path foreign = root.resolve("Textures/Foreign.j3o");
+        Path foreign = root.resolve("Textures/Foreign.dds");
         Files.write(foreign, untouched);
         boolean protectedForeign = false;
         try {
@@ -164,11 +175,41 @@ public final class SkinLutSmoke {
         check(((Number) four.getParamValue("NormalType")).floatValue() == -1f, "DirectX convention");
         check(four.getTextureParam("SkinRedNormalMap").getTextureValue().getImage().getColorSpace() == ColorSpace.Linear, "Normal data color space");
         check(Arrays.equals(original, Files.readAllBytes(source)), "Original normal was modified");
-        check(Arrays.equals(original, Files.readAllBytes(root.resolve("Normals/Four-detail.png"))), "Detailed source copy changed");
+        check(Files.exists(root.resolve("Normals/Four-detail.dds")), "Detailed DDS missing");
+        var detail = assets.loadTexture(new com.jme3.asset.TextureKey("Normals/Four-detail.dds", false)).getImage();
+        check(detail.getWidth() > 0, "Detailed DDS does not load");
+        var sourceImage = ImageIO.read(source.toFile());
+        var decoded = CompressedTexture.read(root.resolve("Normals/Four-detail.dds")).preview(0, null);
+        for (int y = 0; y < sourceImage.getHeight(); y++) {
+            for (int x = 0; x < sourceImage.getWidth(); x++) {
+                check((decoded.getRGB(x, y) & 0xffffff) == (sourceImage.getRGB(x, y) & 0xffffff),
+                        "Raw detail DDS changed encoded normal data");
+            }
+        }
+        String edited = Files.readString(root.resolve("Normals/Four.j3m"))
+                .replace("        BaseColor :", "        Roughness : 0.27\n        BaseColor :")
+                .replace("    MaterialParameters {", "    MaterialParameters {\n        SkinWorldToMillimeters : 50.35")
+                .replace("Material Preintegrated Skin", "Material My Skin")
+                .replace("    }\n}\n", "    }\n    AdditionalRenderState {\n        Wireframe On\n    }\n}\n");
+        Files.writeString(root.resolve("Normals/Four.j3m"), edited);
         SkinNormalAssets.write(root, "Normals/Four", product, false, false, true);
+        String twoText = Files.readString(root.resolve("Normals/Four.j3m"));
+        check(twoText.contains("SkinDiffuseNormalMap") && !twoText.contains("SkinRedNormalMap"), "Old normal mode retained");
+        SkinLutExport.write(root, "Normals/Four", product.lut, settings.profile, settings.samples, true);
+        String lutUpdated = Files.readString(root.resolve("Normals/Four.j3m"));
+        check(lutUpdated.contains("SkinDiffuseNormalMap") && lutUpdated.contains("NormalMap :"), "LUT export removed normal bindings");
+        check(lutUpdated.contains("Roughness : 0.27") && lutUpdated.contains("SkinWorldToMillimeters : 50.35")
+                && lutUpdated.contains("Material My Skin") && lutUpdated.contains("Wireframe On"), "Export lost artist tuning");
         SkinNormalAssets.write(root, "Normals/Four", product, true, false, true);
+        byte[] retainedLut = Files.readAllBytes(root.resolve("Normals/Four.dds"));
+        SkinNormalAssets.writeToMaterial(root, "Normals/Selected", "Normals/Four.j3m", product, true, false, false);
+        String selected = Files.readString(root.resolve("Normals/Four.j3m"));
+        check(selected.contains("Normals/Selected-diffuse-r.dds") && !selected.contains("SkinDiffuseNormalMap"), "Selected normal slots not updated");
+        check(Arrays.equals(retainedLut, Files.readAllBytes(root.resolve("Normals/Four.dds")))
+                && selected.contains("Roughness : 0.27") && selected.contains("Wireframe On"), "Selected export changed LUT or tuning");
+        check(!Files.exists(root.resolve("Normals/Selected.j3m")), "Selected export created a second material");
         SkinLutExport.write(root, "Normals/Collision", product.lut, settings.profile, settings.samples, false);
-        Path collision = root.resolve("Normals/Collision-detail.png");
+        Path collision = root.resolve("Normals/Collision-detail.dds");
         byte[] foreign = {3, 5, 7};
         Files.write(collision, foreign);
         boolean rejected = false;
@@ -181,6 +222,9 @@ public final class SkinLutSmoke {
     }
 
     private static void verifyPanel(Path output, Path normalSource, Path root) throws Exception {
+        SkinLutExport.write(root, "Textures/Skin/SkinLut",
+                SkinLutGenerator.generate(SkinLutGenerator.referenceProfile(), 33, 17, 1f, 32),
+                SkinLutGenerator.referenceProfile(), 32, false);
         AtomicReference<SkinToolsPanel> reference = new AtomicReference<>();
         SwingUtilities.invokeAndWait(() -> {
             SkinToolsPanel panel = new SkinToolsPanel();
@@ -202,7 +246,7 @@ public final class SkinLutSmoke {
         check(complete[0], "Asynchronous generation did not finish");
         SwingUtilities.invokeAndWait(() -> {
             layout(panel);
-            check(((JTabbedPane) find(panel, "skin.tabs")).getTabCount() == 2, "Combined two-tab tool");
+            check(((JTabbedPane) find(panel, "skin.tabs")).getTabCount() == 3, "Combined two-tab tool");
             BufferedImage image = new BufferedImage(1100, 780, BufferedImage.TYPE_INT_RGB);
             java.awt.Graphics2D graphics = image.createGraphics();
             panel.paint(graphics);
@@ -216,6 +260,8 @@ public final class SkinLutSmoke {
             layout(panel);
             ((JTextField) find(panel, "skin.normal.source")).setText(normalSource.toString());
             ((JTextField) find(panel, "skin.normal.root")).setText(root.toString());
+            check(((JTextField) find(panel, "skin.root")).getText().equals(root.toString()), "Project destination not shared");
+
             ((JButton) find(panel, "skin.normal.generate")).doClick();
         });
         complete[0] = false;
@@ -239,7 +285,7 @@ public final class SkinLutSmoke {
             }
             ((JButton) find(panel, "skin.normal.export")).doClick();
         });
-        Path exported = root.resolve("Textures/Skin/SkinNormals.j3m");
+        Path exported = root.resolve("Textures/Skin/SkinNormals-diffuse.dds");
         deadline = System.nanoTime() + 30_000_000_000L;
         while (!Files.exists(exported) && System.nanoTime() < deadline) {
             Thread.sleep(25);

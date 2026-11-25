@@ -42,6 +42,7 @@ public final class TransformGizmoSmoke {
         System.setProperty("org.openide.util.Lookup", TestLookup.class.getName());
         try {
             verifyDrag();
+            verifyRotationDrag();
             verifyAwt();
             System.out.println("TRANSFORM_GIZMO_PASS");
             System.exit(0);
@@ -90,6 +91,112 @@ public final class TransformGizmoSmoke {
         var ortho = new AxisTranslationDrag(camera, Vector3f.ZERO, Vector3f.UNIT_Z, press);
         check(Math.abs(ortho.translation(up).z + .72f) < .001f, "Orthographic depth movement");
         System.out.println("AXIS_DRAG_PASS");
+        camera.setParallelProjection(false);
+        camera.setFrustumPerspective(45f, 800f / 600f, .1f, 200f);
+        for (float side : new float[]{-10f, 10f}) {
+            camera.setLocation(new Vector3f(side, 0f, .1f));
+            camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+            var scale = AxisTranslationDrag.forScale(camera, Vector3f.ZERO, Vector3f.UNIT_X, press);
+            check(scale.distance(press) == 0f && scale.distance(up) > .45f, "End-on scale did not increase");
+            check(Math.abs(scale.distance(up) + scale.distance(press.add(new Vector2f(0f, -36f)))) < .001f,
+                    "End-on scale was not reversible");
+        }
+        for (float offset : new float[]{-0.02f, 0f, .02f}) {
+            camera.setLocation(new Vector3f(10f, 0f, offset));
+            camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+            var plane = new PlaneTranslationDrag(camera, Vector3f.ZERO,
+                    Vector3f.UNIT_Z, Vector3f.UNIT_X, press);
+            check(plane.translation(press).lengthSquared() == 0f, "Plane press changed position");
+            Vector3f vertical = plane.translation(up);
+            Vector3f across = plane.translation(press.add(new Vector2f(36f, 0f)));
+            check(vertical.y > .45f && vertical.length() < .6f, "Edge-on plane vertical gain " + vertical);
+            check(Math.abs(across.x) > .45f && across.length() < .6f
+                    && across.z == 0f, "Edge-on plane horizontal gain " + across);
+        }
+        camera.setLocation(new Vector3f(0f, 0f, 10f));
+        camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+        var faceOn = new PlaneTranslationDrag(camera, Vector3f.ZERO,
+                Vector3f.UNIT_Z, Vector3f.UNIT_X, press);
+        Vector3f expected = new Vector3f(.7f, .4f, 0f);
+        Vector3f projected = camera.getScreenCoordinates(expected);
+        check(faceOn.translation(new Vector2f(projected.x, projected.y)).distance(expected) < .001f,
+                "Face-on plane did not match the pointer");
+        System.out.println("PLANE_DRAG_AND_AXIS_SCALE_PASS");
+    }
+
+    private static void verifyRotationDrag() {
+        Camera camera = new Camera(800, 600);
+        camera.setFrustumPerspective(45, 800f / 600f, .1f, 200);
+        for (boolean orthographic : new boolean[]{false, true}) {
+            if (orthographic) {
+                camera.setParallelProjection(true);
+                camera.setFrustum(.1f, 200f, -8f, 8f, 6f, -6f);
+            }
+            for (float depth : new float[]{0f, .03f, -.03f}) {
+                camera.setLocation(new Vector3f(12f, 0f, depth));
+                camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+                var press = screen(camera, Vector3f.UNIT_Y.mult(.5f));
+                var rotation = new AxisRotationDrag(camera, Vector3f.ZERO, Vector3f.UNIT_Z, 1f, press);
+                check(rotation.update(press) == 0f, "Collapsed ring moved on press");
+                float first = rotation.update(press.add(new Vector2f(0f, 35f)));
+                float second = rotation.update(press.add(new Vector2f(0f, 70f)));
+                check(first > .2f && first < 1.5f && Math.abs(second - 2f * first) < .001f,
+                        "Edge-on rotation reversed or jumped: " + first + ", " + second);
+                check(Math.abs(rotation.update(press)) < .001f, "Undoing pointer motion did not return to zero");
+            }
+        }
+        camera.setParallelProjection(false);
+        camera.setFrustumPerspective(45, 800f / 600f, .1f, 200);
+        camera.setLocation(new Vector3f(0f, 0f, 12f));
+        camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+        var rotation = new AxisRotationDrag(camera, Vector3f.ZERO, Vector3f.UNIT_Z, 1f,
+                screen(camera, Vector3f.UNIT_X));
+        for (int index = 1; index <= 16; index++) {
+            float angle = index * com.jme3.math.FastMath.PI / 6f;
+            Vector3f pointer = new Vector3f((float) Math.cos(angle), (float) Math.sin(angle), 0f);
+            check(Math.abs(rotation.update(screen(camera, pointer)) - angle) < .001f,
+                    "Face-on ring failed to wrap across a full turn");
+        }
+        float before = rotation.update(screen(camera, Vector3f.ZERO));
+        float after = rotation.update(screen(camera, Vector3f.UNIT_X));
+        check(Math.abs(after - before) < .001f, "Passing through the pivot added a half-turn");
+        System.out.println("EDGE_ON_ROTATION_DRAG_PASS");
+    }
+
+    private static Vector2f screen(Camera camera, Vector3f world) {
+        var projected = camera.getScreenCoordinates(world);
+        return new Vector2f(projected.x, projected.y);
+    }
+
+    private static void verifyRotationHandle(Camera camera, SceneComposerToolController controller,
+            JmeNode explorer, java.lang.reflect.Field toolField, java.lang.reflect.Field markerField) throws Exception {
+        camera.setLocation(new Vector3f(15f, 0f, .05f));
+        camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+        controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_E, '\0', true, false));
+        var rotate = (RotateTool) toolField.get(controller);
+        var marker = (Node) markerField.get(rotate);
+        marker.getParent().updateGeometricState();
+        var ring = marker.getChild("circleXY");
+        var press = screen(camera, ring.localToWorld(new Vector3f((float) Math.sqrt(3), 1f, 0f), null));
+        var spatial = controller.getSelectedSpatial();
+        var before = spatial.getLocalRotation().clone();
+        rotate.actionPrimary(press, true, explorer, null);
+        check(rotate.getDragDegrees() == 0f, "Collapsed blue ring could not be grabbed");
+        rotate.draggedPrimary(press.add(new Vector2f(0f, 26f)), true, explorer, null);
+        float first = rotate.getDragDegrees();
+        rotate.draggedPrimary(press.add(new Vector2f(0f, 52f)), true, explorer, null);
+        float second = rotate.getDragDegrees();
+        check(Math.abs(first) > 8f && Math.abs(second - 2f * first) < .1f,
+                "Collapsed blue ring changed direction: " + first + ", " + second);
+        var expected = before.mult(new com.jme3.math.Quaternion().fromAngleAxis(
+                second * com.jme3.math.FastMath.DEG_TO_RAD, Vector3f.UNIT_Z));
+        check(Math.abs(spatial.getLocalRotation().dot(expected)) > .9999f,
+                "The blue ring changed the wrong axis");
+        rotate.actionSecondary(press, true, explorer, null);
+        check(spatial.getLocalRotation().equals(before) && Float.isNaN(rotate.getDragDegrees()),
+                "Right-click did not cancel the edge-on rotation");
+        controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_E, '\0', false, false));
+        System.out.println("GIZMO_EDGE_ON_ROTATION_AWT_PASS");
     }
 
     private static void verifyAwt() throws Exception {
@@ -201,8 +308,26 @@ public final class TransformGizmoSmoke {
                             "Camera motion without pointer input " + key);
                     controller.doKeyPressed(new KeyInputEvent(key, '\0', false, false));
                 }
+                verifyRotationHandle(camera, controller, explorer, toolField, markerField);
                 camera.setLocation(new Vector3f(15, 0, .25f));
                 camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+                controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_R, '\0', true, false));
+                var scale = (ScaleTool) toolField.get(controller);
+                var scaleMarker = (Node) markerField.get(scale);
+                scaleMarker.getParent().updateGeometricState();
+                var box = camera.getScreenCoordinates(scaleMarker.getChild("boxX").getWorldTranslation());
+                var scalePress = new Vector2f(box.x, box.y);
+                var startScale = pivot.getLocalScale().clone();
+                scale.actionPrimary(scalePress, true, explorer, null);
+                scale.draggedPrimary(scalePress.add(new Vector2f(0, 25)), true, explorer, null);
+                scale.mouseMoved(scalePress, explorer, null);
+                scale.draggedPrimary(scalePress.add(new Vector2f(0, 50)), true, explorer, null);
+                var enlarged = pivot.getLocalScale();
+                check(enlarged.x > startScale.x + .4f && enlarged.y == startScale.y && enlarged.z == startScale.z,
+                        "Near end-on drag did not scale the red handle: " + enlarged);
+                scale.actionSecondary(scalePress, true, explorer, null);
+                check(pivot.getLocalScale().equals(startScale), "Right-click did not cancel scale");
+                controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_R, '\0', false, false));
                 controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_W, '\0', true, false));
                 var move = (MoveTool) toolField.get(controller);
                 var moveMarker = (Node) markerField.get(move);

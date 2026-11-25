@@ -72,8 +72,10 @@ final class GiPreview implements AutoCloseable {
         }
         List<Material> bound = new ArrayList<>();
         try {
-            WorldSettings world = root.getControl(WorldSettings.class);
-            WorldSettings.GiStreaming settings = world == null ? WorldSettings.GiStreaming.DEFAULTS : world.getGiStreaming();
+            WorldSettings.GiStreaming settings = previewWorld == null
+                    ? WorldSettings.GiStreaming.DEFAULTS : previewWorld.getGiStreaming();
+            boolean lightmapMipEnabled = previewWorld != null && previewWorld.isLightmapMipEnabled()
+                    && ProbeLightmapControl.supportsMipSampling(app.getRenderer());
             int limit = settings.getAtlasMiB();
             boolean[] hasBricks = {false};
             if (!spatialBricks) {
@@ -111,7 +113,8 @@ final class GiPreview implements AutoCloseable {
                 var lightmap = spatial.getControl(com.jme3.environment.gi.ProbeLightmapControl.class);
                 if (lightmap != null) {
                     seenLightmaps.add(lightmap);
-                    lightmap.updateResidency(request.getManager(), app.getCamera().getLocation(), true);
+                    lightmap.updateResidency(request.getManager(), app.getCamera().getLocation(), true,
+                            lightmapMipEnabled);
                 }
                 if (spatial instanceof GiProbeVolume volume) {
                     Source old = sources.get(volume);

@@ -130,8 +130,9 @@ public class TexturePanel extends MaterialPropertyWidget implements TextureDropT
         if (repeat) {
             segments.add(REPEAT);
         }
-        segments.add(textureName);
+        // J3MLoader treats the final token as the texture path.
         segments.add(extraProperties);
+        segments.add(textureName);
         property.setValue(String.join(" ", segments).trim());
         texturePreview.setToolTipText(property.getValue());
     }
@@ -332,6 +333,8 @@ public class TexturePanel extends MaterialPropertyWidget implements TextureDropT
     protected void readProperty() {
         java.awt.EventQueue.invokeLater(() -> {
             String prop = property.getValue().trim();
+            flip = false;
+            repeat = false;
             if (prop.contains(FLIP)) {
                 flip = true;
                 prop = prop.replace(FLIP, EMPTY).trim();

@@ -63,6 +63,9 @@ import org.openide.util.lookup.ServiceProvider;
  * 体积内替代天空漫反射，体积外或关闭 GI 后回退天光；天空反射独立保留。
  * 勾选后恢复反弹光与天空可见度分离模式；两种模式切换均需重新烘焙并保存。
  * 现有数据不因面板开关而改变，取消烘焙保留原模式。
+ * 第八步：选中 GI Light Probe Volume，在烘焙面板勾选 Smooth Lightmap seams，默认开启。
+ * 点击 Bake & Apply 后，新烘焙的静态 Lightmap 会混合平滑共享边两侧的 UV2 接缝。
+ * 可取消勾选并重烘焙做对照；完成提示会显示开关状态，保存场景可保留配方和贴图引用。
  * </pre>
  */
 @ServiceProvider(service = ToolAction.class)
@@ -72,6 +75,11 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
     private static final Map<GiProbeVolume, BakeSession> BAKES = new WeakHashMap<>();
     private static final ArrayDeque<PendingBake> QUEUE = new ArrayDeque<>();
     private static BakeSession activeBake;
+
+    /** Returns whether a bake owns the GI queue. Call from the Swing EDT before editing baked data. */
+    public static boolean isBakeInProgress() {
+        return activeBake != null;
+    }
 
     @Override
     public Class<?> getNodeClass() {
@@ -214,6 +222,10 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JCheckBox shadows = new JCheckBox("Capture shadows", true);
         fields.add(shadows);
         fields.add(new JLabel("Respects light Cast Shadow"));
+        JCheckBox smoothLightmapSeams = new JCheckBox("Smooth Lightmap seams", true);
+        smoothLightmapSeams.setToolTipText("Default on: blend across smooth UV2 chart seams in newly baked static Lightmaps. Rebake to apply.");
+        fields.add(smoothLightmapSeams);
+        fields.add(new JLabel("Rebake to apply"));
         JCheckBox compact = new JCheckBox("Normalized half precision", true);
         JCheckBox placement = new JCheckBox("Classify / relocate probes", true);
         fields.add(compact);
@@ -269,6 +281,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         bakeOptions.put("frameBudgetMs", budget);
         bakeOptions.put("shadowMapSize", shadowSize);
         bakeOptions.put("captureShadows", shadows);
+        bakeOptions.put("smoothLightmapSeams", smoothLightmapSeams);
         bakeOptions.put("compactStorage", compact);
         bakeOptions.put("classifyProbes", placement);
         bakeOptions.put("adaptiveRefinement", adaptive);
@@ -448,12 +461,14 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.classifyProbes = placement.isSelected();
             quality.captureShadows = shadows.isSelected();
             quality.shadowMapSize = (Integer) shadowSize.getValue();
+            boolean blendSeams = smoothLightmapSeams.isSelected();
             long nanos = ((Integer) budget.getValue()).longValue() * 1_000_000L;
             var bake = new BakeSession(volume.getName());
             BAKES.put(volume, bake);
             SceneApplication app = SceneApplication.getApplication();
             SceneRequest request = app.getCurrentSceneRequest();
-            QUEUE.addLast(new PendingBake(bake, () -> startBake(app, request, volume, file, quality, layout, nanos, bake)));
+            QUEUE.addLast(new PendingBake(bake,
+                    () -> startBake(app, request, volume, file, quality, layout, blendSeams, nanos, bake)));
             startNextBake();
             refreshBake.run();
         });
@@ -473,7 +488,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
     }
 
     private static void startBake(SceneApplication app, SceneRequest request, GiProbeVolume volume, DataObject file,
-            GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout, long nanos, BakeSession bake) {
+            GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout,
+            boolean blendSeams, long nanos, BakeSession bake) {
         app.enqueue(() -> {
             if (request == null || request != app.getCurrentSceneRequest() || request.getDataObject() != file
                     || !isInScene(request, volume) || bake.isCancelled()) {
@@ -538,7 +554,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                             return;
                         }
                         if (lightmaps == null && job.step(nanos)) {
-                            lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(app, request, volume);
+                            lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(app, request, volume, blendSeams);
                         }
                         if (bake.isCancelled()) {
                             finish("Cancelled. Save or rebake the probe data as needed.");

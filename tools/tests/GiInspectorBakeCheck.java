@@ -83,29 +83,44 @@ public final class GiInspectorBakeCheck {
             other.setLocalTranslation(2, 0, 0);
             scene.attachChild(other);
             var floor = new Geometry("Other object", new Box(3, .1f, 3));
-            floor.setLocalTranslation(0, -3, 0);
+            floor.setLocalTranslation(0, 1, 0);
+            floor.setMobility(com.jme3.scene.Mobility.Static);
+            floor.setUserData(com.jme3.gde.core.assets.LightmapUvGenerator.RESOLUTION_KEY, 64);
             floor.setMaterial(new com.jme3.material.Material(app.getAssetManager(), "Common/MatDefs/Light/PBRLighting.j3md"));
             scene.attachChild(floor);
             scene.updateGeometricState();
             var request = new SceneRequest(new Object(), scene, manager);
             request.setDataObject(file);
+            request.getJmeNode().setReadOnly(false);
             var current = SceneApplication.class.getDeclaredField("currentSceneRequest");
             current.setAccessible(true);
             current.set(app, request);
             return null;
         }).get(30, TimeUnit.SECONDS);
+        verifyLightmapMipPanel();
         verifyWorldSettingsPanel();
         showVolume(volume);
         waitFor(() -> button(inspector, "Cancel") != null && startButton().isEnabled(), "First inspector initialization");
+        SwingUtilities.invokeAndWait(() -> {
+            JCheckBox seams = seamOption();
+            require(seams.isSelected(), "Lightmap seam smoothing must default on");
+            seams.doClick(0);
+        });
+        showVolume(volume);
+        waitFor(() -> startButton().isEnabled(), "Seam settings restored");
+        SwingUtilities.invokeAndWait(() -> require(!seamOption().isSelected(), "Reopened panel lost seam setting"));
         var first = startAndHide(volume);
         showVolume(other);
         waitFor(() -> startButton().isEnabled(), "Second volume inspector initialization");
+        SwingUtilities.invokeAndWait(() -> require(seamOption().isSelected(), "Seam setting leaked across volumes"));
         var queued = startAndHide(other);
         require(queued.message().startsWith("Waiting"), "Second volume did not queue: " + queued.message());
         waitFor(() -> !first.isRunning(), "Bake while hidden");
         require(first.message().startsWith("Bake complete. Saved"), first.message());
         waitFor(() -> !queued.isRunning(), "Queued bake did not advance");
         require(queued.message().startsWith("Bake complete. Saved"), queued.message());
+        require(first.message().contains("Lightmap seam smoothing: off."), first.message());
+        require(queued.message().contains("Lightmap seam smoothing: on."), queued.message());
         try (var revisions = Files.list(work.resolve("GI/Streaming"))) {
             require(revisions.filter(Files::isDirectory).count() == 2, "Expected separate fine brick asset revisions");
         }
@@ -121,7 +136,11 @@ public final class GiInspectorBakeCheck {
             require(((GiProbeVolume) restored.getChild("Fixture volume")).getStreamingData() != null
                     && ((GiProbeVolume) restored.getChild("Queued volume")).getStreamingData() != null,
                     "Round trip lost an overlapping bake directory");
-            var settings = restored.getControl(com.jme3.post.WorldSettings.class).getGiStreaming();
+            require(Boolean.FALSE.equals(restored.getChild("Fixture volume").getUserData("jme.sdk.giBake.smoothLightmapSeams")),
+                    "J3O round trip lost the seam smoothing setting");
+            var world = restored.getControl(com.jme3.post.WorldSettings.class);
+            require(world.isLightmapMipEnabled(), "Round trip lost the Lightmap mipmaps switch");
+            var settings = world.getGiStreaming();
             require(settings.getMaxFineProbes() == 2048 && settings.getPreloadDistance() == 32
                     && settings.getAtlasMiB() == 32, "Round trip lost the SceneComposer settings");
             return volume.getStreamingData();
@@ -151,6 +170,39 @@ public final class GiInspectorBakeCheck {
                 "Cancellation replaced prior bake");
         waitFor(() -> startButton().isEnabled() && !button(inspector, "Cancel").isEnabled(), "Inspector did not reset");
         System.out.println("GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS");
+    }
+
+    private static void verifyLightmapMipPanel() throws Exception {
+        Class<?> type = Class.forName("com.jme3.gde.scenecomposer.EditorLightmapPanel");
+        var constructor = type.getDeclaredConstructor(Runnable.class);
+        constructor.setAccessible(true);
+        var clear = new java.util.concurrent.atomic.AtomicBoolean();
+        var option = new java.util.concurrent.atomic.AtomicReference<JCheckBox>();
+        for (boolean initial : new boolean[]{false, true, false}) {
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    JPanel panel = (JPanel) constructor.newInstance((Runnable) () -> clear.set(true));
+                    option.set(button(panel, "Use Lightmap mipmaps", JCheckBox.class));
+                    require(option.get() != null, "No Lightmap mipmaps checkbox");
+                    holder.removeAll();
+                    holder.add(panel);
+                    holder.revalidate();
+                } catch (ReflectiveOperationException error) {
+                    throw new IllegalStateException(error);
+                }
+            });
+            waitFor(() -> option.get().isEnabled(), "Lightmap settings panel did not load");
+            SwingUtilities.invokeAndWait(() -> {
+                require(option.get().isSelected() == initial, "Lightmap mipmaps checkbox did not restore its state");
+                option.get().doClick(0);
+            });
+            require(app.enqueue(() -> app.getCurrentSceneRequest().getRootNode()
+                    .getControl(com.jme3.post.WorldSettings.class).isLightmapMipEnabled() != initial)
+                    .get(10, TimeUnit.SECONDS), "Lightmap mipmaps toggle did not reach the active scene");
+        }
+        require(!clear.get(), "Mipmap toggle cleared the Lightmap bindings");
+        SwingUtilities.invokeAndWait(() -> require(file.isModified(), "Changed mipmaps preference was not marked for save"));
+        System.out.println("LIGHTMAP_MIP_INSPECTOR_SWITCH_PASS");
     }
 
     private static void verifyWorldSettingsPanel() throws Exception {
@@ -223,13 +275,23 @@ public final class GiInspectorBakeCheck {
         return button(inspector, com.jme3.gde.core.util.EditorMessages.text("GiBakeApply"));
     }
 
+    private static JCheckBox seamOption() {
+        JCheckBox option = button(inspector, "Smooth Lightmap seams", JCheckBox.class);
+        require(option != null, "Missing Lightmap seam smoothing option");
+        return option;
+    }
+
     private static JButton button(Container parent, String title) {
+        return button(parent, title, JButton.class);
+    }
+
+    private static <T extends AbstractButton> T button(Container parent, String title, Class<T> type) {
         for (Component child : parent.getComponents()) {
-            if (child instanceof JButton button && title.equals(button.getText())) {
-                return button;
+            if (type.isInstance(child) && title.equals(type.cast(child).getText())) {
+                return type.cast(child);
             }
             if (child instanceof Container container) {
-                JButton match = button(container, title);
+                T match = button(container, title, type);
                 if (match != null) {
                     return match;
                 }

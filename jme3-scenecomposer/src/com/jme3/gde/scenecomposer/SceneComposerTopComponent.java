@@ -46,6 +46,8 @@ import com.jme3.gde.core.sceneexplorer.nodes.AbstractSceneExplorerNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeNode;
 import com.jme3.gde.core.sceneexplorer.nodes.JmeSpatial;
 import com.jme3.gde.core.sceneexplorer.nodes.NodeUtility;
+import com.jme3.gde.core.sceneexplorer.nodes.actions.impl.BakeGiProbeVolumeAction;
+import com.jme3.gde.core.undoredo.SceneUndoRedoManager;
 import com.jme3.gde.core.sceneviewer.SceneViewerTopComponent;
 import com.jme3.gde.scenecomposer.icons.Icons;
 import com.jme3.gde.scenecomposer.tools.MoveTool;
@@ -70,6 +72,7 @@ import org.openide.DialogDisplayer;
 import org.openide.NotifyDescriptor;
 import org.openide.NotifyDescriptor.Confirmation;
 import org.openide.NotifyDescriptor.Message;
+import org.openide.awt.StatusDisplayer;
 import org.openide.awt.Toolbar;
 import org.openide.awt.ToolbarPool;
 import org.openide.awt.UndoRedo;
@@ -233,6 +236,7 @@ public final class SceneComposerTopComponent extends TopComponent implements
         for (javax.swing.JPanel section : new javax.swing.JPanel[]{tools, cameraPanel,
                 foldSection("Spawn", spawnPanel),
                 foldSection(ui("GiStreamingWorldSettings"), new EditorGiStreamingPanel()),
+                foldSection("Baked Lightmaps", new EditorLightmapPanel(this::clearSceneLightmaps)),
                 foldSection("GPU Scene LOD", new EditorGpuLodPanel()),
                 foldSection(ui("PostProcessing"), new EditorPostProcessingPanel()),
                 foldSection(ui("Advanced"), advanced),
@@ -254,6 +258,48 @@ public final class SceneComposerTopComponent extends TopComponent implements
         add(scroll, java.awt.BorderLayout.CENTER);
         setMinimumSize(new java.awt.Dimension(100, 80));
         setPreferredSize(new java.awt.Dimension(310, 640));
+    }
+
+    /**
+     * 第一步：打开场景 J3O，在 SceneComposer 展开 Baked Lightmaps。
+     * 第二步：点击 Clear Scene Lightmaps 并确认。操作覆盖整个场景，和选中节点无关。
+     * 第三步：Ctrl+Z 恢复，或 Ctrl+S 保存清除后的 J3O。下一次 GI 烘焙可重新生成引用。
+     * 只移除烘焙 Lightmap 绑定，保留 UV2、Probe 及磁盘上的烘焙资产。
+     */
+    private void clearSceneLightmaps() {
+        SceneRequest request = currentRequest;
+        SceneEditorController editor = editorController;
+        if (request == null || editor == null || request.getRootNode() == null
+                || request.getJmeNode() == null || request.getJmeNode().isReadOnly()) {
+            StatusDisplayer.getDefault().setStatusText("Open an editable scene to clear its Lightmaps.");
+            return;
+        }
+        if (BakeGiProbeVolumeAction.isBakeInProgress()) {
+            StatusDisplayer.getDefault().setStatusText("Finish or cancel the GI bake before clearing scene Lightmaps.");
+            return;
+        }
+        Confirmation confirm = new Confirmation(
+                "Clear all baked Lightmap references from the open scene? UV2, probes and asset files are kept.",
+                "Clear Scene Lightmaps", NotifyDescriptor.OK_CANCEL_OPTION);
+        if (DialogDisplayer.getDefault().notify(confirm) != NotifyDescriptor.OK_OPTION
+                || currentRequest != request || BakeGiProbeVolumeAction.isBakeInProgress()) {
+            return;
+        }
+        SceneApplication app = SceneApplication.getApplication();
+        app.enqueue(() -> {
+            if (app.getCurrentSceneRequest() != request) {
+                return null;
+            }
+            SceneLightmapEdit edit = new SceneLightmapEdit(request.getRootNode(), () -> editor.setNeedsSave(true));
+            if (edit.size() > 0) {
+                edit.sceneRedo();
+                Lookup.getDefault().lookup(SceneUndoRedoManager.class).addEdit(this, edit);
+            }
+            SwingUtilities.invokeLater(() -> StatusDisplayer.getDefault().setStatusText(edit.size() == 0
+                    ? "This scene has no baked Lightmap references."
+                    : "Cleared " + edit.size() + " baked Lightmap references. Ctrl+Z to undo, Ctrl+S to save."));
+            return null;
+        });
     }
 
     /** Starts less common actions collapsed. The view preference is not saved in the scene. */

@@ -5,8 +5,6 @@ import com.jme3.material.skin.SkinNormalFilter;
 import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,15 +14,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
-import javax.imageio.ImageIO;
 
-/** Pure-Java image I/O and vector-space resampling for the normal-filter tab. */
+/** Raw image I/O and vector-space resampling; compressed sources use the CPU texture tools. */
 final class SkinNormalAssets {
     static final class Product {
         final SkinNormalFilter.Result normals;
         final SkinLutGenerator.Result lut;
         final SkinGenerationSettings settings;
         final byte[] original;
+        final BufferedImage detailImage;
         final String extension;
         final float sourceDensity;
         final float effectiveDensity;
@@ -32,12 +30,13 @@ final class SkinNormalAssets {
         final SkinNormalFilter.Quality quality;
 
         Product(SkinNormalFilter.Result normals, SkinLutGenerator.Result lut, SkinGenerationSettings settings,
-                byte[] original, String extension, float sourceDensity, float effectiveDensity,
+                byte[] original, BufferedImage detailImage, String extension, float sourceDensity, float effectiveDensity,
                 SkinNormalFilter.Boundary boundary, SkinNormalFilter.Quality quality) {
             this.normals = normals;
             this.lut = lut;
             this.settings = settings;
             this.original = original;
+            this.detailImage = detailImage;
             this.extension = extension;
             this.sourceDensity = sourceDensity;
             this.effectiveDensity = effectiveDensity;
@@ -54,30 +53,14 @@ final class SkinNormalAssets {
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String extension = dot < 0 ? "" : name.substring(dot).toLowerCase(java.util.Locale.ROOT);
-        if (!extension.equals(".png") && !extension.equals(".jpg") && !extension.equals(".jpeg")) {
-            throw new IOException("Choose an RGB PNG or JPEG normal map");
+        if (!SkinTextureInput.isTexture(name)) {
+            throw new IOException("Choose a supported RGB normal texture (DDS, PNG, JPEG, TGA, BMP...)");
         }
         if (Files.size(source) > 128L * 1024 * 1024) {
             throw new IOException("Normal source exceeds 128 MiB");
         }
         byte[] original = Files.readAllBytes(source);
-        BufferedImage image;
-        try (var input = new javax.imageio.stream.MemoryCacheImageInputStream(new ByteArrayInputStream(original))) {
-            var readers = ImageIO.getImageReaders(input);
-            if (!readers.hasNext()) {
-                throw new IOException("No Java image reader for the normal map");
-            }
-            var reader = readers.next();
-            try {
-                reader.setInput(input);
-                if ((long) reader.getWidth(0) * reader.getHeight(0) > 4096L * 4096) {
-                    throw new IOException("Normal source exceeds 4096 x 4096 texels");
-                }
-                image = reader.read(0);
-            } finally {
-                reader.dispose();
-            }
-        }
+        BufferedImage image = SkinTextureReader.read(source, original);
         if (image.getColorModel().getNumColorComponents() != 3 || image.getRaster().getNumBands() < 3
                 || image.getColorModel().getColorSpace().getType() != ColorSpace.TYPE_RGB) {
             throw new IOException("The normal map must contain RGB XYZ data");
@@ -90,7 +73,7 @@ final class SkinNormalAssets {
         SkinNormalFilter.Result normals = SkinNormalFilter.generate(encoded, width, height, settings.profile,
                 effectiveDensity, boundary, quality);
         SkinLutGenerator.Result lut = settings.generateLut();
-        return new Product(normals, lut, settings, original, extension, density, effectiveDensity, boundary, quality);
+        return new Product(normals, lut, settings, original, image, extension, density, effectiveDensity, boundary, quality);
     }
 
     private static float[] resample(BufferedImage image, int width, int height) {
@@ -151,8 +134,69 @@ final class SkinNormalAssets {
         return image;
     }
 
+    static Path targetMaterial(Path root, String key) throws IOException {
+        Path base = root.toAbsolutePath().normalize();
+        Path target = base.resolve(key).normalize();
+        if (!target.startsWith(base) || !key.toLowerCase(java.util.Locale.ROOT).endsWith(".j3m")
+                || !Files.isRegularFile(target)) {
+            throw new IOException("Choose an existing skin J3M inside this project's assets folder");
+        }
+        String text = Files.readString(target);
+        if (!text.contains(SkinLutGenerator.MATERIAL) || !text.matches("(?s).*\\bSkinLut\\s*:.*")) {
+            throw new IOException("Target must be a PreintegratedSkin material with a SkinLut texture");
+        }
+        return target;
+    }
+
+    static SkinGenerationSettings targetSettings(Path target, SkinGenerationSettings fallback) throws IOException {
+        Path metadata = Path.of(target.toString().replaceFirst("(?i)\\.j3m$", ".skin.properties"));
+        if (!Files.isRegularFile(metadata)) {
+            return fallback;
+        }
+        var stored = SkinLutExport.read(metadata);
+        return new SkinGenerationSettings(stored.profile, stored.width, stored.height, stored.curvature,
+                stored.samples, "Stored target material profile");
+    }
+
+    /** Publishes only normals and updates an explicitly selected material, retaining its LUT and tuning. */
+    static List<Path> writeToMaterial(Path root, String key, String materialKey, Product product,
+            boolean fourNormals, boolean directX, boolean replace) throws IOException {
+        synchronized (SkinLutExport.class) {
+            Path target = targetMaterial(root, materialKey);
+            List<Path> base = SkinLutExport.targets(root, key);
+            Map<Path, byte[]> files = new LinkedHashMap<>(SkinLutExport.encode(root, key, product.lut,
+                    product.settings.profile, product.settings.samples, product.settings.description));
+            String generated = new String(files.remove(base.get(1)), StandardCharsets.UTF_8);
+            files.remove(base.get(0));
+            String prefix = root.toAbsolutePath().normalize().relativize(base.get(0)).toString().replace('\\', '/');
+            prefix = prefix.substring(0, prefix.length() - 4);
+            StringBuilder bindings = new StringBuilder();
+            appendNormals(files, base.get(0), prefix, product, fourNormals, directX, bindings);
+            generated = generated.replace("    MaterialParameters {\n", "    MaterialParameters {\n" + bindings);
+            String previous = Files.readString(target);
+            String merged = SkinLutExport.mergeParameters(previous, generated, java.util.Set.of("NormalMap", "NormalType",
+                    "SkinDiffuseNormalMap", "SkinRedNormalMap", "SkinGreenNormalMap", "SkinBlueNormalMap"));
+            for (Path file : files.keySet()) {
+                if (Files.exists(file) && !replace) {
+                    throw new java.nio.file.FileAlreadyExistsException(file.toString());
+                }
+            }
+            files.put(target, merged.getBytes(StandardCharsets.UTF_8));
+            SkinLutExport.writeAssets(root, key, files, true, target);
+            return new ArrayList<>(files.keySet());
+        }
+    }
+
     static List<Path> write(Path root, String key, Product product, boolean fourNormals, boolean directX,
             boolean replace) throws IOException {
+        // Both tabs can publish asynchronously to the same material.
+        synchronized (SkinLutExport.class) {
+            return writeLocked(root, key, product, fourNormals, directX, replace);
+        }
+    }
+
+    private static List<Path> writeLocked(Path root, String key, Product product, boolean fourNormals,
+            boolean directX, boolean replace) throws IOException {
         Map<Path, byte[]> files = new LinkedHashMap<>(SkinLutExport.encode(root, key, product.lut,
                 product.settings.profile, product.settings.samples, product.settings.description));
         List<Path> base = SkinLutExport.targets(root, key);
@@ -160,24 +204,10 @@ final class SkinNormalAssets {
         String prefix = root.toAbsolutePath().normalize().relativize(base.get(0)).toString().replace('\\', '/');
         prefix = prefix.substring(0, prefix.length() - 4);
         StringBuilder bindings = new StringBuilder();
-        bindings.append("        NormalType : ").append(directX ? "-1.0" : "1.0").append('\n');
-        bindings.append("        NormalMap : MinTrilinear WrapEdgeClamp \"").append(prefix).append("-detail")
-                .append(product.extension).append("\"\n");
-        files.put(Path.of(base.get(0).toString().replaceFirst("\\.j3o$", "-detail" + product.extension)), product.original);
-        String[] parameters = fourNormals ? new String[]{"SkinRedNormalMap", "SkinGreenNormalMap", "SkinBlueNormalMap"}
-                : new String[]{"SkinDiffuseNormalMap"};
-        for (int c = 0; c < parameters.length; c++) {
-            String suffix = fourNormals ? new String[]{"-diffuse-r.png", "-diffuse-g.png", "-diffuse-b.png"}[c] : "-diffuse.png";
-            ByteArrayOutputStream png = new ByteArrayOutputStream();
-            try (var output = new javax.imageio.stream.MemoryCacheImageOutputStream(png)) {
-                ImageIO.write(image(product.normals, c), "png", output);
-            }
-            Path target = Path.of(base.get(0).toString().replaceFirst("\\.j3o$", suffix));
-            files.put(target, png.toByteArray());
-            bindings.append("        ").append(parameters[c]).append(" : MinTrilinear WrapEdgeClamp \"")
-                    .append(prefix).append(suffix).append("\"\n");
-        }
+        appendNormals(files, base.get(0), prefix, product, fourNormals, directX, bindings);
         material = material.replace("    MaterialParameters {\n", "    MaterialParameters {\n" + bindings);
+        material = SkinLutExport.mergeMaterial(root, key, material, java.util.Set.of("SkinLut", "SkinLutSize", "SkinMaxCurvature",
+                "NormalMap", "NormalType", "SkinDiffuseNormalMap", "SkinRedNormalMap", "SkinGreenNormalMap", "SkinBlueNormalMap"));
         files.put(base.get(1), material.getBytes(StandardCharsets.UTF_8));
         String metadata = new String(files.get(base.get(2)), StandardCharsets.UTF_8)
                 + "normal.mode=" + (fourNormals ? "four" : "two") + "\nnormal.type=" + (directX ? -1 : 1)
@@ -188,4 +218,23 @@ final class SkinNormalAssets {
         SkinLutExport.writeAssets(root, key, files, replace);
         return new ArrayList<>(files.keySet());
     }
+    private static void appendNormals(Map<Path, byte[]> files, Path imagePath, String prefix, Product product,
+            boolean fourNormals, boolean directX, StringBuilder bindings) {
+        bindings.append("        NormalType : ").append(directX ? "-1.0" : "1.0").append('\n');
+        bindings.append("        NormalMap : MinTrilinear WrapEdgeClamp \"").append(prefix).append("-detail")
+                .append(".dds").append("\"\n");
+        files.put(Path.of(imagePath.toString().replaceFirst("\\.dds$", "-detail.dds")),
+                product.extension.equals(".dds") ? product.original : TextureToolchain.linearRgbaDds(product.detailImage));
+        String[] parameters = fourNormals ? new String[]{"SkinRedNormalMap", "SkinGreenNormalMap", "SkinBlueNormalMap"}
+                : new String[]{"SkinDiffuseNormalMap"};
+        for (int c = 0; c < parameters.length; c++) {
+            String suffix = fourNormals ? new String[]{"-diffuse-r.dds", "-diffuse-g.dds", "-diffuse-b.dds"}[c] : "-diffuse.dds";
+            byte[] dds = TextureToolchain.linearRgbaDds(image(product.normals, c));
+            Path target = Path.of(imagePath.toString().replaceFirst("\\.dds$", suffix));
+            files.put(target, dds);
+            bindings.append("        ").append(parameters[c]).append(" : MinTrilinear WrapEdgeClamp \"")
+                    .append(prefix).append(suffix).append("\"\n");
+        }
+    }
+
 }
