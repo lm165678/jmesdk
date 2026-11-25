@@ -1,3 +1,7 @@
+## 2026-11-25 paired source checkpoint
+
+- Engine dev_fix_lightprobe_issue: 4fe932851eded2e4341794e1e08034f6398755d3. SDK master: 6c0ca7c6c4d1e67a2b12b3daaece95ec8e1040d8. This pair includes lightmap mip playback, skin transmission and the SDK authoring tools. The engine skin baker uses Java 11-compatible syntax. Complete SDK build and end-to-end validation remain pending.
+
 ## 2026-11-25 skin project pickers, texture drops and floating DDS LUT
 
 - Both Skin Tools export-root Browse buttons now select from currently open SDK game projects and resolve the actual ProjectAssetManager Assets root. Source Browse keeps its button and first chooses an open project, then a lazy asset tree; no Windows file/directory picker for these three buttons. Cancel keeps previous values. Core supplies SkinAssetSelection via Lookup to avoid the existing Core -> texture-tools dependency becoming cyclic. Profile-file import remains a separate file picker.
