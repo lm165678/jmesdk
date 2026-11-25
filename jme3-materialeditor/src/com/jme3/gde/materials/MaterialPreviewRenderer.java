@@ -75,6 +75,7 @@ public class MaterialPreviewRenderer implements SceneListener {
     private Material currentMaterial;
     private boolean init = false;
     private final JLabel label;
+    private final boolean highDpi;
     private final ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(5);
     private volatile boolean previewRequested;
     private boolean refreshPending;
@@ -122,7 +123,76 @@ public class MaterialPreviewRenderer implements SceneListener {
     }
 
     public MaterialPreviewRenderer(JLabel label) {
+        this(label, false);
+    }
+
+    /** Enables DPI-aware supersampling only for the J3M editor thumbnail. */
+    public MaterialPreviewRenderer(JLabel label, boolean highDpi) {
         this.label = label;
+        this.highDpi = highDpi;
+        if (highDpi) {
+            label.addComponentListener(sizeListener);
+            label.addPropertyChangeListener("graphicsConfiguration", scaleListener);
+        }
+    }
+
+    private final java.awt.event.ComponentAdapter sizeListener = new java.awt.event.ComponentAdapter() {
+        @Override
+        public void componentResized(java.awt.event.ComponentEvent event) {
+            refreshOnly();
+        }
+    };
+    private final java.beans.PropertyChangeListener scaleListener = event -> refreshOnly();
+
+    /**
+     * 第一步：按标签逻辑尺寸和显示器 DPI 创建离屏图像，双倍超采样平滑轮廓。
+     * 第二步：用多分辨率图标保留逻辑布局大小，屏幕切换后重新请求预览。
+     * Called on the EDT. Only material/shader editor thumbnails use this policy.
+     */
+    private PreviewRequest previewRequest() {
+        if (!highDpi) {
+            return new PreviewRequest(this, currentSpatial, label.getWidth(), label.getHeight());
+        }
+        java.awt.GraphicsConfiguration configuration = label.getGraphicsConfiguration();
+        java.awt.geom.AffineTransform transform = configuration == null
+                ? new java.awt.geom.AffineTransform() : configuration.getDefaultTransform();
+        return new MaterialImageRequest(this, currentSpatial, Math.max(1, label.getWidth()),
+                Math.max(1, label.getHeight()), transform.getScaleX(), transform.getScaleY());
+    }
+
+    static final class MaterialImageRequest extends PreviewRequest {
+        final int logicalWidth;
+        final int logicalHeight;
+        final int pixelWidth;
+        final int pixelHeight;
+
+        MaterialImageRequest(Object requester, Spatial spatial, int width, int height, double scaleX, double scaleY) {
+            super(requester, spatial, 2 * (int) Math.ceil(width * scaleX), 2 * (int) Math.ceil(height * scaleY));
+            logicalWidth = width;
+            logicalHeight = height;
+            pixelWidth = (int) Math.ceil(width * scaleX);
+            pixelHeight = (int) Math.ceil(height * scaleY);
+        }
+
+        ImageIcon icon(java.awt.image.BufferedImage image) {
+            java.awt.image.BufferedImage physical = resize(image, pixelWidth, pixelHeight);
+            java.awt.image.BufferedImage logical = resize(image, logicalWidth, logicalHeight);
+            return new ImageIcon(new java.awt.image.BaseMultiResolutionImage(logical, physical));
+        }
+
+        private static java.awt.image.BufferedImage resize(java.awt.image.BufferedImage source, int width, int height) {
+            java.awt.image.BufferedImage target = new java.awt.image.BufferedImage(width, height,
+                    java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            java.awt.Graphics2D graphics = target.createGraphics();
+            try {
+                graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                        java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                graphics.drawImage(source, 0, 0, width, height, null);
+            } finally {
+                graphics.dispose();
+            }
+            return target;
+        }
     }
 
     private void init() {
@@ -195,7 +265,7 @@ public class MaterialPreviewRenderer implements SceneListener {
                     currentSpatial.setMaterial(mat);
                     try {
                         if (currentMaterial != null) {
-                            PreviewRequest request = new PreviewRequest(MaterialPreviewRenderer.this, currentSpatial, label.getWidth(), label.getHeight());
+                            PreviewRequest request = previewRequest();
                             configurePreview(request);
                             request.getCameraRequest().setLookAt(new Vector3f(0, 0, 0), Vector3f.UNIT_Y);
                             SceneApplication.getApplication().createPreview(request);
@@ -287,7 +357,8 @@ public class MaterialPreviewRenderer implements SceneListener {
     @Override
     public void previewCreated(PreviewRequest request) {
         if (request.getRequester() == this) {
-            final ImageIcon icon = new ImageIcon(request.getImage());
+            final ImageIcon icon = request instanceof MaterialImageRequest imageRequest
+                    ? imageRequest.icon(request.getImage()) : new ImageIcon(request.getImage());
             java.awt.EventQueue.invokeLater(() -> {
                 label.setIcon(icon);
                 previewRequested = false;
@@ -301,6 +372,8 @@ public class MaterialPreviewRenderer implements SceneListener {
 
     public void cleanUp() {
         disposed = true;
+        label.removeComponentListener(sizeListener);
+        label.removePropertyChangeListener("graphicsConfiguration", scaleListener);
         SceneApplication.getApplication().removeSceneListener(this);
         exec.shutdownNow();
     }
@@ -314,6 +387,10 @@ public class MaterialPreviewRenderer implements SceneListener {
      * material
      */
     public void refreshOnly() {
+        if (!java.awt.EventQueue.isDispatchThread()) {
+            java.awt.EventQueue.invokeLater(this::refreshOnly);
+            return;
+        }
         if (disposed) {
             return;
         }
@@ -324,12 +401,10 @@ public class MaterialPreviewRenderer implements SceneListener {
         if (currentMaterial == null || label.getWidth() <= 0 || label.getHeight() <= 0) {
             return;
         }
-        final int width = label.getWidth();
-        final int height = label.getHeight();
+        PreviewRequest request = previewRequest();
         previewRequested = true;
         SceneApplication.getApplication().enqueue((Callable<Object>) () -> {
             if (currentMaterial != null) {
-                PreviewRequest request = new PreviewRequest(MaterialPreviewRenderer.this, currentSpatial, width, height);
                 configurePreview(request);
                 request.getCameraRequest().setLookAt(new Vector3f(0, 0, 0), Vector3f.UNIT_Y);
                 SceneApplication.getApplication().createPreview(request);

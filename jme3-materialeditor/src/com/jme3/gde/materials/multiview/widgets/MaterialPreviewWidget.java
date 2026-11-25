@@ -160,7 +160,7 @@ public class MaterialPreviewWidget extends javax.swing.JPanel {
 
     private  void initWidget() {
         sphereButton.setSelected(true);
-        matRenderer = new MaterialPreviewRenderer(previewLabel);
+        matRenderer = new MaterialPreviewRenderer(previewLabel, true);
         init=true;
     }
 
