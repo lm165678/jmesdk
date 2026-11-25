@@ -39,7 +39,10 @@ import org.openide.util.RequestProcessor;
  * }</pre>
  * Receivers outside supported coverage continue using live probes. The scene is saved through the editor.
  * Manual Geometry UV2 regeneration stores LightmapUvGenerator.RESOLUTION_KEY;
- * subsequent bakes use that 64..4096 target size. Absent metadata retains 256.
+ * subsequent bakes use that 64..4096 target size. Absent metadata starts at 256.
+ * Missing UV2 grows to fit chart margins and minimum island area, capped by
+ * 2048 and the GPU's two-band texture limit. Existing UV2 is preserved.
+ * The selected automatic resolution is saved only with a successful Lightmap.
  * UV island margins reserve space; the baker's color dilation policy is unchanged.
  * Regenerate and rebake on the scene's render thread, then save through the editor.
  * <pre>{@code
@@ -71,7 +74,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private int skipped;
     private String firstFailure;
 
-    private record Entry(Geometry geometry, Mesh source, Mesh mesh, Transform transform, String key) {
+    private record Entry(Geometry geometry, Mesh source, Mesh mesh, Transform transform, String key, int resolution) {
     }
 
     public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume) {
@@ -104,7 +107,8 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     }
 
     private static boolean supported(Geometry geometry) {
-        if (geometry.getMobility() != Mobility.Static || geometry.getMaterial() == null
+        if (LightmapUvGenerator.isDeformable(geometry)
+                || geometry.getMobility() != Mobility.Static || geometry.getMaterial() == null
                 || geometry.getMesh() == null || geometry.getMesh().isAnimated()
                 || geometry.getMesh().getMorphTargets().length != 0 || geometry.getMesh().getBuffer(Type.Normal) == null) {
             return false;
@@ -174,7 +178,19 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                 field = result.join().open(app.getRenderManager(), budget, singleVisibility, octahedral);
                 activeSources = local;
             }
-            Mesh mesh = LightmapUvGenerator.generate(source);
+            Integer requested = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
+            int lightmapResolution = requested == null ? RESOLUTION : requested;
+            Mesh mesh = source;
+            if (source.getBuffer(Type.TexCoord2) == null) {
+                int limit = app.getRenderer().getLimits()
+                        .getOrDefault(com.jme3.renderer.Limits.TextureSize, 0);
+                var defaults = LightmapUvGenerator.Settings.DEFAULT;
+                var layout = LightmapUvGenerator.generateForBake(source,
+                        new LightmapUvGenerator.Settings(lightmapResolution, defaults.padding(), defaults.border()),
+                        Math.min(2048, limit / 2));
+                mesh = layout.mesh();
+                lightmapResolution = layout.resolution();
+            }
             Geometry proxy = new Geometry(geometry.getName(), mesh);
             Transform transform = geometry.getWorldTransform().clone();
             proxy.setLocalTransform(transform);
@@ -187,21 +203,21 @@ public final class ProbeLightmapAssets implements AutoCloseable {
             proxy.updateGeometricState();
             // Explicit UV regeneration records its texel scale on the receiver.
             // Legacy receivers retain the original 256-pixel bake resolution.
-            Integer uvResolution = geometry.getUserData(LightmapUvGenerator.RESOLUTION_KEY);
-            int lightmapResolution = uvResolution == null ? RESOLUTION : uvResolution;
             if (lightmapResolution < 64 || lightmapResolution > 4096) {
                 throw new IOException("Invalid receiver Lightmap UV resolution: " + lightmapResolution);
             }
             Texture2D texture = ProbeLightmapBaker.bakeField(app.getRenderManager(), scene.getManager(),
                     proxy, field, lightmapResolution, lightmapResolution);
             String key = revision + UUID.randomUUID() + ".j3o";
-            outputs.add(new Entry(geometry, source, mesh, transform, key));
+            outputs.add(new Entry(geometry, source, mesh, transform, key, lightmapResolution));
             write = new CompletableFuture<>();
             CompletableFuture<String> pending = write;
             RequestProcessor.getDefault().post(() -> {
                 try {
                     Path file = assetRoot.resolve(key);
-                    Files.createDirectories(file.getParent());
+                    // Publish recreated folders through NetBeans, not only NIO.
+                    FileUtil.createFolder(scene.getManager().getAssetFolder(),
+                            key.substring(0, key.lastIndexOf('/')));
                     Path staging = Files.createTempFile(file.getParent(), "lightmap-", ".tmp");
                     try {
                         new BinaryExporter().save(new ProbeLightmapAsset(texture, true), staging.toFile());
@@ -264,6 +280,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                 }
                 if (item.mesh() != item.source()) {
                     geometry.setMesh(item.mesh());
+                    geometry.setUserData(LightmapUvGenerator.RESOLUTION_KEY, item.resolution());
                 }
                 geometry.removeControl(ProbeLightmapControl.class);
                 geometry.addControl(new ProbeLightmapControl(item.key(), item.transform(), 100));

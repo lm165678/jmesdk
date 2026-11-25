@@ -9,6 +9,38 @@ import java.util.Map;
 
 /** Repackages xatlas islands without changing its JNI ABI or UV parameterization. */
 final class LightmapUvPacking {
+    static final class CapacityException extends IOException {
+        CapacityException() {
+            super("Too many UV islands for this resolution and padding; increase resolution or reduce padding");
+        }
+    }
+
+    /** Measures connected islands rather than individual tessellation triangles. */
+    static double minimumIslandArea(com.jme3.scene.Mesh mesh, int size) throws IOException {
+        var indices = mesh.getIndicesAsList();
+        var uv = mesh.getFloatBuffer(com.jme3.scene.VertexBuffer.Type.TexCoord2);
+        int[] parents = new int[mesh.getVertexCount()];
+        for (int i = 0; i < parents.length; i++) {
+            parents[i] = i;
+        }
+        for (int i = 0; i < indices.size(); i += 3) {
+            int a = root(parents, indices.get(i));
+            parents[root(parents, indices.get(i + 1))] = a;
+            parents[root(parents, indices.get(i + 2))] = a;
+        }
+        Map<Integer, Double> areas = new LinkedHashMap<>();
+        for (int i = 0; i < indices.size(); i += 3) {
+            int a = indices.get(i) * 2;
+            int b = indices.get(i + 1) * 2;
+            int c = indices.get(i + 2) * 2;
+            double area = Math.abs((uv.get(b) - uv.get(a)) * (uv.get(c + 1) - uv.get(a + 1))
+                    - (uv.get(b + 1) - uv.get(a + 1)) * (uv.get(c) - uv.get(a))) * size * size * .5;
+            areas.merge(root(parents, indices.get(i)), area, Double::sum);
+        }
+        return areas.values().stream().filter(area -> area > 1e-10)
+                .mapToDouble(Double::doubleValue).min().orElse(Double.POSITIVE_INFINITY);
+    }
+
     private static final class Chart {
         float minU = Float.POSITIVE_INFINITY;
         float minV = Float.POSITIVE_INFINITY;
@@ -45,7 +77,7 @@ final class LightmapUvPacking {
         order.sort(Comparator.<Chart>comparingDouble(chart -> chart.maxV - chart.minV).reversed()
                 .thenComparing(Comparator.comparingDouble((Chart chart) -> chart.maxU - chart.minU).reversed()));
         if (!pack(order, 0, settings)) {
-            throw new IOException("Too many UV islands for this resolution and padding; increase resolution or reduce padding");
+            throw new CapacityException();
         }
         double span = 0;
         for (Chart chart : order) {

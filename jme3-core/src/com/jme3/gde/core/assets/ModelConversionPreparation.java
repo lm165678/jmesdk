@@ -195,6 +195,7 @@ final class ModelConversionPreparation {
                     }
                 }
                 if (options.lightmapUv() && copy.getBuffer(Type.TexCoord2) == null
+                        && !LightmapUvGenerator.isDeformable(geometry)
                         && !copy.isAnimated() && copy.getMorphTargets().length == 0 && copy.getTriangleCount() > 0) {
                     try {
                         copy = LightmapUvGenerator.generate(copy);

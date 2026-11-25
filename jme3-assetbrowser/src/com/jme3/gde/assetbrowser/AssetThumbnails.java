@@ -51,9 +51,10 @@ import org.openide.util.RequestProcessor;
  * Bounded, lazy thumbnails. Disk IO runs on one worker; GPU jobs run one at a
  * time on the scene thread. Private views/targets are disposed after readback;
  * scene contents, camera and material state are never reused or edited.
- * Composite cache keys include the asset-file revision (excluding directories), so texture/MTL changes
- * also invalidate dependent models. Standalone textures/audio/source use their own
- * size and modification time. Errors produce readable tiles, not retries
+ * Each asset records its own dependency closure and persisted file fingerprint.
+ * Texture/MTL/shader edits invalidate only that asset and its known dependants.
+ * Cache metadata is checked on a worker; unrelated scene saves retain thumbnails.
+ * Errors produce readable tiles, not retries
  * every repaint. Closing the panel cancels queued work and stale UI callbacks.
  */
 final class AssetThumbnails implements AutoCloseable {
@@ -70,13 +71,34 @@ final class AssetThumbnails implements AutoCloseable {
     private volatile boolean closed;
     private ProjectAssetManager isolated;
     private ProjectAssetManager sourceManager;
-    private long sourceRevision;
+    private final AssetDependencies dependencies = new AssetDependencies();
+    private long refreshEpoch;
+
+    Set<String> dependencies(String asset) {
+        return dependencies.paths(asset);
+    }
+
+    long version(String asset) {
+        return dependencies.version(asset);
+    }
+
+    void invalidate(Map<String, Boolean> changes) {
+        dependencies.invalidate(changes);
+    }
+
+    void invalidateAll() {
+        dependencies.invalidateAll();
+        refreshEpoch++;
+        memory.clear();
+    }
 
     // Requests come from the EDT. The worker handles disk access and waits for GPU work.
-    Result request(ProjectAssetManager manager, FileObject file, String asset, long revision,
-            Consumer<Result> callback) {
-        String version = AssetKind.of(file) == AssetKind.TEXTURE ? "v5" : "v3";
-        String key = file.toURL() + ":" + file.getSize() + ":" + file.lastModified().getTime() + ":" + revision + ":" + version;
+    Result request(ProjectAssetManager manager, FileObject file, String asset, Consumer<Result> callback) {
+        String version = "v8-dependencies";
+        long requestedVersion = dependencies.version(asset);
+        long requestedEpoch = refreshEpoch;
+        String key = file.toURL() + ":" + AssetDependencies.stamp(file)
+                + ":" + requestedVersion + ":" + requestedEpoch + ":" + version;
         Result known = memory.get(key);
         if (known != null) {
             return known;
@@ -92,25 +114,76 @@ final class AssetThumbnails implements AutoCloseable {
             try {
                 Path cache = Path.of(System.getProperty("netbeans.user", System.getProperty("java.io.tmpdir")),
                         "var", "cache", "asset-thumbnails-" + version);
-                String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                        .digest(key.getBytes(StandardCharsets.UTF_8)));
-                Path png = cache.resolve(hash + ".png");
-                BufferedImage image = readCached(png);
+                if (isolated == null || sourceManager != manager) {
+                    isolated = AssetDependencies.isolated(manager);
+                    sourceManager = manager;
+                }
+                String identity = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                        .digest(file.toURL().toString().getBytes(StandardCharsets.UTF_8)));
+                Path metadata = cache.resolve(identity + ".properties");
+                Properties saved = new Properties();
+                if (Files.isRegularFile(metadata)) {
+                    try (InputStream input = Files.newInputStream(metadata)) {
+                        saved.load(input);
+                    }
+                }
+                boolean inspected = false;
+                if (AssetDependencies.stamp(file).equals(saved.getProperty("source"))) {
+                    dependencies.record(asset, Arrays.asList(saved.getProperty("paths", "").split("\\n")));
+                } else {
+                    dependencies.record(asset, AssetDependencies.inspect(isolated, file, asset).paths());
+                    inspected = true;
+                }
+                String fingerprint = AssetDependencies.fingerprint(manager.getAssetFolder(), asset, dependencies.paths(asset));
+                Path png = cache.resolve(identity + "-" + fingerprint + ".png");
+                BufferedImage image = requestedEpoch == 0 && requestedVersion == 0 ? readCached(png) : null;
                 if (image == null) {
-                    image = generateForRequest(manager, file, asset, revision);
+                    if (!inspected) {
+                        dependencies.record(asset, AssetDependencies.inspect(isolated, file, asset).paths());
+                        fingerprint = AssetDependencies.fingerprint(manager.getAssetFolder(), asset, dependencies.paths(asset));
+                        png = cache.resolve(identity + "-" + fingerprint + ".png");
+                    }
+                    Set<String> knownPaths = dependencies.paths(asset);
+                    Set<String> observed;
+                    try (var tracking = new AssetDependencies.Tracking(isolated)) {
+                        image = generateForRequest(manager, file, asset);
+                        if (!tracking.unchanged() || !fingerprint.equals(
+                                AssetDependencies.fingerprint(manager.getAssetFolder(), asset, knownPaths))) {
+                            dependencies.invalidate(Map.of(asset, false));
+                            throw new IOException("Asset dependencies changed during thumbnail capture; retry");
+                        }
+                        observed = tracking.paths();
+                    }
+                    Set<String> complete = new HashSet<>(knownPaths);
+                    complete.addAll(observed);
+                    dependencies.record(asset, complete);
+                    fingerprint = AssetDependencies.fingerprint(manager.getAssetFolder(), asset, dependencies.paths(asset));
+                    png = cache.resolve(identity + "-" + fingerprint + ".png");
                     writeCached(png, image);
+                    saved.setProperty("source", AssetDependencies.stamp(file));
+                    saved.setProperty("paths", String.join("\n", dependencies.paths(asset)));
+                    Files.createDirectories(cache);
+                    try (OutputStream output = Files.newOutputStream(metadata)) {
+                        saved.store(output, "Thumbnail dependency closure");
+                    }
                 }
                 result = new Result(image, "");
             } catch (Exception | LinkageError error) {
                 String message = error.getCause() == null ? error.toString() : error.getCause().toString();
                 result = new Result(card(file.getNameExt(), message, new Color(173, 88, 83)), message);
             }
+            if (isolated != null) {
+                isolated.clearCache();
+            }
             Result ready = result;
             SwingUtilities.invokeLater(() -> {
                 pending.remove(key);
-                if (!closed) {
+                if (!closed && requestedVersion == dependencies.version(asset)
+                        && requestedEpoch == refreshEpoch) {
                     memory.put(key, ready);
                     callback.accept(ready);
+                } else if (!closed) {
+                    callback.accept(null);
                 }
             });
         });
@@ -135,17 +208,16 @@ final class AssetThumbnails implements AutoCloseable {
     }
 
     private BufferedImage generateForRequest(ProjectAssetManager manager, FileObject file,
-            String asset, long revision) throws Exception {
+            String asset) throws Exception {
         if (AssetPreviewTextures.usesImageEditor(file)) {
             return fit(AssetPreviewTextures.read(null, file, asset));
         }
-        if (isolated == null || sourceManager != manager || sourceRevision != revision) {
+        if (isolated == null || sourceManager != manager) {
             isolated = new ProjectAssetManager(manager.getAssetFolder());
             for (ClassLoader loader : manager.getClassLoaders()) {
                 isolated.addClassLoader(loader);
             }
             sourceManager = manager;
-            sourceRevision = revision;
         }
         try {
             return generate(isolated, file, asset);

@@ -39,7 +39,11 @@ import org.openide.windows.TopComponent;
  * 第三步：配置比例后点击 Bake，自动给生成多个层级的几何体添加 LodControl。
  * 第四步：等待完成，Ctrl+Z 撤销，Ctrl+S 保存到当前 j3o。
  * 第五步：View 选择 SDF 查看已烘焙距离场表面；修改模型后重新烘焙并 Refresh。
- * 第六步：选中单个 Geometry，打开 Lightmap UV 页，设置目标分辨率、每岛边距和图边。
+ * 第六步：选中 Geometry 或任意 Node（包括 SceneRoot），Lightmap UV 遍历真实模型子树。
+ * Dynamic 刚体可处理；骨骼、Morph 对象及其子树全部跳过，不修改其任何数据。
+ * 也跳过粒子、天空和探针辅助对象。Minimum resolution 按容量/密度增长，最高 2048/GPU 上限。
+ * Clear UV2 可整组移除 UV2、尺寸覆盖和旧 Lightmap 绑定；下次 GI 烘焙自动为静态接收体生成。
+ * 节点操作整体撤销/重做；取消、切换选择或源网格变化会丢弃尚未安装的结果。
  * 点击 Regenerate UV2 替换已有 UV2；UV0 保持，旧静态 Lightmap 失效，需要重新烘焙。
  * View UV2 打开独立二维视图；Ctrl+滚轮缩放，滚动条移动查看，未生成时显示提示。
  * UV2、分辨率设置及旧 Lightmap 引用一起支持撤销/重做，Ctrl+S 保存 J3O。
@@ -121,8 +125,9 @@ public final class ModelDetailTopComponent extends TopComponent {
     private void refreshBakeEnabled() {
         bake.setText(isUvPage() ? "Regenerate UV2" : ui("Bake"));
         bake.setEnabled(editor != null && cancellation == null && hasGeometry
-                && tabs.getSelectedComponent() != physics && (!isUvPage() || selected instanceof Geometry));
+                && tabs.getSelectedComponent() != physics && (!isUvPage() || hasUvGeometry));
         viewUv.setEnabled(selected instanceof Geometry && hasGeometry);
+        clearUv.setEnabled(editor != null && cancellation == null && hasUvGeometry);
     }
 
     private void refreshUvView(boolean activate) {
@@ -163,6 +168,7 @@ public final class ModelDetailTopComponent extends TopComponent {
     });
     private volatile Spatial selected;
     private boolean hasGeometry;
+    private boolean hasUvGeometry;
     private volatile AtomicBoolean cancellation;
     private SceneEditorController editor;
     private final JLabel targetLabel = new JLabel(ui("SelectModel"));
@@ -172,10 +178,11 @@ public final class ModelDetailTopComponent extends TopComponent {
     private final JButton cancel = new JButton(ui("Cancel"));
     private final JTabbedPane tabs = new JTabbedPane();
     private final ModelPhysicsPanel physics = new ModelPhysicsPanel();
-    private final JSpinner uvResolution = spinner(512, 64, 4096, 64);
+    private final JSpinner uvResolution = spinner(512, 64, 2048, 64);
     private final JSpinner uvPadding = spinner(4, 0, 64, 1);
     private final JSpinner uvBorder = spinner(2, 0, 64, 1);
     private final JButton viewUv = new JButton("View UV2");
+    private final JButton clearUv = new JButton("Clear UV2");
     private LightmapUvView uvView;
     private long uvViewGeneration;
     private final JComboBox<String> lodPreview = new JComboBox<>();
@@ -223,9 +230,11 @@ public final class ModelDetailTopComponent extends TopComponent {
         viewUv.addActionListener(event -> refreshUvView(true));
         uvPadding.setToolTipText("Reserved margin on EACH island, in target-resolution texels; not color dilation");
         uvBorder.setToolTipText("Additional reserved border around the entire UV atlas, in texels");
-        tabs.addTab("Lightmap UV", rows("Target resolution", uvResolution,
+        clearUv.setToolTipText("Remove UV2 and stale Lightmap bindings from the selected geometry or subtree");
+        clearUv.addActionListener(event -> startUvEdit(null));
+        tabs.addTab("Lightmap UV", rows("Minimum resolution", uvResolution,
                 "Margin / island (texels)", uvPadding, "Atlas border (texels)", uvBorder,
-                "UV2 preview", viewUv, "Selected Geometry only", new JLabel("Regeneration invalidates old Lightmaps")));
+                "UV2 preview", viewUv, "Selected subtree", clearUv));
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         // Reparenting a tab into a scroll pane removes it from JTabbedPane.
         // Snapshot and detach all tabs first, otherwise indices shift mid-loop.
@@ -345,7 +354,7 @@ public final class ModelDetailTopComponent extends TopComponent {
                 Integer border = geometry.getUserData(LightmapUvGenerator.BORDER_KEY);
                 SwingUtilities.invokeLater(() -> {
                     if (panel.selected == geometry) {
-                        panel.uvResolution.setValue(size == null ? 512 : size);
+                        panel.uvResolution.setValue(size == null ? 512 : Math.min(2048, size));
                         panel.uvPadding.setValue(margin == null ? 4 : margin);
                         panel.uvBorder.setValue(border == null ? 2 : border);
                         panel.refreshUvView(false);
@@ -360,6 +369,7 @@ public final class ModelDetailTopComponent extends TopComponent {
         panel.editor = controller;
         panel.bake.setEnabled(false);
         panel.hasGeometry = false;
+        panel.hasUvGeometry = false;
         if (spatial == null) {
             panel.targetLabel.setText(ui("SelectModel"));
             return;
@@ -370,9 +380,11 @@ public final class ModelDetailTopComponent extends TopComponent {
                     && request != null && request.getJmeNode() != null && !request.getJmeNode().isReadOnly()
                     && (spatial == request.getRootNode() || (request.getRootNode() instanceof Node root && spatial.hasAncestor(root)));
             int count = ModelBakeSupport.isEditableSceneModel(spatial) ? ModelBakeSupport.geometries(spatial).size() : 0;
+            int uvCount = count > 0 ? LightmapUvEdits.receivers(spatial).size() : 0;
             SwingUtilities.invokeLater(() -> {
                 if (panel.selected == spatial) {
                     panel.hasGeometry = count > 0;
+                    panel.hasUvGeometry = uvCount > 0;
                     panel.targetLabel.setText(spatial.getName() + " — " + count + " meshes");
                     panel.bake.setEnabled(count > 0 && panel.editor != null && panel.cancellation == null && panel.tabs.getSelectedComponent() != panel.physics);
                     panel.enableModelInputs(count > 0);
@@ -487,6 +499,15 @@ public final class ModelDetailTopComponent extends TopComponent {
             return;
         }
         final int operation = (Integer) pageOperation;
+        if (operation == 4) {
+            try {
+                startUvEdit(new LightmapUvGenerator.Settings((int) uvResolution.getValue(),
+                        (int) uvPadding.getValue(), (int) uvBorder.getValue()));
+            } catch (IllegalArgumentException error) {
+                status.setText(error.getMessage());
+            }
+            return;
+        }
         final float[] ratios;
         try {
             String[] values = operation == 0 ? lod.getText().split(",") : new String[0];
@@ -585,6 +606,52 @@ public final class ModelDetailTopComponent extends TopComponent {
                         }
                     });
                 }
+            } catch (Exception error) {
+                finish(token, error.toString());
+            }
+            return null;
+        });
+    }
+
+    private void startUvEdit(LightmapUvGenerator.Settings settings) {
+        Spatial target = selected;
+        SceneEditorController currentEditor = editor;
+        if (target == null || currentEditor == null || cancellation != null) {
+            return;
+        }
+        AtomicBoolean token = new AtomicBoolean();
+        cancellation = token;
+        bake.setEnabled(false);
+        clearUv.setEnabled(false);
+        cancel.setEnabled(true);
+        status.setText(settings == null ? "Clearing subtree UV2..." : "Generating subtree UV2 on private meshes...");
+        SceneApplication app = SceneApplication.getApplication();
+        app.enqueue(() -> {
+            SceneRequest request = app.getCurrentSceneRequest();
+            try {
+                checkCurrent(app, request, target, token);
+                LightmapUvEdits edit = new LightmapUvEdits(target);
+                int maximum = Math.min(2048, app.getRenderer().getLimits()
+                        .getOrDefault(com.jme3.renderer.Limits.TextureSize, 0) / 2);
+                WORKER.submit(() -> {
+                    try {
+                        edit.build(settings, maximum, token::get);
+                        app.enqueue(() -> {
+                            try {
+                                checkCurrent(app, request, target, token);
+                                edit.validate();
+                                commit(edit::undo, edit::redo, currentEditor);
+                                finish(token, (settings == null ? "UV2 cleared on " : "UV2 regenerated on ")
+                                        + edit.size() + " geometries. Rebake GI; Ctrl+Z to undo, Ctrl+S to save.");
+                            } catch (Exception error) {
+                                finish(token, error.toString());
+                            }
+                            return null;
+                        });
+                    } catch (Exception error) {
+                        finish(token, error.toString());
+                    }
+                });
             } catch (Exception error) {
                 finish(token, error.toString());
             }

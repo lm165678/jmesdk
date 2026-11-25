@@ -20,6 +20,12 @@ import org.openide.loaders.DataObject;
 import org.openide.util.lookup.ServiceProvider;
 
 /**
+ * Preview upscaling and TAA are transiently bypassed for the complete probe and
+ * Lightmap capture. One preview frame settles native targets before sampling.
+ * Cleanup restores current preferences on success, cancellation and failure.
+ * 第一步：Start 后实际采样前挂起超分和 TAA，不改变保存到 J3O 的偏好。
+ * 第二步：独立线性捕获不复制曝光、Bloom、色调映射或调色。
+ * 第三步：探针和 Lightmap 结束后恢复；取消、失败和场景关闭也恢复。
  * Nonmodal frame-budgeted bake panel. Captures a scene snapshot; scene edits made
  * after Start require another bake. Cancellation preserves the previous volume.
  * Capture-owned shadows default to enabled and respect Light.castShadow and
@@ -480,6 +486,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                 private GiAdaptiveBakeJob job;
                 private com.jme3.gde.core.scene.ProbeLightmapAssets lightmaps;
                 private boolean saving;
+                private com.jme3.gde.core.scene.GiBakeReconstructionGuard reconstruction;
+                private boolean previewPending;
 
                 @Override
                 protected void initialize(Application application) {
@@ -488,6 +496,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                             finish("Scene unavailable or bake cancelled.");
                             return;
                         }
+                        reconstruction = new com.jme3.gde.core.scene.GiBakeReconstructionGuard(app.getViewPort());
+                        previewPending = reconstruction.refresh();
                         Spatial scene = request.getRootNode();
                         Spatial updateRoot = scene;
                         while (updateRoot.getParent() != null) {
@@ -522,6 +532,11 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                         bake.cancel();
                     }
                     try {
+                        boolean changed = reconstruction.refresh();
+                        if (previewPending || changed) {
+                            previewPending = false;
+                            return;
+                        }
                         if (lightmaps == null && job.step(nanos)) {
                             lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(app, request, volume);
                         }
@@ -587,6 +602,10 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                             job.close();
                         }
                     } finally {
+                        if (reconstruction != null) {
+                            reconstruction.close();
+                            reconstruction = null;
+                        }
                         if (!saving) {
                             bake.finish("Bake stopped.");
                         }

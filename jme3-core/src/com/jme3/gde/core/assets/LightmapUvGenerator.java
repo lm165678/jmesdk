@@ -42,6 +42,30 @@ public final class LightmapUvGenerator {
         }
     }
 
+    /**
+     * Excludes a deformable Geometry and any object below a skin/morph owner.
+     * This is an eligibility query and never changes mobility or scene data.
+     * <pre>{@code
+     * // 第一步：节点遍历时先检查，不对骨骼/Morph 对象或子树生成、清除 UV2。
+     * if (LightmapUvGenerator.isDeformable(spatial)) {
+     *     return;
+     * }
+     * // 第二步：仅为剩余刚体网格处理 UV2；Dynamic 刚体仍可手动处理。
+     * }</pre>
+     */
+    public static boolean isDeformable(com.jme3.scene.Spatial spatial) {
+        for (com.jme3.scene.Spatial owner = spatial; owner != null; owner = owner.getParent()) {
+            if (owner.getControl(com.jme3.anim.SkinningControl.class) != null
+                    || owner.getControl(com.jme3.animation.SkeletonControl.class) != null
+                    || owner.getControl(com.jme3.anim.MorphControl.class) != null) {
+                return true;
+            }
+        }
+        return spatial instanceof com.jme3.scene.Geometry geometry
+                && geometry.getMesh() != null
+                && (geometry.getMesh().isAnimated() || geometry.getMesh().hasMorphTargets());
+    }
+
     private static boolean loaded;
 
     private LightmapUvGenerator() {
@@ -59,7 +83,7 @@ public final class LightmapUvGenerator {
      * remapped, including existing LOD indices. The source stays unchanged.
      * xatlas creates islands; deterministic Java rectangle packing reserves the
      * requested per-island margin and atlas border using the existing native ABI.
-     * This may pack less densely than native shape packing. Rigid triangles only.
+     * This may pack less densely than native shape packing. Rigid triangle meshes only; deformable objects are excluded.
      * Run on a worker with a private mesh snapshot; install on the render thread.
      * Existing static Lightmaps must be invalidated after replacing UV2.
      * <pre>{@code
@@ -83,10 +107,48 @@ public final class LightmapUvGenerator {
         return generate(source, java.util.Objects.requireNonNull(settings));
     }
 
+    /** Result of an automatic bake layout; store the resolution with the mesh. */
+    public record BakeLayout(Mesh mesh, int resolution) {
+    }
+
+    /**
+     * Fits chart margins and targets four texels per positive-area UV island.
+     * Growth stops at the supplied GPU limit or 2048. Zero-area islands are
+     * ignored for density; thin islands can still require manual inspection.
+     * Explicit regenerate remains fixed-size and never overwrites its source.
+     * <pre>{@code
+     * // 第一步：缺少 UV2 时，以 256 为下限，按 GPU 双层图集限制选择上限。
+     * BakeLayout layout = generateForBake(mesh, new Settings(256, 4, 2),
+     *         Math.min(2048, textureLimit / 2));
+     * // 第二步：烘焙成功后一起安装 layout.mesh() 和 layout.resolution()。
+     * // 第三步：已有 UV2 不自动重排；需要时先在编辑器 Clear UV2。
+     * }</pre>
+     */
+    public static BakeLayout generateForBake(Mesh source, Settings minimum, int maximum) throws IOException {
+        int limit = Math.min(2048, maximum);
+        int size = minimum.resolution();
+        if (size > limit) {
+            throw new IOException("Lightmap target exceeds the automatic GPU limit: " + limit);
+        }
+        while (true) {
+            try {
+                Mesh mesh = regenerate(source, new Settings(size, minimum.padding(), minimum.border()));
+                if (LightmapUvPacking.minimumIslandArea(mesh, size) >= 4 || size == limit) {
+                    return new BakeLayout(mesh, size);
+                }
+            } catch (LightmapUvPacking.CapacityException capacity) {
+                if (size == limit) {
+                    throw capacity;
+                }
+            }
+            size = Math.min(limit, size * 2);
+        }
+    }
+
     private static Mesh generate(Mesh source, Settings settings) throws IOException {
-        if (source.isAnimated() || source.getMorphTargets().length != 0
+        if (source.isAnimated() || source.hasMorphTargets()
                 || source.getMode() != Mesh.Mode.Triangles || source.getTriangleCount() == 0) {
-            throw new IOException("Lightmap UVs require a rigid triangle mesh");
+            throw new IOException("Lightmap UVs exclude skinned and morph meshes");
         }
         VertexBuffer position = source.getBuffer(Type.Position);
         if (position == null || position.getNumComponents() != 3 || position.getStride() != 0

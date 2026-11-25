@@ -53,6 +53,9 @@ import org.openide.windows.TopComponent;
  * 第二步：选择资产，Ctrl+C / Ctrl+V 复制粘贴，Delete 使用标准删除确认。
  * 第三步：双击资产打开编辑器，拖动模型或材质到当前项目的 3D Viewer。
  * 第四步：源模型右键 Convert to J3O 配置导出，取消不会写入文件。
+ * 第五步：右键 Dependencies 查看该资产的实际加载/内嵌引用及间接依赖。
+ * 点击路径打开资产，旁边箭头定位到当前 Asset Browser；内置或缺失资源不可定位。
+ * 普通保存只更新相关文件和依赖缩略图，目录增删更新目录树；Refresh 可主动全量重建缓存。
  * </pre>
  */
 public final class AssetContentPanel extends JPanel implements org.openide.explorer.ExplorerManager.Provider {
@@ -92,7 +95,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     private final javax.swing.Timer heapTimer = new javax.swing.Timer(1500, event -> updateHeap());
     private String catalogStatus = " ";
     private final RequestProcessor io = new RequestProcessor("Asset catalog", 1, true);
-    private final javax.swing.Timer refreshTimer = new javax.swing.Timer(350, event -> scan());
+    private final javax.swing.Timer refreshTimer = new javax.swing.Timer(350, event -> refreshChanged());
     private final javax.swing.Timer searchTimer = new javax.swing.Timer(180, event -> filter());
     private AssetThumbnails thumbnails;
     private final BufferedImage pendingImage = AssetThumbnails.card("...", "", new Color(89, 133, 180));
@@ -100,9 +103,12 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     private ProjectAssetManager manager;
     private File watched;
     private String directory = "";
-    private long revision;
-    private long objRevision;
-    private long refreshVersion;
+    private final Map<String, Entry> catalog = new HashMap<>();
+    private final Set<String> catalogDirectories = new HashSet<>();
+    private final Map<String, Boolean> changedPaths = new LinkedHashMap<>();
+    private boolean catalogLoading;
+    private final Set<JDialog> dependencyDialogs = new HashSet<>();
+    private String revealedPath;
     private long generation;
     private boolean active;
     private boolean changingProjects;
@@ -110,13 +116,94 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     private int tileSize = 96;
     private final PropertyChangeListener projectListener = event -> SwingUtilities.invokeLater(this::reloadProjects);
     private final FileChangeListener filesListener = new FileChangeAdapter() {
-        private void changed() { SwingUtilities.invokeLater(() -> { if (active) { refreshTimer.restart(); } }); }
-        @Override public void fileChanged(FileEvent event) { changed(); }
-        @Override public void fileDataCreated(FileEvent event) { changed(); }
-        @Override public void fileFolderCreated(FileEvent event) { changed(); }
-        @Override public void fileDeleted(FileEvent event) { changed(); }
-        @Override public void fileRenamed(FileRenameEvent event) { changed(); }
+        private void changed(FileEvent event, String previous) {
+            FileObject changedFile = event.getFile();
+            String absolute = changedFile.getPath();
+            boolean folder = event.getFile().isFolder();
+            SwingUtilities.invokeLater(() -> {
+                FileObject root = manager == null ? null : manager.getAssetFolder();
+                if (!active || root == null) {
+                    return;
+                }
+                String path = FileUtil.getRelativePath(root, changedFile);
+                if (path == null && absolute.startsWith(root.getPath() + "/")) {
+                    path = absolute.substring(root.getPath().length() + 1);
+                }
+                if (path == null || path.isEmpty()) {
+                    return;
+                }
+                if (previous != null) {
+                    queueChange(path.substring(0, path.lastIndexOf('/') + 1) + previous, folder);
+                }
+                queueChange(path, folder);
+            });
+        }
+        @Override public void fileChanged(FileEvent event) { changed(event, null); }
+        @Override public void fileDataCreated(FileEvent event) { changed(event, null); }
+        @Override public void fileFolderCreated(FileEvent event) { changed(event, null); }
+        @Override public void fileDeleted(FileEvent event) { changed(event, null); }
+        @Override public void fileRenamed(FileRenameEvent event) {
+            changed(event, event.getExt().isEmpty() ? event.getName() : event.getName() + "." + event.getExt());
+        }
     };
+
+    private void queueChange(String path, boolean folder) {
+        if (!GeneratedTextures.MANIFEST.equals(path)
+                && Arrays.stream(path.split("/")).anyMatch(part -> part.startsWith("."))) {
+            return;
+        }
+        changedPaths.merge(path, folder || catalogDirectories.contains(path), Boolean::logicalOr);
+        refreshTimer.restart();
+    }
+
+    private void refreshChanged() {
+        if (!active || catalogLoading || manager == null || changedPaths.isEmpty()) {
+            return;
+        }
+        Map<String, Boolean> changes = new LinkedHashMap<>(changedPaths);
+        changedPaths.clear();
+        thumbnails.invalidate(changes);
+        if (changes.containsValue(true)) {
+            scan();
+            return;
+        }
+        FileObject root = manager.getAssetFolder();
+        ProjectAssetManager project = manager;
+        long ticket = generation;
+        io.post(() -> {
+            Map<String, Entry> updated = new HashMap<>();
+            for (String path : changes.keySet()) {
+                FileObject file = root.getFileObject(path);
+                if (file != null && file.isData() && !isSidecar(file)) {
+                    updated.put(path, new Entry(file, path, AssetKind.of(file)));
+                }
+            }
+            SwingUtilities.invokeLater(() -> {
+                if (!active || project != manager || ticket != generation) {
+                    return;
+                }
+                for (String path : changes.keySet()) {
+                    catalog.remove(path);
+                }
+                catalog.putAll(updated);
+                all = sorted(catalog.values());
+                filter();
+                grid.repaint();
+                showSelected();
+            });
+        });
+    }
+
+    private static List<Entry> sorted(Collection<Entry> entries) {
+        List<Entry> result = new ArrayList<>(entries);
+        result.sort(Comparator.comparing((Entry entry) -> !entry.file().isFolder())
+                .thenComparing(Entry::path, String.CASE_INSENSITIVE_ORDER).thenComparing(Entry::path));
+        return List.copyOf(result);
+    }
+
+    private static boolean isSidecar(FileObject file) {
+        return file.getExt().equalsIgnoreCase("j3odata") || file.getExt().equalsIgnoreCase("bin");
+    }
 
     public AssetContentPanel() {
         super(new BorderLayout(4, 4));
@@ -135,7 +222,12 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             types.addItem(text(kind.name()));
         }
         JButton refresh = new JButton(text("Refresh"));
-        refresh.addActionListener(event -> { refreshVersion++; scan(); });
+        refresh.addActionListener(event -> {
+            if (thumbnails != null) {
+                thumbnails.invalidateAll();
+            }
+            scan();
+        });
         JSlider size = new JSlider(64, 160, tileSize);
         size.setPreferredSize(new Dimension(85, 24));
         size.setToolTipText(text("TileSize"));
@@ -267,7 +359,15 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         reloadProjects();
     }
 
+    private void closeDependencies() {
+        for (JDialog dialog : List.copyOf(dependencyDialogs)) {
+            dialog.dispose();
+        }
+        dependencyDialogs.clear();
+    }
+
     public void stop() {
+        closeDependencies();
         active = false;
         generation++;
         refreshTimer.stop();
@@ -307,6 +407,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
     }
 
     private void chooseProject() {
+        closeDependencies();
         unwatch();
         inspector.clear();
         grid.clearSelection();
@@ -316,6 +417,10 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             com.jme3.gde.core.assets.ExternalAssetImport.watch(manager);
         }
         directory = "";
+        changedPaths.clear();
+        catalog.clear();
+        catalogDirectories.clear();
+        revealedPath = null;
         FileObject root = manager == null ? null : manager.getAssetFolder();
         if (root != null) {
             watched = FileUtil.toFile(root);
@@ -330,6 +435,9 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         ProjectAssetManager assets = manager;
         FileObject root = assets == null ? null : assets.getAssetFolder();
         if (root == null) {
+            catalogLoading = false;
+            catalog.clear();
+            catalogDirectories.clear();
             all = List.of();
             entries.clear();
             folders.setModel(new DefaultTreeModel(new DefaultMutableTreeNode(new Folder(""))));
@@ -337,6 +445,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             updateSelectionStatus();
             return;
         }
+        catalogLoading = true;
         catalogStatus = text("Scanning");
         updateSelectionStatus();
         io.post(() -> {
@@ -346,36 +455,15 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             found.sort(Comparator.comparing((Entry entry) -> !entry.file().isFolder())
                     .thenComparing(Entry::path, String.CASE_INSENSITIVE_ORDER)
                     .thenComparing(Entry::path));
-            long stamp = 17;
-            long objStamp = 17;
-            for (Entry entry : found) {
-                // Sidecar writes or directory scans can change folder timestamps.
-                // Check the asset file itself to decide whether its thumbnail is stale.
-                if (entry.file().isFolder()) {
-                    continue;
-                }
-                stamp = stamp * 31 + entry.path().hashCode();
-                stamp = stamp * 31 + entry.file().lastModified().getTime();
-                stamp = stamp * 31 + entry.file().getSize();
-                // An OBJ thumbnail depends on its MTL and textures.
-                // Saving the converted J3O should not invalidate the OBJ thumbnail.
-                if (!entry.file().getExt().equalsIgnoreCase("j3o")) {
-                    objStamp = objStamp * 31 + entry.path().hashCode();
-                    objStamp = objStamp * 31 + entry.file().lastModified().getTime();
-                    objStamp = objStamp * 31 + entry.file().getSize();
-                }
-            }
-            // Sidecars are model dependencies, so leave them out of the asset list.
-            found.removeIf(entry -> !entry.file().isFolder()
-                    && (entry.file().getExt().equalsIgnoreCase("j3odata")
-                    || entry.file().getExt().equalsIgnoreCase("bin")));
-            long changed = stamp;
-            long objChanged = objStamp;
+            found.removeIf(entry -> !entry.file().isFolder() && isSidecar(entry.file()));
             SwingUtilities.invokeLater(() -> {
                 if (!active || ticket != generation) { return; }
+                catalogLoading = false;
+                catalog.clear();
+                found.forEach(entry -> catalog.put(entry.path(), entry));
+                catalogDirectories.clear();
+                catalogDirectories.addAll(dirs);
                 all = List.copyOf(found);
-                revision = changed + refreshVersion;
-                objRevision = objChanged + refreshVersion;
                 DefaultMutableTreeNode tree = new DefaultMutableTreeNode(new Folder(""));
                 Map<String, DefaultMutableTreeNode> nodes = new HashMap<>();
                 nodes.put("", tree);
@@ -389,6 +477,9 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
                 folders.setModel(new DefaultTreeModel(tree));
                 DefaultMutableTreeNode selected = nodes.getOrDefault(directory, tree);
                 folders.setSelectionPath(new TreePath(selected.getPath()));
+                if (!changedPaths.isEmpty()) {
+                    refreshTimer.restart();
+                }
                 filter();
             });
         });
@@ -443,7 +534,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             boolean location = query.isEmpty() ? parent.equals(directory)
                     : directory.isEmpty() || entry.path().startsWith(directory + "/");
             if (hideOriginals.isSelected() && !entry.file().isFolder()
-                    && isOriginalAsset(entry.file().getExt())) {
+                    && isOriginalAsset(entry.file().getExt()) && !entry.path().equals(revealedPath)) {
                 continue;
             }
             if (location && entry.path().toLowerCase(Locale.ROOT).contains(query)
@@ -458,28 +549,9 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         syncAssetSelection();
     }
 
-    /** Standalone images/audio/source only depend on themselves; composite assets
-     * retain conservative project dependency invalidation, including binary sidecars.
-     * Directory navigation never changes either revision. Explicit Refresh forces
-     * regeneration; filesystem notifications rescan off EDT after a short debounce.
-     * <pre>
-     * 第一步：打开目录，首次可见的资产生成并保存缩略图。
-     * 第二步：切换目录再返回，复用内存或磁盘缓存。
-     * 第三步：保存资源或其依赖，文件监听触发失效并更新可见缩略图。
-     * 第四步：需要强制重建时点击 Refresh；关闭窗口会取消待处理任务。
-     * </pre>
-     */
-    private long thumbnailRevision(Entry entry) {
-        return switch (entry.kind()) {
-            case TEXTURE, LIGHTMAP, AUDIO, SHADER -> refreshVersion;
-            default -> entry.file().getExt().equalsIgnoreCase("obj") ? objRevision : revision;
-        };
-    }
-
     private AssetThumbnails.Result image(Entry entry) {
         if (entry.file().isFolder() || manager == null || thumbnails == null || !active) { return null; }
-        return thumbnails.request(manager, entry.file(), entry.path(),
-                thumbnailRevision(entry), result -> {
+        return thumbnails.request(manager, entry.file(), entry.path(), result -> {
             if (active) {
                 grid.repaint();
                 if (entry.equals(grid.getSelectedValue())) { showSelected(); }
@@ -497,7 +569,7 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             inspector.clear();
             return;
         }
-        inspector.select(manager, entry.file(), entry.path(), entry.kind(), thumbnailRevision(entry));
+        inspector.select(manager, entry.file(), entry.path(), entry.kind(), thumbnails.version(entry.path()));
         if (!entry.file().isFolder() && entry.kind() != AssetKind.TEXTURE) {
             AssetThumbnails.Result result = image(entry);
             inspector.poster(result == null ? pendingImage : result.image());
@@ -1001,6 +1073,11 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
         JMenuItem properties = new JMenuItem(text("Properties"));
         properties.addActionListener(event -> showProperties(inspected));
         menu.add(properties);
+        if (selected != null && !selected.file().isFolder()) {
+            JMenuItem dependencies = new JMenuItem(text("Dependencies"));
+            dependencies.addActionListener(event -> showDependencies(selected));
+            menu.add(dependencies);
+        }
         if (selected != null && selected.file().getExt().equalsIgnoreCase("j3o")) {
             try {
                 if (DataObject.find(selected.file()) instanceof com.jme3.gde.core.assets.BinaryModelDataObject binary) {
@@ -1048,6 +1125,115 @@ public final class AssetContentPanel extends JPanel implements org.openide.explo
             menu.add(convert);
         }
         menu.show(invoker, x, y);
+    }
+
+    private void showDependencies(Entry entry) {
+        if (entry == null || entry.file().isFolder()) {
+            return;
+        }
+        ProjectAssetManager project = manager;
+        Set<String> observed = thumbnails.dependencies(entry.path());
+        JDialog dialog = new JDialog((Frame) SwingUtilities.getAncestorOfClass(Frame.class, this),
+                text("Dependencies") + ": " + entry.path(), false);
+        dependencyDialogs.add(dialog);
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosed(WindowEvent event) {
+                dependencyDialogs.remove(dialog);
+            }
+        });
+        JPanel rows = new JPanel();
+        rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
+        rows.add(new JLabel(text("LoadingDependencies")));
+        dialog.add(new JScrollPane(rows), BorderLayout.CENTER);
+        JButton close = new JButton(text("CloseDependencies"));
+        close.addActionListener(event -> dialog.dispose());
+        dialog.add(close, BorderLayout.SOUTH);
+        dialog.setSize(760, 460);
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        io.post(() -> {
+            var isolated = AssetDependencies.isolated(project);
+            AssetDependencies.Scan scan;
+            try {
+                scan = AssetDependencies.inspect(isolated, entry.file(), entry.path());
+            } finally {
+                isolated.clearCache();
+            }
+            Set<String> complete = new HashSet<>(scan.paths());
+            complete.addAll(observed);
+            var result = new AssetDependencies.Scan(Set.copyOf(complete), scan.warning());
+            SwingUtilities.invokeLater(() -> {
+                if (!dialog.isDisplayable()) {
+                    return;
+                }
+                rows.removeAll();
+                if (!result.warning().isEmpty()) {
+                    JLabel warning = new JLabel(result.warning());
+                    warning.setToolTipText(result.warning());
+                    rows.add(warning);
+                }
+                if (result.paths().isEmpty()) {
+                    rows.add(new JLabel(text("NoDependencies")));
+                }
+                for (String path : new TreeSet<>(result.paths())) {
+                    FileObject file = project.getAssetFolder().getFileObject(path);
+                    JPanel row = new JPanel(new BorderLayout(6, 2));
+                    JButton open = new JButton(path);
+                    open.setHorizontalAlignment(SwingConstants.LEFT);
+                    open.setToolTipText(text("OpenDependency"));
+                    open.setEnabled(file != null && file.isData());
+                    open.addActionListener(event -> {
+                        if (manager == project) {
+                            open(new Entry(file, path, AssetKind.of(file)));
+                        }
+                    });
+                    JButton reveal = new JButton("\u2192");
+                    reveal.setToolTipText(text("RevealDependency"));
+                    reveal.setEnabled(file != null);
+                    reveal.addActionListener(event -> {
+                        if (manager == project) {
+                            reveal(file, path);
+                            dialog.toBack();
+                        }
+                    });
+                    row.add(open, BorderLayout.CENTER);
+                    row.add(reveal, BorderLayout.EAST);
+                    row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+                    rows.add(row);
+                }
+                rows.revalidate();
+                rows.repaint();
+            });
+        });
+    }
+
+    private void reveal(FileObject file, String path) {
+        revealedPath = path;
+        search.setText("");
+        types.setSelectedIndex(0);
+        int slash = path.lastIndexOf('/');
+        directory = slash < 0 ? "" : path.substring(0, slash);
+        var nodes = ((DefaultMutableTreeNode) folders.getModel().getRoot()).depthFirstEnumeration();
+        while (nodes.hasMoreElements()) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) nodes.nextElement();
+            if (node.getUserObject() instanceof Folder folder && folder.path().equals(directory)) {
+                TreePath treePath = new TreePath(node.getPath());
+                folders.setSelectionPath(treePath);
+                folders.scrollPathToVisible(treePath);
+                break;
+            }
+        }
+        Entry entry = new Entry(file, path, AssetKind.of(file));
+        catalog.put(path, entry);
+        all = sorted(catalog.values());
+        filter();
+        grid.setSelectedValue(entry, true);
+        TopComponent component = (TopComponent) SwingUtilities.getAncestorOfClass(TopComponent.class, this);
+        if (component != null) {
+            component.requestVisible();
+            component.requestActive();
+        }
     }
 
     private void open(Entry entry) {

@@ -23,6 +23,7 @@ $sources = @(
     'jme3-core/src/com/jme3/gde/core/scene/ProbeLightmapAssets.java',
     'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/ModelDetailTopComponent.java',
     'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/LightmapUvView.java',
+    'jme3-scenecomposer/src/com/jme3/gde/scenecomposer/LightmapUvEdits.java',
     'tools/tests/LightmapUvRegenerationSmoke.java'
 )
 $compileArgs = @('-proc:none', '-encoding', 'UTF-8', '-cp', ('"' + $classpath + '"'),

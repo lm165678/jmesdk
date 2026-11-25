@@ -86,7 +86,9 @@ public final class LightmapUvRegenerationSmoke extends SimpleApplication {
 
     public static void main(String[] args) throws Exception {
         System.setProperty("org.openide.util.Lookup", TestLookup.class.getName());
-        NativeLibraryLoader.setCustomExtractionFolder(Files.createTempDirectory("uv-regeneration-native-").toString());
+        if (System.getProperty("com.jme3.NativeLibraryExtractionFolder") == null) {
+            NativeLibraryLoader.setCustomExtractionFolder(Files.createTempDirectory("uv-regeneration-native-").toString());
+        }
         Path output = Path.of(args[0]);
         Files.createDirectories(output);
         testMesh();
@@ -247,9 +249,12 @@ public final class LightmapUvRegenerationSmoke extends SimpleApplication {
         }
         currentEditor.set(panel, editor);
         hasGeometry.set(panel, true);
+        var uvAvailable = ModelDetailTopComponent.class.getDeclaredField("hasUvGeometry");
+        uvAvailable.setAccessible(true);
+        uvAvailable.set(panel, true);
         selection.set(panel, new Node("Not a geometry"));
         tabs.setSelectedIndex(tabs.indexOfTab("Lightmap UV"));
-        require(!((javax.swing.JButton) bake.get(panel)).isEnabled(), "UV regeneration enabled for a Node");
+        require(((javax.swing.JButton) bake.get(panel)).isEnabled(), "UV regeneration disabled for a Node");
         selection.set(panel, geometry);
         Method enabled = ModelDetailTopComponent.class.getDeclaredMethod("refreshBakeEnabled");
         enabled.setAccessible(true);
