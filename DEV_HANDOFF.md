@@ -1,3 +1,8 @@
+## 2026-11-26 paired direct-Lightmap and skin source checkpoint
+
+- Compatible implementation revisions: engine `a8b493ba028e374a700996fa99d86857735b0f00` on dev_fix_lightprobe_issue and SDK `1f9470e16bd8bc91d919fcedd4c7febececc6b4b` on master. Documentation-only commits may follow these revisions.
+- This pair contains the direct diffuse and static shadow bake, independent probe and Lightmap shadow sizes, skin thickness filtering and live material binding, and Java 11 LUT source compatibility. See the work-specific entries below for targeted validation and remaining SDK UI coverage.
+
 ## 2026-11-26 skin surface export binding and filtered thickness
 
 - Local source changes paired with engine working tree based on f93c8d8d5; SDK base06680208e. Not committed/pushed. Keep concurrent Java11, direct-Lightmap, archive and project-metadata edits. No SDK export/build/install/launch or external asset writes.
