@@ -22,7 +22,10 @@ public final class SkinTextureInput {
     static Path resolve(Transferable value) throws Exception {
         if (value.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
             var files = (java.util.List<?>) value.getTransferData(DataFlavor.javaFileListFlavor);
-            return files.size() == 1 && files.get(0) instanceof File file ? file.toPath() : null;
+            if (files.size() == 1 && files.get(0) instanceof File) {
+                return ((File) files.get(0)).toPath();
+            }
+            return null;
         }
         SkinAssetSelection bridge = Lookup.getDefault().lookup(SkinAssetSelection.class);
         Path internal = bridge == null ? null : bridge.textureFromTransfer(value);

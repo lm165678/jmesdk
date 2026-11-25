@@ -27,8 +27,17 @@ import org.openide.util.lookup.ServiceProvider;
 /** Open-project selectors and internal asset drops, with no OS file picker. */
 @ServiceProvider(service = SkinAssetSelection.class)
 public final class SkinProjectAssetSelection implements SkinAssetSelection {
-    private record Choice(String name, FileObject folder) {
-        @Override public String toString() {
+    private static final class Choice {
+        private final String name;
+        private final FileObject folder;
+
+        private Choice(String name, FileObject folder) {
+            this.name = name;
+            this.folder = folder;
+        }
+
+        @Override
+        public String toString() {
             return name + " — " + folder.getPath();
         }
     }
@@ -58,7 +67,7 @@ public final class SkinProjectAssetSelection implements SkinAssetSelection {
 
     @Override public Path chooseProject(Component parent) {
         Choice project = choose(parent);
-        return project == null ? null : FileUtil.toFile(project.folder()).toPath();
+        return project == null ? null : FileUtil.toFile(project.folder).toPath();
     }
 
     private static final class AssetNode extends DefaultMutableTreeNode {
@@ -125,7 +134,7 @@ public final class SkinProjectAssetSelection implements SkinAssetSelection {
         if (project == null) {
             return null;
         }
-        AssetNode root = new AssetNode(project.folder(), kind);
+        AssetNode root = new AssetNode(project.folder, kind);
         root.load();
         DefaultTreeModel model = new DefaultTreeModel(root);
         JTree tree = new JTree(model);
@@ -141,10 +150,14 @@ public final class SkinProjectAssetSelection implements SkinAssetSelection {
         });
         JScrollPane scroll = new JScrollPane(tree);
         scroll.setPreferredSize(new java.awt.Dimension(600, 420));
-        while (JOptionPane.showConfirmDialog(parent, scroll, "Select " + kind + " in " + project.name(),
+        while (JOptionPane.showConfirmDialog(parent, scroll, "Select " + kind + " in " + project.name,
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
-            if (tree.getLastSelectedPathComponent() instanceof AssetNode node && node.file.isData()) {
-                return FileUtil.toFile(node.file).toPath();
+            Object selected = tree.getLastSelectedPathComponent();
+            if (selected instanceof AssetNode) {
+                AssetNode node = (AssetNode) selected;
+                if (node.file.isData()) {
+                    return FileUtil.toFile(node.file).toPath();
+                }
             }
             JOptionPane.showMessageDialog(parent, "Select a " + kind + " file, not a folder.");
         }
@@ -160,7 +173,8 @@ public final class SkinProjectAssetSelection implements SkinAssetSelection {
                     ? MaterialDataFlavor.instance : transferable.isDataFlavorSupported(SpatialDataFlavor.instance)
                     ? SpatialDataFlavor.instance : TextureDataFlavor.instance;
             Object value = transferable.getTransferData(flavor);
-            if (value instanceof AssetNameHolder holder) {
+            if (value instanceof AssetNameHolder) {
+                AssetNameHolder holder = (AssetNameHolder) value;
                 file = holder.getAssetFile();
             }
         } else {
@@ -174,5 +188,54 @@ public final class SkinProjectAssetSelection implements SkinAssetSelection {
             }
         }
         return file == null || FileUtil.toFile(file) == null ? null : FileUtil.toFile(file).toPath();
+    }
+
+    @Override
+    public void surfaceMaterialExported(Path assetRoot, String materialKey) {
+        Path root = assetRoot.toAbsolutePath().normalize();
+        for (Project project : OpenProjects.getDefault().getOpenProjects()) {
+            ProjectAssetManager manager = project.getLookup().lookup(ProjectAssetManager.class);
+            FileObject folder = manager == null ? null : manager.getAssetFolder();
+            java.io.File local = folder == null ? null : FileUtil.toFile(folder);
+            if (local == null || !root.equals(local.toPath().toAbsolutePath().normalize())) {
+                continue;
+            }
+            com.jme3.gde.core.scene.SceneApplication application = com.jme3.gde.core.scene.SceneApplication.getApplication();
+            application.enqueue(() -> {
+                com.jme3.asset.MaterialKey key = new com.jme3.asset.MaterialKey(materialKey);
+                manager.deleteFromCache(key);
+                com.jme3.material.Material saved = manager.loadMaterial(materialKey);
+                for (String name : com.jme3.gde.texturetools.SkinMaterialUpdates.SURFACE_PARAMETERS) {
+                    com.jme3.material.MatParam parameter = saved.getParam(name);
+                    if (parameter instanceof com.jme3.material.MatParamTexture) {
+                        com.jme3.texture.Texture texture = ((com.jme3.material.MatParamTexture) parameter).getTextureValue();
+                        if (texture.getKey() != null) {
+                            manager.deleteFromCache(texture.getKey());
+                        }
+                    }
+                }
+                manager.deleteFromCache(key);
+                saved = manager.loadMaterial(materialKey);
+                com.jme3.gde.core.scene.SceneRequest request = application.getCurrentSceneRequest();
+                if (request != null && request.getManager() == manager && request.getRootNode() != null) {
+                    final com.jme3.material.Material exported = saved;
+                    final boolean[] changed = {false};
+                    request.getRootNode().depthFirstTraversal(spatial -> {
+                        if (spatial instanceof com.jme3.scene.Geometry) {
+                            com.jme3.material.Material target = ((com.jme3.scene.Geometry) spatial).getMaterial();
+                            if (target != null && materialKey.equals(target.getAssetName())) {
+                                com.jme3.gde.texturetools.SkinMaterialUpdates.apply(target, exported);
+                                changed[0] = true;
+                            }
+                        }
+                    });
+                    if (changed[0] && request.getDataObject() != null) {
+                        SwingUtilities.invokeLater(() -> request.getDataObject().setModified(true));
+                    }
+                }
+                return null;
+            });
+            break;
+        }
     }
 }

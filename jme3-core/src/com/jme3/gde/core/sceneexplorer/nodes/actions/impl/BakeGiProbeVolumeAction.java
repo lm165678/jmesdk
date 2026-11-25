@@ -14,6 +14,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.awt.event.ActionEvent;
 import java.util.WeakHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.netbeans.api.progress.ProgressHandle;
 import javax.swing.*;
 import org.openide.loaders.DataObject;
@@ -43,6 +45,9 @@ import org.openide.util.lookup.ServiceProvider;
  * Coverage 和缩放变化也同步更新世界间距；需点击 Bake 重新生成光照数据。
  * 取消烘焙不会回退已应用的新网格，需重新 Bake；相同数量取消保留旧数据。
  * 第三步：Tools / Bake GI volume，设置质量、帧预算并点击 Start。
+ * Probe shadow map size 默认 512，控制探针捕获的临时阴影图和预算。
+ * 启用 Bake direct lighting and static shadows 后，Lightmap shadow map size
+ * 默认 2048，单独控制写入 UV2 直射层前的静态方向光遮挡精度。完成后保存场景。
  * 第四步：Surface probe layout 默认关闭；开启时按表面自由布点，使用全精度数据，
  * 不创建规则加密块。Counts 此时表示分桶尺寸和总槽位预算；橙色点表示实际表面探针。
  * 保存 J3O 及 GI 外部文件后自动恢复；关闭开关并重新烘焙恢复规则布局。
@@ -218,14 +223,21 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         clearance.setToolTipText("Minimum distance from geometry in world units. Also respects near plane and 2% of local spacing. Requires rebaking.");
         JSpinner far = spinner(fields, "Capture distance", 200, 1, 1000000);
         JSpinner budget = spinner(fields, "Frame budget (ms)", 2, 1, 100);
-        JSpinner shadowSize = spinner(fields, "Shadow map size", 512, 64, 4096);
+        JSpinner shadowSize = spinner(fields, "Probe shadow map size", 512, 64, 4096);
+        shadowSize.setToolTipText("Temporary shadow maps for probe capture. Default 512. Larger maps share the 64 MiB capture budget.");
         JCheckBox shadows = new JCheckBox("Capture shadows", true);
         fields.add(shadows);
         fields.add(new JLabel("Respects light Cast Shadow"));
         JCheckBox smoothLightmapSeams = new JCheckBox("Smooth Lightmap seams", true);
         smoothLightmapSeams.setToolTipText("Default on: blend across smooth UV2 chart seams in newly baked static Lightmaps. Rebake to apply.");
         fields.add(smoothLightmapSeams);
+        JCheckBox bakeDirectShadows = new JCheckBox("Bake direct lighting and static shadows", false);
+        bakeDirectShadows.setToolTipText("Up to four static directional lights. Dynamic casters still cast and receive.");
+        fields.add(bakeDirectShadows);
         fields.add(new JLabel("Rebake to apply"));
+        JSpinner lightmapShadowSize = spinner(fields, "Lightmap shadow map size", 2048, 64, 2048);
+        lightmapShadowSize.setToolTipText("Shared static directional depth for baked direct Lightmaps. Default 2048. Independent of probe capture and UV2 texture size.");
+        lightmapShadowSize.setEnabled(false);
         JCheckBox compact = new JCheckBox("Normalized half precision", true);
         JCheckBox placement = new JCheckBox("Classify / relocate probes", true);
         fields.add(compact);
@@ -282,6 +294,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         bakeOptions.put("shadowMapSize", shadowSize);
         bakeOptions.put("captureShadows", shadows);
         bakeOptions.put("smoothLightmapSeams", smoothLightmapSeams);
+        bakeOptions.put("bakeDirectShadows", bakeDirectShadows);
+        bakeOptions.put("lightmapShadowMapSize", lightmapShadowSize);
         bakeOptions.put("compactStorage", compact);
         bakeOptions.put("classifyProbes", placement);
         bakeOptions.put("adaptiveRefinement", adaptive);
@@ -329,6 +343,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             }
             boolean editable = !busy;
             bakeOptions.values().forEach(widget -> widget.setEnabled(editable));
+            shadowSize.setEnabled(editable && shadows.isSelected());
+            lightmapShadowSize.setEnabled(editable && bakeDirectShadows.isSelected());
             countX.setEnabled(editable);
             countY.setEnabled(editable);
             countZ.setEnabled(editable);
@@ -339,6 +355,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             depth.setEnabled(editable && refining);
             placement.setEnabled(editable && !refining);
         };
+        shadows.addItemListener(event -> refreshBake.run());
+        bakeDirectShadows.addItemListener(event -> refreshBake.run());
         refreshBake.run();
         SceneApplication.getApplication().enqueue(() -> {
             boolean surfaceMode = volume.isSurfaceLayout();
@@ -462,13 +480,16 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.captureShadows = shadows.isSelected();
             quality.shadowMapSize = (Integer) shadowSize.getValue();
             boolean blendSeams = smoothLightmapSeams.isSelected();
+            boolean bakeDirect = bakeDirectShadows.isSelected();
+            int directShadowSize = (Integer) lightmapShadowSize.getValue();
             long nanos = ((Integer) budget.getValue()).longValue() * 1_000_000L;
             var bake = new BakeSession(volume.getName());
             BAKES.put(volume, bake);
             SceneApplication app = SceneApplication.getApplication();
             SceneRequest request = app.getCurrentSceneRequest();
             QUEUE.addLast(new PendingBake(bake,
-                    () -> startBake(app, request, volume, file, quality, layout, blendSeams, nanos, bake)));
+                    () -> startBake(app, request, volume, file, quality, layout, blendSeams, bakeDirect,
+                            directShadowSize, nanos, bake)));
             startNextBake();
             refreshBake.run();
         });
@@ -489,7 +510,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
 
     private static void startBake(SceneApplication app, SceneRequest request, GiProbeVolume volume, DataObject file,
             GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout,
-            boolean blendSeams, long nanos, BakeSession bake) {
+            boolean blendSeams, boolean bakeDirect, int directShadowSize, long nanos, BakeSession bake) {
         app.enqueue(() -> {
             if (request == null || request != app.getCurrentSceneRequest() || request.getDataObject() != file
                     || !isInScene(request, volume) || bake.isCancelled()) {
@@ -534,7 +555,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                         job = GiAdaptiveBakeJob.start(app.getRenderManager(), snapshot, volume, quality, layout,
                                 view -> { }, bake::isCancelled, bake::recordPasses);
                     } catch (RuntimeException error) {
-                        finish("Bake failed: " + error.getMessage());
+                        finishFailure(error);
                     }
                 }
 
@@ -554,7 +575,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                             return;
                         }
                         if (lightmaps == null && job.step(nanos)) {
-                            lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(app, request, volume, blendSeams);
+                            lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(
+                                    app, request, volume, blendSeams, bakeDirect, directShadowSize);
                         }
                         if (bake.isCancelled()) {
                             finish("Cancelled. Save or rebake the probe data as needed.");
@@ -597,8 +619,17 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                     } catch (java.util.concurrent.CancellationException error) {
                         finish("Cancelled. Grid edits remain applied; rebake after changing the grid.");
                     } catch (RuntimeException error) {
-                        finish("Bake failed: " + error.getMessage());
+                        finishFailure(error);
                     }
+                }
+
+                private void finishFailure(RuntimeException error) {
+                    Logger.getLogger(BakeGiProbeVolumeAction.class.getName()).log(Level.WARNING, "GI bake failed", error);
+                    Throwable cause = error;
+                    while (cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+                    finish("Bake failed: " + (cause.getMessage() == null ? cause.toString() : cause.getMessage()));
                 }
 
                 private void finish(String text) {

@@ -87,89 +87,99 @@ public class EditableMaterialFile {
      * loads the data from the material and matdef files
      */
     public void read() {
+        try {
+            readText(material.asText());
+        } catch (IOException ex) {
+            Exceptions.printStackTrace(ex);
+        }
+    }
+
+    /**
+     * Parses an editor snapshot without saving it. Use on EDT after merging
+     * generated parameters so unrelated unsaved fields remain editable.
+     * 第一步：合并生成参数到当前源码。第二步：readText 更新控件数据，不写回文件。
+     * @param text current J3M source
+     */
+    public void readText(String text) {
         prepareAdditionalStates();
         materialParameters.clear();
         int level = 0;
         boolean params = false;
         boolean states = false;
-        try {
-            //scan material text
-            for (String line : material.asLines()) {
-                //trim line incl comments
-                line = MaterialUtils.trimLine(line);
-                //find and load matdef file
-                if (line.startsWith("Material ") || line.startsWith("Material\t") && level == 0) {
-                    parseMaterialProperties(line);
+        //scan material text
+        for (String line : text.split("\\R")) {
+            //trim line incl comments
+            line = MaterialUtils.trimLine(line);
+            //find and load matdef file
+            if (line.startsWith("Material ") || line.startsWith("Material\t") && level == 0) {
+                parseMaterialProperties(line);
+            }
+            //start parsing material parameters
+            if (line.startsWith("MaterialParameters ") || line.startsWith("MaterialParameters\t") || line.startsWith("MaterialParameters{") && level == 1) {
+                params = true;
+            }
+            //start parsing renderstates
+            if (line.startsWith("AdditionalRenderState ") || line.startsWith("AdditionalRenderState\t") || line.startsWith("AdditionalRenderState{") && level == 1) {
+                states = true;
+            }
+            //up a level
+            if (line.contains("{")) {
+                level++;
+            }
+            //down a level, stop processing parameters/states
+            if (line.contains("}")) {
+                level--;
+                if (params) {
+                    params = false;
                 }
-                //start parsing material parameters
-                if (line.startsWith("MaterialParameters ") || line.startsWith("MaterialParameters\t") || line.startsWith("MaterialParameters{") && level == 1) {
-                    params = true;
+                if (states) {
+                    states = false;
                 }
-                //start parsing renderstates
-                if (line.startsWith("AdditionalRenderState ") || line.startsWith("AdditionalRenderState\t") || line.startsWith("AdditionalRenderState{") && level == 1) {
-                    states = true;
-                }
-                //up a level
-                if (line.contains("{")) {
-                    level++;
-                }
-                //down a level, stop processing parameters/states
-                if (line.contains("}")) {
-                    level--;
-                    if (params) {
-                        params = false;
+            }
+            //try reading parameter
+            if (level == 2 && params) {
+                int colonIdx = line.indexOf(":");
+                if (colonIdx != -1) {
+                    String[] lines = line.split(":");
+                    MaterialProperty prop = new MaterialProperty();
+                    prop.setName(lines[0].trim());
+                    if (lines.length > 1) {
+                        prop.setValue(lines[lines.length - 1].trim());
                     }
-                    if (states) {
-                        states = false;
-                    }
+                    materialParameters.put(prop.getName(), prop);
                 }
-                //try reading parameter
-                if (level == 2 && params) {
-                    int colonIdx = line.indexOf(":");
-                    if (colonIdx != -1) {
-                        String[] lines = line.split(":");
-                        MaterialProperty prop = new MaterialProperty();
-                        prop.setName(lines[0].trim());
-                        if (lines.length > 1) {
-                            prop.setValue(lines[lines.length - 1].trim());
-                        }
-                        materialParameters.put(prop.getName(), prop);
-                    }
+            }
+            //try reading state
+            if (level == 2 && states) {
+                String[] lines = null;
+                int colonIdx = line.indexOf(" ");
+                if (colonIdx != -1) {
+                    lines = line.split(" ");
                 }
-                //try reading state
-                if (level == 2 && states) {
-                    String[] lines = null;
-                    int colonIdx = line.indexOf(" ");
-                    if (colonIdx != -1) {
-                        lines = line.split(" ");
-                    }
-                    colonIdx = line.indexOf("\t");
-                    if (colonIdx != -1) {
-                        lines = line.split("\t");
-                    }
-                    if (lines != null) {
-                        MaterialProperty prop = new MaterialProperty();
-                        final String propName = lines[0].trim();
-                        prop.setName(propName);
-                        if (additionalRenderStates.get(propName) != null) {
+                colonIdx = line.indexOf("\t");
+                if (colonIdx != -1) {
+                    lines = line.split("\t");
+                }
+                if (lines != null) {
+                    MaterialProperty prop = new MaterialProperty();
+                    final String propName = lines[0].trim();
+                    prop.setName(propName);
+                    if (additionalRenderStates.get(propName) != null) {
 
-                            prop.setType(additionalRenderStates.get(propName).getType());
-                            if (lines.length > 1) {
-                                String value = "";
-                                for (int i = 1; i < lines.length; i++) {
-                                    value += " " + lines[i];
-                                }
-                                prop.setValue(value.trim());
+                        prop.setType(additionalRenderStates.get(propName).getType());
+                        if (lines.length > 1) {
+                            String value = "";
+                            for (int i = 1; i < lines.length; i++) {
+                                value += " " + lines[i];
                             }
-                            additionalRenderStates.put(prop.getName(), prop);
+                            prop.setValue(value.trim());
                         }
+                        additionalRenderStates.put(prop.getName(), prop);
                     }
                 }
             }
-            checkWithMatDef();
-        } catch (IOException ex) {
-            Exceptions.printStackTrace(ex);
         }
+        checkWithMatDef();
     }
 
     /**

@@ -24,5 +24,12 @@ public interface SkinAssetSelection {
     default Path projectForAsset(Path file) {
         return null;
     }
+    /**
+     * Called on EDT after surface export. Reload generated textures and enqueue
+     * only the matching project's live material parameters on the render thread.
+     * Does not save J3O or replace unrelated material edits.
+     */
+    default void surfaceMaterialExported(Path assetRoot, String materialKey) {
+    }
     Path textureFromTransfer(Transferable transferable) throws Exception;
 }

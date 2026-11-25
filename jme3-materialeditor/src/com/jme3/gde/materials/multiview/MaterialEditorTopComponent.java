@@ -16,6 +16,7 @@ import com.jme3.gde.materials.multiview.widgets.MaterialPropertyWidget;
 import com.jme3.gde.materials.multiview.widgets.MaterialWidgetListener;
 import com.jme3.gde.materials.multiview.widgets.WidgetFactory;
 import com.jme3.material.Material;
+import com.jme3.gde.texturetools.SkinMaterialUpdates;
 import java.awt.Component;
 import java.awt.GridLayout;
 import java.awt.event.ComponentEvent;
@@ -66,6 +67,8 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
     private final SaveCookie saveCookie = new SaveCookieImpl();
     private boolean saveImmediate = true;
     private boolean updateProperties = false;
+    private boolean importingGeneratedParameters;
+    private final SkinMaterialUpdates.Listener skinExportListener = this::skinMaterialExported;
     private final List<MaterialChangeListener> materialListeners = new ArrayList<>();
 
     public MaterialEditorTopComponent() {
@@ -553,10 +556,12 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
     @Override
     public void componentOpened() {
         SceneExplorerTopComponent.getDefault().addMaterialChangeProvider(this);
+        SkinMaterialUpdates.addListener(skinExportListener);
     }
 
     @Override
     public void componentClosed() {
+        SkinMaterialUpdates.removeListener(skinExportListener);
         materialPreviewWidget1.cleanUp();
         for (int i = 0; i < texturePanel.getComponentCount(); i++) {
             Component c = texturePanel.getComponent(i);
@@ -647,6 +652,9 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
         }
 
         private void checkSave() {
+            if (importingGeneratedParameters) {
+                return;
+            }
             if (saveImmediate) {
                 try {
                     saveCookie.save();
@@ -661,6 +669,30 @@ public final class MaterialEditorTopComponent extends CloneableTopComponent impl
                 updateProperties = false;
             }
         }
+    }
+
+    private void skinMaterialExported(java.nio.file.Path path, String savedText) throws IOException {
+        if (materialFileName == null || !path.equals(java.nio.file.Path.of(materialFileName).toAbsolutePath().normalize())) {
+            return;
+        }
+        String current = jTextArea1.getText();
+        String merged = SkinMaterialUpdates.merge(current, savedText);
+        boolean dirty = dataObject.isModified();
+        importingGeneratedParameters = true;
+        try {
+            jTextArea1.setText(merged);
+            materialFile.readText(merged);
+            for (Component component : texturePanel.getComponents()) {
+                if (component instanceof MaterialPropertyWidget) {
+                    ((MaterialPropertyWidget) component).cleanUp();
+                }
+            }
+            updateProperties();
+            dataObject.setModified(dirty);
+        } finally {
+            importingGeneratedParameters = false;
+        }
+        materialPreviewWidget1.showMaterial(manager, materialFileName);
     }
 
     private class SaveCookieImpl implements SaveCookie {

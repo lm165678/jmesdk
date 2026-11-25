@@ -63,28 +63,62 @@ public final class CompressedTexture {
                 if (buffer.getInt(132) != 3 || buffer.getInt(140) != 1 || (buffer.getInt(136) & 4) != 0) {
                     throw new IOException("DDS arrays, volumes and cubemaps are unsupported");
                 }
-                format = switch (dxgi) {
-                    case 71, 72 -> "BC1";
-                    case 74, 75 -> "BC2";
-                    case 77, 78 -> "BC3";
-                    case 80 -> "BC4";
-                    case 83 -> "BC5";
-                    case 98, 99 -> "BC7";
-                    default -> throw new IOException("Unsupported DDS DXGI format: " + dxgi);
-                };
+                switch (dxgi) {
+                    case 71:
+                    case 72:
+                        format = "BC1";
+                        break;
+                    case 74:
+                    case 75:
+                        format = "BC2";
+                        break;
+                    case 77:
+                    case 78:
+                        format = "BC3";
+                        break;
+                    case 80:
+                        format = "BC4";
+                        break;
+                    case 83:
+                        format = "BC5";
+                        break;
+                    case 98:
+                    case 99:
+                        format = "BC7";
+                        break;
+                    default:
+                        throw new IOException("Unsupported DDS DXGI format: " + dxgi);
+                }
                 color = dxgi == 72 || dxgi == 75 || dxgi == 78 || dxgi == 99;
             } else {
                 header = 128;
-                format = switch (fourcc) {
-                    case 113 -> "RGBA16F";
-                    case 0 -> "RGBA8";
-                    case 0x31545844 -> "BC1";
-                    case 0x33545844 -> "BC2";
-                    case 0x35545844 -> "BC3";
-                    case 0x31495441, 0x55344342 -> "BC4";
-                    case 0x32495441, 0x55354342 -> "BC5";
-                    default -> throw new IOException("Unsupported DDS FourCC");
-                };
+                switch (fourcc) {
+                    case 113:
+                        format = "RGBA16F";
+                        break;
+                    case 0:
+                        format = "RGBA8";
+                        break;
+                    case 0x31545844:
+                        format = "BC1";
+                        break;
+                    case 0x33545844:
+                        format = "BC2";
+                        break;
+                    case 0x35545844:
+                        format = "BC3";
+                        break;
+                    case 0x31495441:
+                    case 0x55344342:
+                        format = "BC4";
+                        break;
+                    case 0x32495441:
+                    case 0x55354342:
+                        format = "BC5";
+                        break;
+                    default:
+                        throw new IOException("Unsupported DDS FourCC");
+                }
             }
             srgb = color;
             if (format.equals("RGBA8") && (buffer.getInt(88) != 32 || buffer.getInt(92) != 0xff
@@ -124,15 +158,28 @@ public final class CompressedTexture {
             int internal = buffer.getInt(28);
             srgb = internal >= 0x93d0 && internal <= 0x93dd;
             int index = internal - (srgb ? 0x93d0 : 0x93b0);
-            block = switch (index) {
-                case 0 -> 4;
-                case 2 -> 5;
-                case 4 -> 6;
-                case 7 -> 8;
-                case 11 -> 10;
-                case 13 -> 12;
-                default -> throw new IOException("Only square-block ASTC KTX1 is supported");
-            };
+            switch (index) {
+                case 0:
+                    block = 4;
+                    break;
+                case 2:
+                    block = 5;
+                    break;
+                case 4:
+                    block = 6;
+                    break;
+                case 7:
+                    block = 8;
+                    break;
+                case 11:
+                    block = 10;
+                    break;
+                case 13:
+                    block = 12;
+                    break;
+                default:
+                    throw new IOException("Only square-block ASTC KTX1 is supported");
+            }
             format = "ASTC " + block + "x" + block;
             width = buffer.getInt(36);
             height = buffer.getInt(40);
@@ -360,15 +407,29 @@ public final class CompressedTexture {
         if (count < 1 || count > maximum) {
             throw new IOException("Mip count must be between 1 and " + maximum);
         }
-        int index = switch (block) {
-            case "4x4" -> 0;
-            case "5x5" -> 2;
-            case "6x6" -> 4;
-            case "8x8" -> 7;
-            case "10x10" -> 11;
-            case "12x12" -> 13;
-            default -> throw new IOException("Unsupported ASTC block size");
-        };
+        int index;
+        switch (block) {
+            case "4x4":
+                index = 0;
+                break;
+            case "5x5":
+                index = 2;
+                break;
+            case "6x6":
+                index = 4;
+                break;
+            case "8x8":
+                index = 7;
+                break;
+            case "10x10":
+                index = 11;
+                break;
+            case "12x12":
+                index = 13;
+                break;
+            default:
+                throw new IOException("Unsupported ASTC block size");
+        }
         ByteBuffer head = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
         head.put(KTX).putInt(0x04030201).putInt(0).putInt(1).putInt(0)
                 .putInt((srgb ? 0x93d0 : 0x93b0) + index).putInt(0x1908)

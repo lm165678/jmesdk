@@ -1,6 +1,7 @@
-# Compiles only the skin tool and its smoke test into an isolated directory.
+# Checks skin tool sources against Java 11 and runs its CPU/EDT smoke in an isolated directory.
 # No Ant/Gradle SDK build, installation or engine export. Optional DDS inputs may use the bundled CPU decoder.
-param([string]$JdkHome, [string]$NormalSource)
+# JDK 25 hosts the existing NetBeans dependencies; --release 11 checks source/API compatibility.
+param([string]$JdkHome, [string]$NormalSource, [switch]$VerifyGpu, [string]$NativeRoot)
 
 $ErrorActionPreference = 'Stop'
 $sdkRoot = Split-Path -Parent $PSScriptRoot
@@ -22,22 +23,38 @@ try {
     $moduleSource = Join-Path $sdkRoot 'jme3-texture-tools/src'
     $jars = Get-ChildItem build/cluster,netbeans -Recurse -Filter *.jar | ForEach-Object { $_.FullName }
     $classpath = (@((Join-Path $engineRoot 'jme3-core/build/classes/java/main'),
-        (Join-Path $engineRoot 'jme3-core/src/main/resources'), $moduleSource) + @($jars)) -join ';'
+        (Join-Path $engineRoot 'jme3-core/src/main/resources'), $moduleSource,
+        (Join-Path $sdkRoot 'jme3-materialeditor/src')) + @($jars)) -join ';'
     $source = 'jme3-texture-tools/src/com/jme3/gde/texturetools'
-    $sources = @("$source/SkinLutAction.java", "$source/SkinLutPanel.java", "$source/SkinLutExport.java",
-        "$source/SkinToolsPanel.java", "$source/SkinGenerationSettings.java", "$source/SkinNormalAssets.java",
-        "$source/SkinNormalPanel.java", "$source/SkinTexturePreview.java",
-        "$source/SkinAssetSelection.java", "$source/SkinTextureInput.java", "$source/SkinTextureReader.java",
-        "$source/TextureToolchain.java", "$source/CompressedTexture.java",
+    $sources = @((Get-ChildItem -LiteralPath $source -Filter 'Skin*.java').FullName) + @(
+        "$source/TextureToolchain.java", "$source/CompressedTexture.java", "$source/NativeTextureCodec.java",
         'jme3-core/src/com/jme3/gde/core/assets/SkinProjectAssetSelection.java',
-        (Join-Path $engineRoot 'jme3-core/src/plugins/java/com/jme3/texture/plugins/DDSLoader.java'),
-        'tools/tests/SkinLutSmoke.java', 'tools/tests/SkinTextureWorkflowSmoke.java', 'tools/tests/SkinDdsGpuSmoke.java')
-    $compile = @('-encoding','UTF-8','-implicit:none','-proc:full','-processor','org.netbeans.modules.openide.awt.ActionProcessor,org.netbeans.modules.openide.util.ServiceProviderProcessor',
+        (Join-Path $engineRoot 'jme3-core/src/plugins/java/com/jme3/texture/plugins/DDSLoader.java')) + @(
+        (Get-ChildItem -LiteralPath (Join-Path $engineRoot 'jme3-core/src/main/java/com/jme3/material/skin') -Filter '*.java').FullName)
+    $compile = @('--release','11','-encoding','UTF-8','-implicit:none','-proc:full','-processor','org.netbeans.modules.openide.awt.ActionProcessor,org.netbeans.modules.openide.util.ServiceProviderProcessor',
         '-sourcepath',('"'+$moduleSource+'"'),
         '-cp',('"'+$classpath+'"'),'-d',('"'+$classes+'"')) + $sources
     [IO.File]::WriteAllLines((Join-Path $output 'compile.args'), @($compile | ForEach-Object { $_.Replace('\','/') }))
     & "$JdkHome/bin/javac.exe" ('@'+(Join-Path $output 'compile.args'))
     if ($LASTEXITCODE -ne 0) { throw 'Skin LUT source compilation failed' }
+    # Check the editor consumer too; its existing UI source uses the SDK JDK level.
+    $editorCompile = @('-encoding','UTF-8','-implicit:none','-proc:none',
+        '-cp',('"'+$classes+';'+$classpath+'"'),'-d',('"'+$classes+'"'),
+        'jme3-materialeditor/src/com/jme3/gde/materials/EditableMaterialFile.java',
+        'jme3-materialeditor/src/com/jme3/gde/materials/multiview/MaterialEditorTopComponent.java')
+    [IO.File]::WriteAllLines((Join-Path $output 'editor.args'), @($editorCompile | ForEach-Object { $_.Replace('\','/') }))
+    & "$JdkHome/bin/javac.exe" ('@'+(Join-Path $output 'editor.args'))
+    if ($LASTEXITCODE -ne 0) { throw 'Skin material editor source compilation failed' }
+    # Test sources are compiled separately so production classes are always checked against Java 11.
+    $testClasspath = $classes + ';' + $classpath
+    $testCompile = @('--release','11','-encoding','UTF-8','-implicit:none','-proc:none',
+        '-sourcepath',('"'+$classes+'"'),'-cp',('"'+$testClasspath+'"'),'-d',('"'+$classes+'"'),
+        'tools/tests/SkinLutSmoke.java', 'tools/tests/SkinTextureWorkflowSmoke.java',
+        'tools/tests/SkinSurfaceSmoke.java', 'tools/tests/SkinDdsGpuSmoke.java',
+        'tools/tests/SkinMaterialEditorStateSmoke.java', 'tools/tests/SkinSurfaceBindingGpuSmoke.java')
+    [IO.File]::WriteAllLines((Join-Path $output 'tests.args'), @($testCompile | ForEach-Object { $_.Replace('\','/') }))
+    & "$JdkHome/bin/javac.exe" ('@'+(Join-Path $output 'tests.args'))
+    if ($LASTEXITCODE -ne 0) { throw 'Skin tool test compilation failed' }
     $run = @('-ea','-Djava.awt.headless=true','--add-opens=java.base/java.net=ALL-UNNAMED',
         '-cp',('"'+$classes+';'+$classpath+'"'),'com.jme3.gde.texturetools.SkinLutSmoke',
         ('"'+$output+'"'),('"'+(Join-Path $classes 'META-INF/generated-layer.xml')+'"'))
@@ -47,6 +64,24 @@ try {
     [IO.File]::WriteAllLines((Join-Path $output 'run.args'), @($run | ForEach-Object { $_.Replace('\','/') }))
     & "$JdkHome/bin/java.exe" ('@'+(Join-Path $output 'run.args'))
     if ($LASTEXITCODE -ne 0) { throw 'Skin LUT smoke failed' }
+    foreach ($entry in @('SkinSurfaceSmoke', 'SkinMaterialEditorStateSmoke')) {
+        $check = @('-ea','-Djava.awt.headless=true','--add-opens=java.base/java.net=ALL-UNNAMED',
+            '-cp',('"'+$testClasspath+'"'),('com.jme3.gde.texturetools.'+$entry),('"'+$output+'"'))
+        [IO.File]::WriteAllLines((Join-Path $output ($entry+'.args')), @($check | ForEach-Object { $_.Replace('\','/') }))
+        & "$JdkHome/bin/java.exe" ('@'+(Join-Path $output ($entry+'.args')))
+        if ($LASTEXITCODE -ne 0) { throw ($entry+' failed') }
+    }
+    if ($VerifyGpu) {
+        $gpu = @('-ea','-Djava.awt.headless=false','--add-opens=java.base/java.net=ALL-UNNAMED')
+        if ($NativeRoot) {
+            $gpu += @('-Dcom.jme3.ExtractNativeLibraries=false',
+                ('"-Dcom.jme3.NativeLibraryExtractionFolder='+[IO.Path]::GetFullPath($NativeRoot)+'"'))
+        }
+        $gpu += @('-cp',('"'+$testClasspath+'"'),'com.jme3.gde.texturetools.SkinSurfaceBindingGpuSmoke')
+        [IO.File]::WriteAllLines((Join-Path $output 'surface-gpu.args'), @($gpu | ForEach-Object { $_.Replace('\','/') }))
+        & "$JdkHome/bin/java.exe" ('@'+(Join-Path $output 'surface-gpu.args'))
+        if ($LASTEXITCODE -ne 0) { throw 'Surface binding native GPU check failed' }
+    }
 } finally {
     Pop-Location
 }

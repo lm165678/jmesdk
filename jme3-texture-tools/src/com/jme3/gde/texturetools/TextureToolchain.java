@@ -83,28 +83,58 @@ public final class TextureToolchain {
      * @return legacy FourCC113 DDS bytes, compatible with DDSLoader
      */
     public static byte[] linearHalfDds(com.jme3.texture.Image image) throws IOException {
-        boolean rgb = image.getFormat() == com.jme3.texture.Image.Format.RGB16F;
-        if ((!rgb && image.getFormat() != com.jme3.texture.Image.Format.RGBA16F)
-                || image.getColorSpace() != com.jme3.texture.image.ColorSpace.Linear
-                || image.getDepth() > 1 || image.getData().size() != 1 || image.hasMipmaps()) {
-            throw new IOException("Linear single-level RGB16F/RGBA16F Image required");
+        return linearHalfDds(List.of(image));
+    }
+
+    /**
+     * Encodes caller-filtered linear half-float mip levels, largest first. It
+     * does not average data or change the single-level LUT export behavior.
+     * 第一步：按数据含义生成各级线性 Image。第二步：传入从大到小的 levels。
+     * 第三步：用 MinTrilinear 读取带 mip 的输出；数值 LUT 仍用单级重载。
+     * @param levels consistently formatted RGB16F or RGBA16F levels
+     * @return FourCC113 DDS containing the supplied mip chain
+     * @throws IOException if dimensions, format or color space are inconsistent
+     */
+    public static byte[] linearHalfDds(List<com.jme3.texture.Image> levels) throws IOException {
+        if (levels.isEmpty()) {
+            throw new IOException("At least one half-float level is required");
         }
+        com.jme3.texture.Image image = levels.get(0);
+        boolean rgb = image.getFormat() == com.jme3.texture.Image.Format.RGB16F;
         int width = image.getWidth();
         int height = image.getHeight();
-        ByteBuffer out = ByteBuffer.allocate(Math.addExact(128, Math.multiplyExact(Math.multiplyExact(width, height), 8)))
+        int bytes = 128;
+        int mipWidth = width;
+        int mipHeight = height;
+        for (com.jme3.texture.Image level : levels) {
+            if ((!rgb && image.getFormat() != com.jme3.texture.Image.Format.RGBA16F)
+                    || level.getFormat() != image.getFormat()
+                    || level.getColorSpace() != com.jme3.texture.image.ColorSpace.Linear
+                    || level.getDepth() > 1 || level.getData().size() != 1 || level.hasMipmaps()
+                    || level.getWidth() != mipWidth || level.getHeight() != mipHeight) {
+                throw new IOException("Consistent linear single-level RGB16F/RGBA16F Images required");
+            }
+            bytes = Math.addExact(bytes, Math.multiplyExact(Math.multiplyExact(mipWidth, mipHeight), 8));
+            mipWidth = Math.max(1, mipWidth / 2);
+            mipHeight = Math.max(1, mipHeight / 2);
+        }
+        boolean mips = levels.size() > 1;
+        ByteBuffer out = ByteBuffer.allocate(bytes)
                 .order(ByteOrder.LITTLE_ENDIAN);
-        out.putInt(0x20534444).putInt(124).putInt(0x100f).putInt(height).putInt(width)
-                .putInt(width * 8).putInt(0).putInt(1);
+        out.putInt(0x20534444).putInt(124).putInt(mips ? 0x2100f : 0x100f).putInt(height).putInt(width)
+                .putInt(width * 8).putInt(0).putInt(levels.size());
         out.position(76);
         out.putInt(32).putInt(4).putInt(113);
         out.position(108);
-        out.putInt(0x1000);
+        out.putInt(mips ? 0x401008 : 0x1000);
         out.position(128);
-        ByteBuffer source = image.getData(0).duplicate().order(image.getData(0).order());
-        source.rewind();
-        for (int i = 0; i < width * height; i++) {
-            out.putShort(source.getShort()).putShort(source.getShort()).putShort(source.getShort());
-            out.putShort(rgb ? (short) 0x3c00 : source.getShort());
+        for (com.jme3.texture.Image level : levels) {
+            ByteBuffer source = level.getData(0).duplicate().order(level.getData(0).order());
+            source.rewind();
+            for (int i = 0; i < level.getWidth() * level.getHeight(); i++) {
+                out.putShort(source.getShort()).putShort(source.getShort()).putShort(source.getShort());
+                out.putShort(rgb ? (short) 0x3c00 : source.getShort());
+            }
         }
         return out.array();
     }
@@ -289,8 +319,8 @@ public final class TextureToolchain {
                 encode(astc, input, output, before, after);
                 return;
             } catch (IOException failure) {
-                if (attempt != 0 || !(failure instanceof ToolFailure nativeFailure)
-                        || nativeFailure.exitCode != -1073741819) {
+                if (attempt != 0 || !(failure instanceof ToolFailure)
+                        || ((ToolFailure) failure).exitCode != -1073741819) {
                     if (firstFailure != null) {
                         failure.addSuppressed(firstFailure);
                     }

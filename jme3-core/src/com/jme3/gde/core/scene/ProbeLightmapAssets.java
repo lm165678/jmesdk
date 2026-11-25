@@ -1,5 +1,6 @@
 package com.jme3.gde.core.scene;
 
+import com.jme3.environment.gi.BakedDirectionalShadow;
 import com.jme3.environment.gi.GiProbeData;
 import com.jme3.environment.gi.GiProbeSet;
 import com.jme3.environment.gi.ProbeLightmapAsset;
@@ -9,7 +10,10 @@ import com.jme3.environment.gi.ProbeLightmapControl;
 import com.jme3.environment.gi.ProbeLightmapRegion;
 import com.jme3.export.binary.BinaryExporter;
 import com.jme3.gde.core.assets.LightmapUvGenerator;
+import com.jme3.light.DirectionalLight;
+import com.jme3.light.Light;
 import com.jme3.math.Transform;
+import com.jme3.renderer.queue.RenderQueue.ShadowMode;
 import com.jme3.post.WorldSettings;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
@@ -24,6 +28,9 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -66,6 +73,11 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private final boolean singleVisibility;
     private final boolean octahedral;
     private final boolean blendSeams;
+    private final List<BakedDirectionalShadow> bakedShadows = new ArrayList<>();
+    private final List<BakedDirectionalShadow> newShadows = new ArrayList<>();
+    private final boolean bakeDirect;
+    private String directNote;
+    private boolean committed;
     private final long budget;
     private final List<ProbeLightmapRegion.Source> sources = new ArrayList<>();
     private List<ProbeLightmapRegion.Source> activeSources = List.of();
@@ -91,7 +103,20 @@ public final class ProbeLightmapAssets implements AutoCloseable {
 
     /** Creates a render-thread bake task with the submitted seam smoothing setting. */
     public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume, boolean blendSeams) {
+        this(app, scene, volume, blendSeams, false, 2048);
+    }
+
+    /**
+     * 第一步：在 Bake & Apply 勾选直射和静态阴影，默认关闭。
+     * 第二步：按渲染线程任务捕获固定方向光遮挡及静态 UV2 直射层。
+     * directShadowSize 控制共享静态深度图的尺寸（64..2048）。探针捕获尺寸单独设置。
+     * 第三步：完成后保存场景以提交快照和贴图引用。取消保留旧快照。
+     * 第四步：取消勾选后重烘焙，恢复原来的实时直接光照和投影。
+     */
+    public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume,
+            boolean blendSeams, boolean bakeDirect, int directShadowSize) {
         this.app = app;
+        this.bakeDirect = bakeDirect;
         this.blendSeams = blendSeams;
         this.scene = scene;
         this.volume = volume;
@@ -118,6 +143,91 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                 remaining.add(geometry);
             }
         });
+        if (bakeDirect && !remaining.isEmpty()) {
+            prepareDirect(Math.max(64, Math.min(directShadowSize, 2048)));
+        }
+    }
+
+    private void prepareDirect(int size) {
+        Set<Light> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<DirectionalLight> lights = new ArrayList<>();
+        List<BakedDirectionalShadow> existing = new ArrayList<>();
+        scene.getRootNode().depthFirstTraversal(spatial -> {
+            if (spatial instanceof GiProbeVolume && spatial != volume) {
+                Collections.addAll(existing, ((GiProbeVolume) spatial).getBakedDirectionalShadows());
+            }
+            for (Light light : spatial.getWorldLightList()) {
+                if (seen.add(light) && light instanceof DirectionalLight && light.isEnabled()
+                        && light.getMobility() == Mobility.Static && light.isCastShadow()) {
+                    lights.add((DirectionalLight) light);
+                }
+            }
+        });
+        for (DirectionalLight light : lights) {
+            if (bakedShadows.size() == BakedDirectionalShadow.MAX_LIGHTS) {
+                directNote = "Additional directional lights remain realtime.";
+                break;
+            }
+            try {
+                BakedDirectionalShadow shared = null;
+                for (BakedDirectionalShadow candidate : existing) {
+                    if (candidate.getLight() == light && candidate.canReuse(scene.getRootNode(), size)) {
+                        shared = candidate;
+                        break;
+                    }
+                }
+                if (shared == null) {
+                    shared = BakedDirectionalShadow.capture(app.getRenderManager(), scene.getRootNode(), light, size);
+                    newShadows.add(shared);
+                }
+                bakedShadows.add(shared);
+            } catch (RuntimeException failure) {
+                directNote = "Static shadow capture skipped: " + failure.getMessage();
+            }
+        }
+        if (lights.isEmpty()) {
+            directNote = "No eligible static shadow-casting directional lights.";
+        }
+    }
+
+    private ProbeLightmapAsset makeMap(Geometry geometry, Geometry proxy, Texture2D indirect, int resolution) {
+        ShadowMode mode = geometry.getShadowMode();
+        if (bakedShadows.isEmpty() || mode != ShadowMode.Receive && mode != ShadowMode.CastAndReceive
+                || !"Common/MatDefs/Light/PBRLighting.j3md".equals(geometry.getMaterial().getMaterialDef().getAssetName())
+                || geometry.getMaterial().isTransparent()
+                || geometry.getMaterial().getAdditionalRenderState().getBlendMode()
+                        != com.jme3.material.RenderState.BlendMode.Off) {
+            return new ProbeLightmapAsset(indirect, true);
+        }
+        List<BakedDirectionalShadow> applied = new ArrayList<>();
+        for (Light light : geometry.getWorldLightList()) {
+            for (BakedDirectionalShadow shadow : bakedShadows) {
+                if (shadow.getLight() == light) {
+                    applied.add(shadow);
+                    break;
+                }
+            }
+        }
+        int limit = app.getRenderManager().getRenderer().getLimits()
+                .getOrDefault(com.jme3.renderer.Limits.TextureSize, 0);
+        if (applied.isEmpty() || (long) resolution * applied.size() > limit) {
+            return new ProbeLightmapAsset(indirect, true);
+        }
+        List<Texture2D> bands = new ArrayList<>();
+        try {
+            for (BakedDirectionalShadow shadow : applied) {
+                bands.add(ProbeLightmapBaker.bakeDirect(app.getRenderManager(), scene.getManager(),
+                        proxy, shadow, resolution, resolution));
+            }
+            return ProbeLightmapAsset.withDirect(indirect, true, bands, applied);
+        } catch (RuntimeException failure) {
+            directNote = "Direct Lightmap skipped for " + geometry.getName() + ": " + failure.getMessage();
+            return new ProbeLightmapAsset(indirect, true);
+        } finally {
+            for (Texture2D band : bands) {
+                band.getImage().dispose();
+            }
+        }
     }
 
     private static boolean supported(Geometry geometry) {
@@ -222,6 +332,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
             }
             Texture2D texture = ProbeLightmapBaker.bakeField(app.getRenderManager(), scene.getManager(),
                     proxy, field, lightmapResolution, lightmapResolution, blendSeams);
+            ProbeLightmapAsset map = makeMap(geometry, proxy, texture, lightmapResolution);
             String key = revision + UUID.randomUUID() + ".j3o";
             outputs.add(new Entry(geometry, source, mesh, transform, key, lightmapResolution));
             write = new CompletableFuture<>();
@@ -234,7 +345,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                             key.substring(0, key.lastIndexOf('/')));
                     Path staging = Files.createTempFile(file.getParent(), "lightmap-", ".tmp");
                     try {
-                        new BinaryExporter().save(new ProbeLightmapAsset(texture, true), staging.toFile());
+                        new BinaryExporter().save(map, staging.toFile());
                         try {
                             Files.move(staging, file, StandardCopyOption.ATOMIC_MOVE);
                         } catch (AtomicMoveNotSupportedException unsupported) {
@@ -249,6 +360,9 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                     pending.complete("Lightmap asset failed for " + key + ": " + failure.getMessage());
                 } finally {
                     texture.getImage().dispose();
+                    if (map.getDirectTexture() != null) {
+                        map.getDirectTexture().getImage().dispose();
+                    }
                 }
             });
         } catch (IOException | RuntimeException failure) {
@@ -269,6 +383,13 @@ public final class ProbeLightmapAssets implements AutoCloseable {
             reading = null;
         }
         closeField();
+        if (!committed) {
+            for (BakedDirectionalShadow shadow : newShadows) {
+                shadow.getDepth().getImage().dispose();
+            }
+            newShadows.clear();
+            bakedShadows.clear();
+        }
     }
 
     private void closeField() {
@@ -280,8 +401,9 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     }
 
     private void commit() {
-        close();
+        closeField();
         int saved = 0;
+        var uvSources = new IdentityHashMap<Geometry, Mesh>();
         if (volume.getData() == data && app.getCurrentSceneRequest() == scene) {
             for (Entry item : outputs) {
                 Geometry geometry = item.geometry();
@@ -293,6 +415,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                     continue;
                 }
                 if (item.mesh() != item.source()) {
+                    uvSources.put(geometry, item.source());
                     geometry.setMesh(item.mesh());
                     geometry.setUserData(LightmapUvGenerator.RESOLUTION_KEY, item.resolution());
                 }
@@ -300,6 +423,22 @@ public final class ProbeLightmapAssets implements AutoCloseable {
                 geometry.addControl(new ProbeLightmapControl(item.key(), item.transform(), 100));
                 saved++;
             }
+        }
+        if (saved > 0) {
+            scene.getRootNode().depthFirstTraversal(spatial -> {
+                if (spatial instanceof GiProbeVolume) {
+                    for (BakedDirectionalShadow shadow : ((GiProbeVolume) spatial).getBakedDirectionalShadows()) {
+                        shadow.acceptUvRemaps(uvSources);
+                    }
+                }
+            });
+            for (BakedDirectionalShadow shadow : bakedShadows) {
+                shadow.acceptUvRemaps(uvSources);
+            }
+            volume.setBakedDirectionalShadows(bakedShadows.toArray(new BakedDirectionalShadow[0]));
+            committed = true;
+        } else {
+            close();
         }
         completed = saved;
     }
@@ -310,6 +449,8 @@ public final class ProbeLightmapAssets implements AutoCloseable {
         return completed == 0 && skipped == 0 ? ""
                 : " Lightmaps saved: " + completed + "; continued with live probes: " + skipped + "."
                         + (completed == 0 ? "" : " Lightmap seam smoothing: " + (blendSeams ? "on." : "off."))
+                        + (bakeDirect ? " Static directional shadow maps: " + bakedShadows.size() + "." : "")
+                        + (directNote == null ? "" : " " + directNote)
                         + (firstFailure == null ? "" : " First Lightmap failure: " + firstFailure + ".");
     }
 }

@@ -57,6 +57,7 @@ public final class SkinSurfaceSmoke {
         var unresolved = SkinSurfaceBaker.bake(open, null, 16, 10, 30);
         check(unresolved.missingExits > 100, "Open surface must be conservative");
         check(unresolved.thickness[128] == 30, "Open surface became transparent");
+        check(unresolved.transmissionCoverage[128] == 0, "Open surface has transmission coverage");
         byte[] lut = Files.readAllBytes(root.resolve("Skin/Target.dds"));
         SkinSurfaceAssets.write(root, "Skin/Surface", "Skin/Target.j3m", maps, 10, 30, 1, 4, false);
         assets.clearCache();
@@ -65,10 +66,39 @@ public final class SkinSurfaceSmoke {
         check(exported.getTextureParam("SkinThicknessMap").getTextureValue().getImage().getColorSpace() == ColorSpace.Linear,
                 "Thickness map must be linear");
         check(exported.getTextureParam("SkinCurvatureMap") != null, "Smooth curvature not assigned");
+        check(exported.getTextureParam("SkinThicknessMap").getTextureValue().getImage().hasMipmaps(), "Thickness mip chain missing");
+        check(exported.getTextureParam("SkinCurvatureMap").getTextureValue().getImage().hasMipmaps(), "Curvature mip chain missing");
+        check(exported.getTextureParam("SkinThicknessMap").getTextureValue().getMinFilter() == com.jme3.texture.Texture.MinFilter.Trilinear,
+                "Surface material does not use mip filtering");
+        var invalid = new com.jme3.texture.Image(com.jme3.texture.Image.Format.RGBA16F, 2, 2,
+                com.jme3.util.BufferUtils.createByteBuffer(32), ColorSpace.Linear);
+        var raster = com.jme3.texture.image.ImageRaster.create(invalid);
+        raster.setPixel(0, 0, new com.jme3.math.ColorRGBA(.1f, .1f, .1f, 1));
+        raster.setPixel(1, 0, new com.jme3.math.ColorRGBA(1, 1, 1, 0));
+        raster.setPixel(0, 1, new com.jme3.math.ColorRGBA(1, 1, 1, 0));
+        raster.setPixel(1, 1, new com.jme3.math.ColorRGBA(1, 1, 1, 0));
+        var coarse = com.jme3.texture.image.ImageRaster.create(SkinSurfaceAssets.mipLevels(invalid, true).get(1)).getPixel(0, 0);
+        check(Math.abs(coarse.r - .1f) < .001f && Math.abs(coarse.a - .25f) < .001f,
+                "Thickness mip averaged unresolved distances or lost coverage");
         check(Arrays.equals(lut, Files.readAllBytes(root.resolve("Skin/Target.dds"))), "Surface export changed LUT");
         check(!Files.exists(root.resolve("Skin/Surface.j3m")), "Surface exporter created a second material");
         new BinaryExporter().save(sphere, root.resolve("head.j3o").toFile());
         final SkinSurfacePanel[] panel = new SkinSurfacePanel[1];
+        final String[] editorText = { Files.readString(root.resolve("Skin/Target.j3m"))
+                .replace("MaterialParameters {", "MaterialParameters {\n        Roughness : 0.73") };
+        final int[] notifications = {0};
+        final Material live = exported.clone();
+        live.setFloat("Roughness", .73f);
+        SkinMaterialUpdates.Listener listener = (path, text) -> {
+            check(SwingUtilities.isEventDispatchThread(), "Editor notification outside EDT");
+            if (path.equals(root.resolve("Skin/Target.j3m"))) {
+                notifications[0]++;
+                editorText[0] = SkinMaterialUpdates.merge(editorText[0], text);
+                assets.clearCache();
+                SkinMaterialUpdates.apply(live, assets.loadMaterial("Skin/Target.j3m"));
+            }
+        };
+        SkinMaterialUpdates.addListener(listener);
         SwingUtilities.invokeAndWait(() -> {
             try {
                 var rootDocument = new javax.swing.text.PlainDocument();
@@ -109,10 +139,34 @@ public final class SkinSurfaceSmoke {
             }
         });
         Path assigned = root.resolve("Skin/UiSurface-thickness.dds");
-        while (!Files.isRegularFile(assigned) && System.nanoTime() < deadline) {
+        while (notifications[0] == 0 && System.nanoTime() < deadline) {
+            SwingUtilities.invokeAndWait(() -> {});
             Thread.sleep(30);
         }
         check(Files.isRegularFile(assigned), "Surface UI export failed");
+        check(notifications[0] == 1, "Export did not update the open editor");
+        check(editorText[0].contains("UiSurface-curvature.dds") && editorText[0].contains("UiSurface-thickness.dds"),
+                "Editor retained stale surface bindings");
+        check(editorText[0].contains("Roughness : 0.73"), "Export discarded an unsaved roughness edit");
+        check(Math.abs((Float) live.getParamValue("Roughness") - .73f) < .001f, "Live update replaced unrelated tuning");
+        check(live.getTextureParam("SkinThicknessMap").getTextureValue().getKey().getName().endsWith("UiSurface-thickness.dds"),
+                "Live material retained old thickness");
+        check(live.getTextureParam("SkinCurvatureMap").getTextureValue().getKey().getName().endsWith("UiSurface-curvature.dds"),
+                "Live material retained old curvature");
+        // A later save of the formerly stale editor must retain the new bindings.
+        Files.writeString(root.resolve("Skin/Target.j3m"), editorText[0]);
+        assets.clearCache();
+        check(assets.loadMaterial("Skin/Target.j3m").getTextureParam("SkinThicknessMap") != null,
+                "Editor save erased generated bindings");
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                SkinMaterialUpdates.publish(root.resolve("Other/Target.j3m"), editorText[0]);
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+        check(notifications[0] == 1, "Update leaked to a different material path");
+        SkinMaterialUpdates.removeListener(listener);
         if (args.length > 1) {
             Path actual = Path.of(args[1]);
             assets.registerLocator(actual.toString(), FileLocator.class);

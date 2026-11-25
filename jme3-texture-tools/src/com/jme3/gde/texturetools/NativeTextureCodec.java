@@ -19,11 +19,11 @@ final class NativeTextureCodec {
         String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch").toLowerCase(Locale.ROOT);
         String host = os.startsWith("windows") ? "windows" : os.startsWith("mac") ? "macos" : os;
-        arch = switch (arch) {
-            case "amd64" -> "x86_64";
-            case "aarch64" -> "arm64";
-            default -> arch;
-        };
+        if ("amd64".equals(arch)) {
+            arch = "x86_64";
+        } else if ("aarch64".equals(arch)) {
+            arch = "arm64";
+        }
         return root.resolve("jni").resolve(host + "-" + arch).resolve(System.mapLibraryName(LIBRARY));
     }
 
@@ -58,14 +58,28 @@ final class NativeTextureCodec {
         header.putInt(0x20534444).putInt(124).putInt(levels > 1 ? 0xa1007 : 0x81007);
         header.putInt(height).putInt(width).putInt(base.length).putInt(0).putInt(levels);
         header.putInt(76, 32).putInt(80, 4);
-        header.putInt(84, switch (codec) {
-            case 1 -> 0x31545844; // DXT1
-            case 2 -> 0x33545844; // DXT3
-            case 3 -> 0x35545844; // DXT5
-            case 4 -> 0x31495441; // ATI1
-            case 5 -> 0x32495441; // ATI2
-            default -> 0x30315844; // DX10
-        });
+        int fourcc;
+        switch (codec) {
+            case 1:
+                fourcc = 0x31545844; // DXT1
+                break;
+            case 2:
+                fourcc = 0x33545844; // DXT3
+                break;
+            case 3:
+                fourcc = 0x35545844; // DXT5
+                break;
+            case 4:
+                fourcc = 0x31495441; // ATI1
+                break;
+            case 5:
+                fourcc = 0x32495441; // ATI2
+                break;
+            default:
+                fourcc = 0x30315844; // DX10
+                break;
+        }
+        header.putInt(84, fourcc);
         header.putInt(108, levels > 1 ? 0x401008 : 0x1000);
         if (codec == 7) {
             header.putInt(128, 98).putInt(132, 3).putInt(140, 1);

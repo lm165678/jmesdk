@@ -75,7 +75,9 @@ final class SkinSurfacePanel extends JPanel {
         fields.add(key);
         JPanel inputs = new JPanel(new BorderLayout());
         inputs.add(fields, BorderLayout.NORTH);
-        inputs.add(new JLabel("<html>Linear R: white = maximum thickness, black = thin.<br>Open or out-of-range rays remain opaque.<br>Curvature uses smooth vertex estimates, not screen derivatives.<br>Save changed material assignments before baking the model.<br>Export enables transmission; turn SkinTransmission off to compare.</html>"), BorderLayout.SOUTH);
+        inputs.add(new JLabel("<html>Linear R: white = maximum thickness, black = thin.<br>Alpha: resolved exit coverage; open/out-of-range regions stay opaque.<br>Thickness uses a conservative ray cone and a smooth connected mesh field.<br>Save changed material assignments before baking the model.<br>Export enables transmission; turn SkinTransmission off to compare.</html>"), BorderLayout.SOUTH);
+        units.setToolTipText("Actual size in millimeters / model size in world units; not ear thickness.");
+        maximum.setToolTipText("Thickness search range in millimeters. No exit in range means opaque, not a thin surface.");
         add(inputs, BorderLayout.WEST);
         add(preview, BorderLayout.CENTER);
         JPanel bottom = new JPanel(new BorderLayout());
@@ -196,18 +198,26 @@ final class SkinSurfacePanel extends JPanel {
         }
         publishing = true;
         busy(true);
-        worker = new SwingWorker<List<Path>, Void>() {
-            protected List<Path> doInBackground() throws Exception {
+        final Path exportRoot = bakedRoot;
+        final String exportMaterial = bakedMaterial;
+        worker = new SwingWorker<SurfaceExport, Void>() {
+            protected SurfaceExport doInBackground() throws Exception {
                 String text = Files.readString(SkinNormalAssets.targetMaterial(bakedRoot, bakedMaterial));
                 var matcher = java.util.regex.Pattern.compile("SkinMaxCurvature\\s*:\\s*([0-9.eE+-]+)").matcher(text);
                 float curvature = matcher.find() ? Float.parseFloat(matcher.group(1)) : 1f;
-                return SkinSurfaceAssets.write(bakedRoot, output, bakedMaterial, result, bakedUnits, bakedMaximum,
+                List<Path> paths = SkinSurfaceAssets.write(exportRoot, output, exportMaterial, result, bakedUnits, bakedMaximum,
                         curvature, border, exists);
+                return new SurfaceExport(paths, Files.readString(SkinNormalAssets.targetMaterial(exportRoot, exportMaterial)));
             }
             protected void done() {
                 try {
-                    var paths = get();
-                    FileUtil.refreshFor(paths.stream().map(Path::toFile).toArray(java.io.File[]::new));
+                    SurfaceExport published = get();
+                    FileUtil.refreshFor(published.paths.stream().map(Path::toFile).toArray(java.io.File[]::new));
+                    SkinAssetSelection bridge = Lookup.getDefault().lookup(SkinAssetSelection.class);
+                    if (bridge != null) {
+                        bridge.surfaceMaterialExported(exportRoot, exportMaterial);
+                    }
+                    SkinMaterialUpdates.publish(exportRoot.resolve(exportMaterial), published.materialText);
                     if (!closed) {
                         status.setText("Assigned thickness + curvature to " + bakedMaterial + "; SkinTransmission enabled.");
                     }
@@ -225,6 +235,16 @@ final class SkinSurfacePanel extends JPanel {
             }
         };
         worker.execute();
+    }
+
+    private static final class SurfaceExport {
+        final List<Path> paths;
+        final String materialText;
+
+        SurfaceExport(List<Path> paths, String materialText) {
+            this.paths = paths;
+            this.materialText = materialText;
+        }
     }
 
     private void busy(boolean value) {
