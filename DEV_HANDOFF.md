@@ -1,3 +1,9 @@
+## 2026-11-25 source publication pairing
+
+- Compatible implementation pair: engine 3c0f5779a47c8fcbbd8b77b12bd50c240874200c (dev_fix_lightprobe_issue), SDK 9c95440ad8c98e9cbb864fa117ad760b952ea117 (master). Documentation-only commits may follow. Both include isolated skin work and the dependency/UV/bake reconstruction changes below; prior uncommitted-state notes are historical.
+- User requested publishing the local source to the lm165678 forks. Local generated deployment/applet ZIPs, nbm revision metadata, extracted templates/baselibs/testdata and logs are excluded and preserved locally. Existing tracked native-bundles and licenses remain unchanged; no new JNI ABI/binary package was needed.
+- Validation is the targeted Java11/SDK/JNI/Swing/OpenGL work already recorded below, plus publication diff/index checks. No new SDK build/export/install/launch or original-project writes. Export the matching engine before rebuilding SDK; verify remote branch tips after push before reporting success.
+
 ## 2026-11-25 pure-Java skin LUT and normal-prefilter tabs
 
 - Added Tools / Textures / Pre-integrated Skin Tools to texture-tools through its own Action registration. LUT generation and Normal prefiltering share immutable snapshots of editable Gaussian weights/RGB distances. Reference fit is attributed to GPU Gems3; light/medium-warm/dark presets are artistic starting points, not measured population standards. Skin color still uses BaseColor/BaseColorMap. Profile changes invalidate/cancel stale normal results.
