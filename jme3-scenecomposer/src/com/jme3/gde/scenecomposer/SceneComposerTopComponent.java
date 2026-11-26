@@ -440,9 +440,9 @@ public final class SceneComposerTopComponent extends TopComponent implements
         cameraPanel.setBorder(javax.swing.BorderFactory.createTitledBorder(org.openide.util.NbBundle.getMessage(SceneComposerTopComponent.class, "SceneComposerTopComponent.cameraPanel.border.title"))); // NOI18N
 
         jSlider1.setMaximum(2000);
-        jSlider1.setMinimum(100);
+        jSlider1.setMinimum(10);
         jSlider1.setToolTipText(org.openide.util.NbBundle.getMessage(SceneComposerTopComponent.class, "SceneComposerTopComponent.jSlider1.toolTipText")); // NOI18N
-        jSlider1.setValue(1000);
+        jSlider1.setValue(10);
         jSlider1.addChangeListener(new javax.swing.event.ChangeListener() {
             public void stateChanged(javax.swing.event.ChangeEvent evt) {
                 jSlider1StateChanged(evt);
@@ -458,7 +458,7 @@ public final class SceneComposerTopComponent extends TopComponent implements
             }
         });
 
-        jSpinner1.setModel(new javax.swing.SpinnerNumberModel(0.1f, null, null, 0.01f));
+        jSpinner1.setModel(new javax.swing.SpinnerNumberModel(0.01f, null, null, 0.01f));
         jSpinner1.addChangeListener(new javax.swing.event.ChangeListener() {
             public void stateChanged(javax.swing.event.ChangeEvent evt) {
                 jSpinner1StateChanged(evt);
@@ -1215,6 +1215,21 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
         cam.setFrustumPerspective(fov, (float)cam.getWidth() / cam.getHeight(), cam.getFrustumNear(), spin);
     }//GEN-LAST:event_jSpinner2StateChanged
 
+    /** Opening SceneComposer applies the Camera / Near Plane value on the render thread.
+     * 打开 SceneComposer 后，Camera / Near Plane 默认为 0.01，可在该处手动调整。
+     */
+    private static void applyPerspectiveNearPlane(Camera camera, float near) {
+        float previousNear = camera.getFrustumNear();
+        if (camera.isParallelProjection() || previousNear <= 0f
+                || !(near > 0f && near < camera.getFrustumFar()) || previousNear == near) {
+            return;
+        }
+        float scale = near / previousNear;
+        camera.setFrustum(near, camera.getFrustumFar(), camera.getFrustumLeft() * scale,
+                camera.getFrustumRight() * scale, camera.getFrustumTop() * scale,
+                camera.getFrustumBottom() * scale);
+    }
+
     private void jSpinner1StateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_jSpinner1StateChanged
         // This is called, when the spinner of the near plane has been changed.
         float near = ((float)jSlider1.getValue() / 1000f);
@@ -1743,6 +1758,14 @@ private void jToggleSelectGeomActionPerformed(java.awt.event.ActionEvent evt) {/
             camController.setToolController(toolController);
             camController.setMaster(this);
             camController.enable();
+            float near = ((Number) jSpinner1.getValue()).floatValue();
+            SceneApplication app = SceneApplication.getApplication();
+            app.enqueue(() -> {
+                if (app.getCurrentSceneRequest() == request) {
+                    applyPerspectiveNearPlane(app.getCamera(), near);
+                }
+                return null;
+            });
             SceneViewerTopComponent.findInstance().offerEditorGuide();
             
             cameraPositionTrackerAppState = new CameraPositionTrackerAppState(cameraPositionLabel, cameraDirectionLabel);

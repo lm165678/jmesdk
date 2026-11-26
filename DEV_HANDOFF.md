@@ -172,6 +172,8 @@
 
 ## 待办：3DViewer 多选变换与 Merge（2026-11-24）
 
+2026-11-26 排期更新：右键 Merge → Instance 在 SkyLight、天空大气和体积雾全部完成并验收后开始。
+
 - [ ] 在 3DViewer 中 Ctrl + 点击加入选择，Shift + 点击移除该物体。视口与 Scene Explorer 同步多选。变换手柄显示在最后一个仍选中的物体上，拖动手柄时对整组选中物体应用平移、旋转或缩放，以手柄位置为旋转和缩放的枢轴。验证不同父节点下的世界变换、父子同时选中时不叠加变换，以及整组操作的撤销和重做。
 - [ ] 多选后从 Scene Explorer 节点树或 3DViewer 右键菜单进入同一个 Merge 配置对话框，选择 Batch 或 Instance。执行前显示参与对象、预计结果及无法合并的对象。
 - [ ] Batch 合并顶点和索引。必须显式选择目标材质，即使源物体材质及参数不同。按目标材质的纹理槽自动生成图集并重映射 UV，依据目标材质默认值和纹理通道语义补齐缺失参数。无法可靠映射的材质参数应在确认前提示，避免合并后才发现外观丢失。
@@ -1043,6 +1045,8 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 
 ## 待办：完善地形编辑器（2026-11-22）
 
+2026-11-26 排期更新：SkyLight、天空大气和体积雾全部完成并验收后，先完善地形，再开发植被画刷。
+
 - [ ] 先盘点现有新建/导入、地形画刷、材质绘制及保存能力，结合实际场景确认最影响使用的缺口和优先级。
 - [ ] 优先验收高度与材质编辑的笔刷反馈、撤销/重做和保存重载。再评估大地形编辑性能、分块边缘、碰撞同步及新版渲染路径的预览；将确认的问题拆成独立任务。
 - 下次继续 SDK 地形工具、Terrain、画刷或大地形集成时，主动提醒用户这项待办。引擎侧 VT（含 LightProbe 烘焙评估）和 Virtual Shadow Maps 见引擎的 `RENDERING_QUALITY_ROADMAP.md`。本次仅登记计划，无实现或构建。
@@ -1166,3 +1170,16 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - J3M MaterialPreviewWidget opts into device-pixel sizing and 2x supersampling on each axis. A multi-resolution icon retains its logical label size and supplies an image matching the monitor scale. Resize and monitor changes request a new preview. Other MaterialPreviewRenderer callers retain the default policy; no 3DViewer or shared preview framebuffer source changed.
 - Targeted JDK25 compilation and isolated RTX5080 OpenGL4.3 MATERIAL_PREVIEW_DPI_PASS passed at 100/125/150/200 percent, checking render dimensions, logical icon dimensions, physical variants and blended silhouette pixels. The test also checks that the old constructor does not opt in. Full installed-editor interaction and moving between physical monitors remain unverified. SDK build/install/launch was not performed.
 - Source pairing uses the current SDK and engine HEAD shown in this commit's parent history. Local unrelated skin/lightmap edits are retained.
+
+## 2026-11-26 SceneComposer preview near clip
+
+- Camera / Near Plane defaults to 0.01 in the Java spinner and NetBeans form. Opening a scene applies the inspector value to the perspective preview camera on the render thread and preserves its field of view and far clip. Orthographic projection and game cameras are unaffected.
+- Isolated JDK 25 Swing and camera math check passed on SDK eaf71114 / engine 497d775fb plus local changes. Full SDK build and launch were not performed.
+
+## 待办：室外渲染完成后的场景制作工具（2026-11-26）
+
+- 前置里程碑：先完成并验收 SkyLight、天空大气、体积雾，再启动本批工作。
+- [ ] 完善地形编辑器，沿用本文已有地形待办，优先验证高度与材质画刷、撤销/重做和保存重载。
+- [ ] 开发植被画刷，支持选择植被资产、刷入和擦除、密度与坡度约束、随机旋转与缩放。验收成组撤销/重做、J3O 重载和大面积实例化预览。
+- [ ] 开发 Scene Explorer 和 3DViewer 多选后的右键 Merge → Instance，沿用本文已有 Merge 待办。按兼容网格和材质分组，保留世界变换，支持整组撤销/重做及 J3O 重载。
+- 后续继续 SkyLight、天空大气或体积雾时，验收全部前置功能后再提醒这三项。当前仅登记计划。
