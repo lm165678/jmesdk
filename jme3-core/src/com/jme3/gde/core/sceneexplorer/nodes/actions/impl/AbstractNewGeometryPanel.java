@@ -163,19 +163,14 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
      * 第一步：从 Spawn / Spatial 拖入基本几何体，或右键 Add Spatial / Primitives 创建。
      * 第二步：确认尺寸后，编辑器会创建质量为 0 的碰撞体；在 Physics 面板可替换形状。
      * 第三步：移动、旋转和缩放后保存 J3O。游戏读取时需使用兼容的 Minie 版本。
-     * 普通几何体默认选用 PBR，Metallic 为 0.5。创建对话框可改选其他 .j3md。
+     * 普通几何体默认选用 PBR，BaseColor 为白色，Metallic 为 0.5。
+     * 可勾选随机颜色或改选其他 .j3md。
      * </pre>
      */
     public Geometry handleGeometry(ProjectAssetManager assetManager, Mesh m) {
         Geometry geom = new Geometry(inGeomName.getText(), m);
-        ColorRGBA col;
-        
-        if (inRandomColor.isSelected()) {
-            col = ColorRGBA.randomColor();
-        } else {
-            // @TODO: Add a Color Picker Dialog and preserve the state
-            col = ColorRGBA.Red;
-        }
+        boolean randomColor = inRandomColor.isSelected();
+        ColorRGBA col = randomColor ? ColorRGBA.randomColor() : ColorRGBA.Red;
         
         Material mat = new Material(assetManager, inMatDef.getSelectedItem().toString());
         switch (inMatDef.getSelectedItem().toString()) {
@@ -186,10 +181,13 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
                 mat.setColor("Diffuse", col);
                 break;
             case PBR_MATERIAL_DEF:
-                mat.setColor("BaseColor", col);
                 if (m.getBuffer(Type.Normal) != null) {
                     mat.setFloat("Metallic", 0.5f);
+                    if (!randomColor) {
+                        col = ColorRGBA.White.clone();
+                    }
                 }
+                mat.setColor("BaseColor", col);
                 break;
         }
         
