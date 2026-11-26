@@ -108,6 +108,10 @@ public final class GiInspectorBakeCheck {
         }).get(30, TimeUnit.SECONDS);
         verifyLightmapMipPanel();
         verifyWorldSettingsPanel();
+        if (Boolean.getBoolean("jme.test.lightmapDefaultsOnly")) {
+            verifyDirectionalBakeDefault();
+            return;
+        }
         showVolume(volume);
         waitFor(() -> button(inspector, "Cancel") != null && startButton().isEnabled(), "First inspector initialization");
         SwingUtilities.invokeAndWait(() -> {
@@ -123,7 +127,8 @@ public final class GiInspectorBakeCheck {
             radius.setValue(2);
             require(samples.isEnabled(), "Positive radius should enable sampling quality");
             samples.setValue(5);
-            require(!directionalBakeOption().isSelected(), "Directional Lightmaps should default off");
+            require(directionalBakeOption().isSelected(), "Directional Lightmaps should default on");
+            directionalBakeOption().doClick(0);
             directionalBakeOption().doClick(0);
         });
         showVolume(volume);
@@ -141,7 +146,8 @@ public final class GiInspectorBakeCheck {
         SwingUtilities.invokeAndWait(() -> {
             require(bakeField("Lightmap shadow radius (texels)").getValue().equals(0), "Other volume radius");
             require(bakeField("Soft shadow samples per axis").getValue().equals(3), "Other volume sample density");
-            require(!directionalBakeOption().isSelected(), "Directional bake setting leaked across volumes");
+            require(directionalBakeOption().isSelected(), "Other volume did not default to directional baking");
+            directionalBakeOption().doClick(0);
         });
         var queued = startAndHide(other);
         require(queued.message().startsWith("Waiting"), "Second volume did not queue: " + queued.message());
@@ -224,6 +230,32 @@ public final class GiInspectorBakeCheck {
         return button(inspector, "Bake directional indirect Lightmaps", JCheckBox.class);
     }
 
+    private static void verifyDirectionalBakeDefault() throws Exception {
+        showVolume(volume);
+        waitFor(() -> startButton().isEnabled(), "Default directional bake inspector");
+        SwingUtilities.invokeAndWait(() -> {
+            require(directionalBakeOption().isSelected(), "Directional bake did not default on");
+            directionalBakeOption().doClick(0);
+        });
+        showVolume(other);
+        waitFor(() -> startButton().isEnabled(), "Other volume default inspector");
+        SwingUtilities.invokeAndWait(() -> require(directionalBakeOption().isSelected(), "Other volume default changed"));
+        showVolume(volume);
+        waitFor(() -> startButton().isEnabled(), "Restore explicit directional bake off");
+        SwingUtilities.invokeAndWait(() -> require(!directionalBakeOption().isSelected(), "Explicit bake off was not restored"));
+        app.enqueue(() -> {
+            var bytes = new java.io.ByteArrayOutputStream();
+            new com.jme3.export.binary.BinaryExporter().save(app.getCurrentSceneRequest().getRootNode(), bytes);
+            var importer = new com.jme3.export.binary.BinaryImporter();
+            importer.setAssetManager(app.getAssetManager());
+            var restored = (Node) importer.load(new java.io.ByteArrayInputStream(bytes.toByteArray()));
+            require(Boolean.FALSE.equals(restored.getChild("Fixture volume").getUserData("jme.sdk.giBake.bakeDirectionalIndirect")),
+                    "Explicit bake off was lost in J3O");
+            return null;
+        }).get(10, TimeUnit.SECONDS);
+        System.out.println("LIGHTMAP_THREE_DEFAULTS_AND_OFF_RESTORE_PASS");
+    }
+
     private static void verifyLightmapMipPanel() throws Exception {
         Class<?> type = Class.forName("com.jme3.gde.scenecomposer.EditorLightmapPanel");
         var constructor = type.getDeclaredConstructor(Runnable.class);
@@ -231,7 +263,7 @@ public final class GiInspectorBakeCheck {
         var clear = new java.util.concurrent.atomic.AtomicBoolean();
         var option = new java.util.concurrent.atomic.AtomicReference<JCheckBox>();
         var directional = new java.util.concurrent.atomic.AtomicReference<JCheckBox>();
-        for (boolean initial : new boolean[]{false, true, false}) {
+        for (boolean initial : new boolean[]{true, false, true, false}) {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     JPanel panel = (JPanel) constructor.newInstance((Runnable) () -> clear.set(true));

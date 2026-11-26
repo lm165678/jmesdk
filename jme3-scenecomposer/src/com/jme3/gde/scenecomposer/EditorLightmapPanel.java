@@ -16,15 +16,15 @@ import javax.swing.JPanel;
 
 /**
  * 第一步：在 SceneComposer 展开 Baked Lightmaps。
- * 第二步：勾选 Use Lightmap mipmaps，从下一次预览开始使用已烘焙的 mip。
+ * 第二步：Use Lightmap mipmaps 默认勾选，使用已烘焙的 mip。
  * 第三步：取消勾选恢复原图采样，无需重烘焙。未包含 mip 的旧贴图始终采样原图。
- * 第四步：勾选 Directional indirect Lightmaps 使用已烘焙的方向数据，默认关闭。
+ * 第四步：Directional indirect Lightmaps 默认勾选，使用已烘焙的方向数据。
  * 取消勾选立即恢复原 RGB Lightmap。无方向数据的接收体保持原效果。
  * 第五步：保存场景 J3O，把这两个场景级开关保存供游戏加载。
  */
 final class EditorLightmapPanel extends JPanel implements SceneListener {
-    private final JCheckBox useMipmaps = new JCheckBox("Use Lightmap mipmaps");
-    private final JCheckBox useDirectional = new JCheckBox("Directional indirect Lightmaps");
+    private final JCheckBox useMipmaps = new JCheckBox("Use Lightmap mipmaps", WorldSettings.DEFAULT_LIGHTMAP_MIP_ENABLED);
+    private final JCheckBox useDirectional = new JCheckBox("Directional indirect Lightmaps", WorldSettings.DEFAULT_DIRECTIONAL_LIGHTMAP_ENABLED);
     private SceneRequest scene;
 
     EditorLightmapPanel(Runnable clear) {
@@ -59,7 +59,7 @@ final class EditorLightmapPanel extends JPanel implements SceneListener {
             }
             var root = request.getRootNode();
             WorldSettings world = root.getControl(WorldSettings.class);
-            if ((world != null && current.test(world)) == enabled) {
+            if ((world == null || current.test(world)) == enabled) {
                 return null;
             }
             if (world == null) {
@@ -81,8 +81,8 @@ final class EditorLightmapPanel extends JPanel implements SceneListener {
                     && request.getJmeNode() != null && !request.getJmeNode().isReadOnly();
             WorldSettings world = request == null || request.getRootNode() == null
                     ? null : request.getRootNode().getControl(WorldSettings.class);
-            boolean mipmaps = world != null && world.isLightmapMipEnabled();
-            boolean directional = world != null && world.isDirectionalLightmapEnabled();
+            boolean mipmaps = world == null ? WorldSettings.DEFAULT_LIGHTMAP_MIP_ENABLED : world.isLightmapMipEnabled();
+            boolean directional = world == null ? WorldSettings.DEFAULT_DIRECTIONAL_LIGHTMAP_ENABLED : world.isDirectionalLightmapEnabled();
             EventQueue.invokeLater(() -> {
                 if (isDisplayable() && app.getCurrentSceneRequest() == request) {
                     scene = editable ? request : null;

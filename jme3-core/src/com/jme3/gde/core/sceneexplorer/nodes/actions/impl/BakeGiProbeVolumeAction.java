@@ -246,9 +246,9 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JSpinner shadowSamples = spinner(fields, "Soft shadow samples per axis", 3, 2, 8);
         shadowSamples.setToolTipText("2 to 8 samples per axis at the same radius. Higher values increase bake time.");
         shadowSamples.setEnabled(false);
-        JCheckBox bakeDirectionalIndirect = new JCheckBox("Bake directional indirect Lightmaps", false);
+        JCheckBox bakeDirectionalIndirect = new JCheckBox("Bake directional indirect Lightmaps", true);
         bakeDirectionalIndirect.setToolTipText("Bake optional direction data for normal-mapped static PBR receivers. "
-                + "Enable Directional indirect Lightmaps in Baked Lightmaps to preview after the bake.");
+                + "Enabled by default; Directional indirect Lightmaps controls playback after the bake.");
         fields.add(bakeDirectionalIndirect);
         fields.add(new JLabel());
         JCheckBox compact = new JCheckBox("Normalized half precision", true);
