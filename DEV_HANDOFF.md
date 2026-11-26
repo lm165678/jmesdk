@@ -1,3 +1,24 @@
+## 2026-11-27 paired engine and SDK revisions
+
+- SDK implementation `bd1d544b8e1d7d6f3fab16a7b06325bde3170668` on `master` pairs with engine implementation `e5de03810df9a059d5c9e9b109259df2a5325fd9` on `dev_sky_fog_sytem`. Use the matching engine export for both the SDK and game libraries.
+- This pair includes SDR output and Lightmap defaults, desktop display selection fixes, and SDK ANGLE staging. The handoff below records the isolated checks. SDK builds remain user-owned, and generated build outputs and local version metadata stay outside these commits.
+
+## 2026-11-27 default SDR game display output
+
+- The Post processing Game display output selector and editor owner start new scenes at SDR. The paired engine WorldSettings constructor uses SDR. Saving an untouched new selection writes SDR to the scene. Existing explicit HDR/SDR/Application and the old missing-field fallback keep their behavior. Global HDR / FPP and the preview sRGB/dither controls are independent.
+- Targeted JDK 25 compilation and isolated PostAntiAliasingSmoke passed. The check covers initial SDR, restoring UI defaults, explicit HDR restoration, and J3O round trips for all three modes. Log: `build/sdr-default-check/test-with-netbeans-flags.log`. SDK base `53beae8f3`, engine base `6b128e37c` plus the local edits. No SDK build or launch.
+
+## 2026-11-27 ANGLE in the pre-extracted SDK native directory
+
+- The SDK configured the engine to load pre-extracted natives as soon as it located Bullet. The build populated that directory with Bullet only, so changing to ANGLE failed even though its dependency JAR was present. The same Gradle Sync now stages both from the resolved engine runtime and checks the ANGLE payload for Windows, Linux and macOS on x86_64 and arm64. The EGL and GLES basenames are kept, with Windows compiler DLLs and the upstream notices beside them.
+- The isolated `prepareSdkPhysicsNatives` task ran successfully, including all six ANGLE targets and the existing Bullet files. Windows x86_64 was copied into the existing SDK build cluster after checking every file against the deployed ANGLE JAR by SHA-256. A standalone probe using that exact cluster classpath and native directory with engine extraction disabled initialized SDL/ANGLE on the RTX 5080 and presented 12 frames. Logs under ignored `build/angle-native-check`. Other targets were checked for staging only.
+- SDK source change works with the existing local engine export. Run the existing SDK again to use the repaired build cluster. Future builds pick up the Gradle change. No full SDK build or module replacement is needed for the existing cluster. A running SDK that already failed initialization should be restarted.
+
+## 2026-11-26 default-on Lightmap playback and directional bake
+
+- Use Lightmap mipmaps, Directional indirect Lightmaps and Bake directional indirect Lightmaps now start checked. The paired engine WorldSettings defaults both playback flags and missing serialized fields to true; no-WorldSettings runtime and editor paths use the same defaults. Explicit false remains saved/restored. Volume bake user-data choices remain per-volume, including false. Existing base-only/RGB-only assets retain fallback; enabling playback does not generate missing bake data.
+- Engine three-case mip/default serialization test passed. The isolated AWT/OpenGL GiInspectorBakeCheck supports -Djme.test.lightmapDefaultsOnly=true: both playback toggle/reopen markers and LIGHTMAP_THREE_DEFAULTS_AND_OFF_RESTORE_PASS passed. This includes per-volume explicit bake-off restoration and J3O persistence. The earlier full bake harness timed out at Bake while hidden, so full rebake/queue acceptance was not re-established. Build-only logs/argument files: build/lightmap-defaults-check. No SDK build/export/install/launch or original asset writes; local uncommitted source changes require the matching engine/SDK when the user rebuilds.
+
 ## 2026-11-26 PBR defaults for new SDK geometry
 
 - The shared SceneComposer Spawn and SceneExplorer right-click actions preselect PBR Lighting for Box, Cylinder, Line, Quad and Sphere. The creation dialog offers the built-in definitions and the current project's discovered .j3md files, including dependencies, with duplicates removed. Built-in PBR materials for these surfaces start at Metallic 0.5 with white BaseColor (1, 1, 1, 1). Selecting random color uses a random BaseColor. The other selected material definitions use their authored defaults. Line is included because its mesh supplies surface normals. WireBox, WireSphere and specialized scene helpers keep their original creation paths. Existing scene materials retain their authored values.
