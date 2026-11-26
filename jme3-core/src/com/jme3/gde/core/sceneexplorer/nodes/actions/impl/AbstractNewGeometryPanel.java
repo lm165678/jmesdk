@@ -36,6 +36,10 @@ import com.jme3.material.Material;
 import com.jme3.math.ColorRGBA;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Mesh;
+import com.jme3.scene.VertexBuffer.Type;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import javax.swing.DefaultComboBoxModel;
 
 /**
  * This is the base Panel to be used within every "New Geometry/Primitive" dialogue
@@ -44,12 +48,28 @@ import com.jme3.scene.Mesh;
  * @author MeFisto94
  */
 public class AbstractNewGeometryPanel extends javax.swing.JPanel {
+    private static final String PBR_MATERIAL_DEF = "Common/MatDefs/Light/PBRLighting.j3md";
 
     /**
      * Creates new form AbstractNewGeometryPanel
      */
     public AbstractNewGeometryPanel() {
         initComponents();
+    }
+
+    /**
+     * Refreshes the ordinary geometry dialog's material choices for the current project.
+     * Call on the EDT before showing the creation dialog.
+     */
+    void prepareSurfaceMaterials(ProjectAssetManager assetManager) {
+        var definitions = new LinkedHashSet<String>();
+        definitions.add(PBR_MATERIAL_DEF);
+        definitions.add("Common/MatDefs/Light/Lighting.j3md");
+        definitions.add("Common/MatDefs/Misc/Unshaded.j3md");
+        if (assetManager != null) {
+            definitions.addAll(Arrays.asList(assetManager.getMatDefs()));
+        }
+        inMatDef.setModel(new DefaultComboBoxModel<>(definitions.toArray(String[]::new)));
     }
 
     /**
@@ -143,6 +163,7 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
      * 第一步：从 Spawn / Spatial 拖入基本几何体，或右键 Add Spatial / Primitives 创建。
      * 第二步：确认尺寸后，编辑器会创建质量为 0 的碰撞体；在 Physics 面板可替换形状。
      * 第三步：移动、旋转和缩放后保存 J3O。游戏读取时需使用兼容的 Minie 版本。
+     * 普通几何体默认选用 PBR，Metallic 为 0.5。创建对话框可改选其他 .j3md。
      * </pre>
      */
     public Geometry handleGeometry(ProjectAssetManager assetManager, Mesh m) {
@@ -164,8 +185,11 @@ public class AbstractNewGeometryPanel extends javax.swing.JPanel {
             case "Common/MatDefs/Light/Lighting.j3md":
                 mat.setColor("Diffuse", col);
                 break;
-            case "Common/MatDefs/Light/PBRLighting.j3md":
+            case PBR_MATERIAL_DEF:
                 mat.setColor("BaseColor", col);
+                if (m.getBuffer(Type.Normal) != null) {
+                    mat.setFloat("Metallic", 0.5f);
+                }
                 break;
         }
         

@@ -66,6 +66,7 @@ public class NewGeometryCylinderAction extends AbstractNewSpatialAction implemen
 
     @Override
     protected boolean prepareCreateSpatial() {
+        form.getNewGeomPanel().prepareSurfaceMaterials(pm);
         String msg = "Create new Cylinder";
         DialogDescriptor dd = new DialogDescriptor(form, msg);
         Object result = DialogDisplayer.getDefault().notify(dd);

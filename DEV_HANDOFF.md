@@ -1,3 +1,9 @@
+## 2026-11-26 PBR defaults for new SDK geometry
+
+- The shared SceneComposer Spawn and SceneExplorer right-click actions preselect PBR Lighting for Box, Cylinder, Line, Quad and Sphere. The creation dialog offers the built-in definitions and the current project's discovered .j3md files, including dependencies, with duplicates removed. Built-in PBR materials for these surfaces start at Metallic 0.5. The other selected material definitions use their authored defaults. Line is included because its mesh supplies surface normals. WireBox, WireSphere and specialized scene helpers keep their original creation paths. Existing scene materials retain their authored values.
+- Read-only TestScene2 pixel A/B on the saved dynamic Cube isolated the baked diffuse contribution. The old material's Metallic 1 suppressed it even with probes bound. At Metallic 0.5 the cube read linear RGB 0.031816 / 0.025378 / 0.019226 with GI, and zero with GI off. The fixture changed materials in memory, leaving the scene and material assets untouched. Log: engine build/spawn-gi-check/cube-half-metal.log.
+- Targeted JDK25 SDK compile and isolated Swing/Minie check covered all five creation dialogs, WireBox, custom definitions, fallback choices, static colliders and the PBR material export/reload at Metallic 0.5. The isolated harness invoked the creation actions with a test DialogDisplayer. Full installed SDK interaction remains for the user build and restart.
+
 ## 2026-11-26 directional indirect Lightmap controls
 
 - Compatible implementation revisions: engine `8e2c63fe9ae54028bd87f79948d121e6555e4c91` and SDK `8e95dd2d4e260c22561a3ecfcde2e5ec219922e4`. Use the matching engine for the editor and game. The optional direction data is separate from direct light and static shadow baking.

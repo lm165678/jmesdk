@@ -68,6 +68,7 @@ public class NewGeometryLineAction extends AbstractNewSpatialAction implements N
 
     @Override
     protected boolean prepareCreateSpatial() {
+        form.getNewGeomPanel().prepareSurfaceMaterials(pm);
         String msg = "Create new Line";
         DialogDescriptor dd = new DialogDescriptor(form, msg);
         Object result = DialogDisplayer.getDefault().notify(dd);

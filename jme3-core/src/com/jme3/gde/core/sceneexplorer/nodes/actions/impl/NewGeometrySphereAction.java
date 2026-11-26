@@ -69,6 +69,7 @@ public class NewGeometrySphereAction extends AbstractNewSpatialAction implements
 
     @Override
     protected boolean prepareCreateSpatial() {
+        form.getNewGeomPanel().prepareSurfaceMaterials(pm);
         String msg = "Create new Sphere";
         DialogDescriptor dd = new DialogDescriptor(form, msg);
         Object result = DialogDisplayer.getDefault().notify(dd);

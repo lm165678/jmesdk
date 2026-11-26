@@ -61,6 +61,7 @@ public class NewGeometryBoxAction extends AbstractNewSpatialAction implements Ne
 
     @Override
     protected boolean prepareCreateSpatial() {
+        form.getNewGeomPanel().prepareSurfaceMaterials(pm);
         String msg = "Create new Box";
         DialogDescriptor dd = new DialogDescriptor(form, msg);
         Object result = DialogDisplayer.getDefault().notify(dd);
