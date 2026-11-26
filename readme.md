@@ -155,7 +155,7 @@ SDK 向导新建的 Gradle 项目仍由向导选择版本；本次没有改写�
 - SDK AWT/Canvas 预览在 Windows/Linux 默认请求 OpenGL 4.3，让 GPU tiled 实际使用 compute/SSBO；
   macOS 默认 3.3。旧显卡可在 SDK 启动参数加入 `-J-Djme.sdk.previewOpenGL=3.3` 并重启，
   此时 GPU tiled 自动回退 CPU；缺少 4.3 的机器必须显式选择这个兼容模式。
-- Minie 物理原生库在构建时打包到 `jme3-core-baselibs/release/native-libs/`，运行时通过
+- Minie 和 ANGLE 原生库在构建时打包到 `jme3-core-baselibs/release/native-libs/`，运行时通过
   NetBeans 模块定位、使用引擎预提取加载接口，避免本机临时目录权限检查阻止预览启动。
   显式设置 `com.jme3.NativeLibraryExtractionFolder` 时尊重用户配置。
 - 属性面板以只读摘要显示 SDF 网格尺寸和表面卡片缓存，防止字符串编辑器损坏 Savable 数据。

@@ -664,20 +664,58 @@ tasks.register('updateNetbeans', Exec) {
     }
 }
 
-// Bundle Minie desktop natives at build time. Runtime uses the engine's supported
-// pre-extracted-library mode, avoiding writes to shared temporary/cache folders.
-tasks.register('prepareSdkPhysicsNatives', Sync) {
-    from({ configurations.corelibs.files.findAll { it.name.startsWith('Libbulletjme-') }.collect { zipTree(it) } })
-    include 'native/**/bulletjme.dll', 'native/**/libbulletjme.so', 'native/**/libbulletjme.dylib'
-    includeEmptyDirs = false
-    eachFile { details ->
-        def parts = details.relativePath.segments
-        def architecture = parts[parts.length - 2]
-        def filename = parts[parts.length - 1]
-        def suffix = filename.lastIndexOf('.')
-        def renamed = filename.substring(0, suffix) + '-' + architecture + filename.substring(suffix)
-        details.relativePath = new org.gradle.api.file.RelativePath(true, parts[1], architecture, renamed)
+def sdkAngleEntries = ['windows': ['libEGL.dll', 'libGLESv2.dll', 'd3dcompiler_47.dll', 'dxcompiler.dll', 'dxil.dll'],
+        'linux': ['libEGL.so', 'libGLESv2.so'],
+        'osx': ['libEGL.dylib', 'libGLESv2.dylib']].collectMany { os, libraries ->
+    ['x86_64', 'arm64'].collectMany { arch ->
+        (libraries + ['LICENSE.ANGLE', 'ANGLE_BUILD_INFO.txt']).collect { name ->
+            "native/angle/${os}/${arch}/${name}".toString()
+        }
     }
+}
+def sdkAngleArchive = providers.provider {
+    def artifact = configurations.corelibs.resolvedConfiguration.resolvedArtifacts.find {
+        it.moduleVersion.id.group == 'org.ngengine' && it.name == 'angle-natives' && !it.classifier
+    }
+    if (artifact == null) {
+        throw new GradleException('The SDK engine runtime is missing the ANGLE native archive.')
+    }
+    artifact.file
+}
+
+// The engine's pre-extracted mode uses one directory for Bullet and ANGLE.
+tasks.register('prepareSdkPhysicsNatives', Sync) {
+    description = 'Stages Bullet and ANGLE desktop natives for the SDK.'
+    from({ configurations.corelibs.files.findAll { it.name.startsWith('Libbulletjme-') }.collect { zipTree(it) } }) {
+        include 'native/**/bulletjme.dll', 'native/**/libbulletjme.so', 'native/**/libbulletjme.dylib'
+        eachFile { details ->
+            def parts = details.relativePath.segments
+            def architecture = parts[parts.length - 2]
+            def filename = parts[parts.length - 1]
+            def suffix = filename.lastIndexOf('.')
+            def renamed = filename.substring(0, suffix) + '-' + architecture + filename.substring(suffix)
+            details.relativePath = new org.gradle.api.file.RelativePath(true, parts[1], architecture, renamed)
+        }
+    }
+    from(sdkAngleArchive.map { zipTree(it) }) {
+        include sdkAngleEntries
+        eachFile { details ->
+            def parts = details.relativePath.segments
+            details.relativePath = new org.gradle.api.file.RelativePath(true, parts[2], parts[3], parts[4])
+        }
+    }
+    inputs.file(sdkAngleArchive)
+    doFirst {
+        new ZipFile(sdkAngleArchive.get()).withCloseable { archive ->
+            sdkAngleEntries.each { path ->
+                def entry = archive.getEntry(path)
+                if (entry == null || entry.size <= 0) {
+                    throw new GradleException("Incomplete SDK ANGLE archive: missing payload ${path}")
+                }
+            }
+        }
+    }
+    includeEmptyDirs = false
     into 'jme3-core-baselibs/release/native-libs'
 }
 

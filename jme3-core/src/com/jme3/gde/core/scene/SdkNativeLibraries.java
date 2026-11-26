@@ -11,7 +11,7 @@ import org.openide.modules.InstalledFileLocator;
  * native loader. An explicit engine extraction-folder property takes precedence.
  * If this platform is not bundled, the ordinary engine loader remains active.
  * <pre>{@code
- * // 第一步：Gradle prepareSdkPhysicsNatives 将依赖原生库放入模块 release/native-libs。
+ * // 第一步：Gradle prepareSdkPhysicsNatives 将 Bullet 和 ANGLE 放入模块 release/native-libs。
  * // 第二步：SDK 启动时先配置打包目录，再创建 SceneApplication 的图形上下文。
  * SdkNativeLibraries.configure();
  * // 独立验证可用 -Djme.sdk.nativeDirectory=.../release/native-libs 指定同一目录。
