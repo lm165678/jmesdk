@@ -3,11 +3,12 @@ package com.jme3.gde.scenecomposer;
 import com.jme3.gde.core.scene.SceneApplication;
 import com.jme3.gde.core.util.EditorMessages;
 import com.jme3.gde.core.util.InspectorColumns;
+import com.jme3.post.WorldSettings.DisplayOutput;
 import javax.swing.*;
 
 /**
  * Scene settings controls; updates are serialized with the scene root WorldSettings.
- * 第一步：在 Post processing 选择 Game display output，新场景默认 HDR (scRGB)。
+ * 第一步：在 Post processing 选择 Game display output，新场景默认 SDR。
  * 已保存的场景恢复原有选择；不支持 HDR 时自动使用 SDR。
  * 第二步：保存 J3O。游戏加载并挂载场景后，自动应用所选输出。
  * 第三步：Windows 兼容视口选 HDR 时直接预览。选 SDR 或跟随应用设置恢复 SDR 预览。
@@ -43,8 +44,8 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
             EditorMessages.text("PostGameDisplayOutputHdr")
         });
         inputs.put("GameDisplayOutput", gameOutput);
-        defaults.put("GameDisplayOutput", 2d);
-        gameOutput.setSelectedIndex(2);
+        defaults.put("GameDisplayOutput", (double) DisplayOutput.Sdr.ordinal());
+        gameOutput.setSelectedIndex(DisplayOutput.Sdr.ordinal());
         row(global, "GameDisplayOutput", gameOutput);
         gameOutput.addActionListener(event -> send("GameDisplayOutput", gameOutput.getSelectedIndex()));
         stack.add(global);

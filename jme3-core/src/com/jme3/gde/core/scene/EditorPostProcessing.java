@@ -34,8 +34,8 @@ import java.util.Map;
  * 第七步：勾选 Legacy reference 查看旧的固定 ToneMap+FXAA；取消恢复新链及参数。
  * Shader sRGB output 开关只控制编辑器主 AWT 视口，默认开启；显式关闭可恢复旧输出。
  * 开启后先在线性浮点目标合成，再由 shader 编码读回；关闭恢复硬件 sRGB 目标。
- * 该 shader 预览选项随编辑器配置保存。新场景默认选择 Game display output 的 HDR (scRGB)，
- * 可在 Windows HDR 3DViewer 中直接预览，同时把游戏输出保存到 WorldSettings。
+ * 该 shader 预览选项随编辑器配置保存。新场景的 Game display output 默认选择 SDR。
+ * 选择 HDR (scRGB) 可在兼容的 Windows 3DViewer 中预览，游戏输出保存到 WorldSettings。
  * 新链支持曲线选择、饱和度、对比度和 RGB Gain，最后由呈现阶段编码一次。
  * Upscaling 默认 Off；选择 FSR1/FSR2 并调整 Render resolution scale，GUI 保持输出尺寸。
  * FSR2 自动旁路普通 TAA/FXAA，关闭后恢复原选择；FSR1 保留前置抗锯齿。
@@ -72,7 +72,7 @@ final class EditorPostProcessing {
     private boolean enabled = true;
     private boolean lit = true;
     private boolean supported = true;
-    private DisplayOutput gameDisplayOutput = DisplayOutput.Hdr;
+    private DisplayOutput gameDisplayOutput = DisplayOutput.Sdr;
 
     EditorPostProcessing(SceneApplication app) {
         this.app = app;
@@ -385,7 +385,7 @@ final class EditorPostProcessing {
         legacyProcessor = null;
         filters.clear();
         options.clear();
-        gameDisplayOutput = DisplayOutput.Hdr;
+        gameDisplayOutput = DisplayOutput.Sdr;
         owner = null;
     }
 

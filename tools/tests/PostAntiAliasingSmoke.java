@@ -37,6 +37,14 @@ public final class PostAntiAliasingSmoke {
         Field owner = EditorPostProcessing.class.getDeclaredField("owner");
         owner.setAccessible(true);
         owner.set(editor, request);
+        if (new WorldSettings().getDisplayOutput() != DisplayOutput.Sdr) {
+            throw new AssertionError("New WorldSettings must default to SDR");
+        }
+        editor.saveSettings(request, true);
+        Geometry defaultRoundTrip = BinaryExporter.saveAndLoad(assets, scene);
+        if (defaultRoundTrip.getControl(WorldSettings.class).getDisplayOutput() != DisplayOutput.Sdr) {
+            throw new AssertionError("New scenes must save SDR without changing the output selector");
+        }
         editor.configure("TAACurrentWeight", .2);
         editor.configure("TAABaseVelocity", 0);
         editor.configure("TAATransparentVelocity", 0);
@@ -117,14 +125,18 @@ public final class PostAntiAliasingSmoke {
             field.setAccessible(true);
             Map<String, JComponent> inputs = (Map<String, JComponent>) field.get(panel);
             JCheckBox film = (JCheckBox) inputs.get("FilmLutTonemap");
+            JComboBox<?> output = (JComboBox<?>) inputs.get("GameDisplayOutput");
+            if (output.getSelectedIndex() != DisplayOutput.Sdr.ordinal()) {
+                throw new AssertionError("The output selector must start at SDR");
+            }
             var apply = type.getDeclaredMethod("applySettings", Map.class);
             apply.setAccessible(true);
             apply.invoke(panel, Map.of());
-            if (!film.isEnabled() || film.isSelected() || inputs.get("FilmSlope").isEnabled()) {
-                throw new AssertionError("Film toggle must be usable when disabled");
+            if (!film.isEnabled() || film.isSelected() || inputs.get("FilmSlope").isEnabled()
+                    || output.getSelectedIndex() != DisplayOutput.Sdr.ordinal()) {
+                throw new AssertionError("The default Film and output controls have the wrong state");
             }
             apply.invoke(panel, Map.of("FilmLutTonemap", 1d, "GameDisplayOutput", 2d));
-            JComboBox<?> output = (JComboBox<?>) inputs.get("GameDisplayOutput");
             if (!film.isEnabled() || !film.isSelected() || !inputs.get("FilmSlope").isEnabled()
                     || inputs.get("FilmicCurve").isEnabled() || output.getSelectedIndex() != 2) {
                 throw new AssertionError("Restored film LUT and output controls have the wrong state");

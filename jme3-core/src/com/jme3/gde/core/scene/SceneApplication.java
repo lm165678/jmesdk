@@ -345,7 +345,7 @@ public class SceneApplication extends LegacyApplication implements LookupProvide
 
     /**
      * Stores the active scene's display choice before export, on the render thread.
-     * 第一步：保存场景前调用此方法；未操作过下拉框的新场景也会保存默认 HDR。
+     * 第一步：保存场景前调用此方法；未操作过下拉框的新场景也会保存默认 SDR。
      * 第二步：导出 J3O，游戏加载并挂载后由 SimpleApplication 自动应用。
      * Other assets and existing post-processing filters are left unchanged.
      *
