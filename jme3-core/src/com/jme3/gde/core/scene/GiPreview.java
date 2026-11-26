@@ -27,6 +27,7 @@ final class GiPreview implements AutoCloseable {
     private long nextId;
     private int atlasMiB;
     private boolean spatialBricks;
+    private boolean directionalLightmapsActive;
     private volatile String status = "";
 
     GiProbeData getProbeData(GiProbeVolume volume) {
@@ -155,6 +156,13 @@ final class GiPreview implements AutoCloseable {
                 return false;
             });
             lightmaps.addAll(seenLightmaps);
+            boolean directional = previewWorld != null && previewWorld.isDirectionalLightmapEnabled();
+            if (directional || directionalLightmapsActive) {
+                for (var lightmap : lightmaps) {
+                    lightmap.updateDirectionalResidency(request.getManager(), directional);
+                }
+                directionalLightmapsActive = directional;
+            }
             Iterator<Map.Entry<GiProbeVolume, Source>> iterator = sources.entrySet().iterator();
             while (iterator.hasNext()) {
                 Map.Entry<GiProbeVolume, Source> entry = iterator.next();
@@ -209,6 +217,7 @@ final class GiPreview implements AutoCloseable {
     public void close() {
         lightmaps.forEach(com.jme3.environment.gi.ProbeLightmapControl::clearResidency);
         lightmaps.clear();
+        directionalLightmapsActive = false;
         if (stream != null) {
             stream.close();
             stream = null;

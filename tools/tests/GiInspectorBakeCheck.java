@@ -87,6 +87,15 @@ public final class GiInspectorBakeCheck {
             floor.setMobility(com.jme3.scene.Mobility.Static);
             floor.setUserData(com.jme3.gde.core.assets.LightmapUvGenerator.RESOLUTION_KEY, 64);
             floor.setMaterial(new com.jme3.material.Material(app.getAssetManager(), "Common/MatDefs/Light/PBRLighting.j3md"));
+            var normalPixels = com.jme3.util.BufferUtils.createByteBuffer(16);
+            for (int pixel = 0; pixel < 4; pixel++) {
+                normalPixels.put((byte) 128).put((byte) 128).put((byte) 255).put((byte) 255);
+            }
+            normalPixels.flip();
+            var normalImage = new com.jme3.texture.Image(com.jme3.texture.Image.Format.RGBA8, 2, 2,
+                    normalPixels, com.jme3.texture.image.ColorSpace.Linear);
+            floor.getMaterial().setTexture("NormalMap", new com.jme3.texture.Texture2D(normalImage));
+            com.jme3.util.mikktspace.MikktspaceTangentGenerator.generate(floor);
             scene.attachChild(floor);
             scene.updateGeometricState();
             var request = new SceneRequest(new Object(), scene, manager);
@@ -114,6 +123,8 @@ public final class GiInspectorBakeCheck {
             radius.setValue(2);
             require(samples.isEnabled(), "Positive radius should enable sampling quality");
             samples.setValue(5);
+            require(!directionalBakeOption().isSelected(), "Directional Lightmaps should default off");
+            directionalBakeOption().doClick(0);
         });
         showVolume(volume);
         waitFor(() -> startButton().isEnabled(), "Seam settings restored");
@@ -121,6 +132,7 @@ public final class GiInspectorBakeCheck {
         SwingUtilities.invokeAndWait(() -> {
             require(bakeField("Lightmap shadow radius (texels)").getValue().equals(2), "Reopened radius");
             require(bakeField("Soft shadow samples per axis").getValue().equals(5), "Reopened sample density");
+            require(directionalBakeOption().isSelected(), "Reopened panel lost directional bake setting");
         });
         var first = startAndHide(volume);
         showVolume(other);
@@ -129,6 +141,7 @@ public final class GiInspectorBakeCheck {
         SwingUtilities.invokeAndWait(() -> {
             require(bakeField("Lightmap shadow radius (texels)").getValue().equals(0), "Other volume radius");
             require(bakeField("Soft shadow samples per axis").getValue().equals(3), "Other volume sample density");
+            require(!directionalBakeOption().isSelected(), "Directional bake setting leaked across volumes");
         });
         var queued = startAndHide(other);
         require(queued.message().startsWith("Waiting"), "Second volume did not queue: " + queued.message());
@@ -138,6 +151,17 @@ public final class GiInspectorBakeCheck {
         require(queued.message().startsWith("Bake complete. Saved"), queued.message());
         require(first.message().contains("Lightmap seam smoothing: off."), first.message());
         require(queued.message().contains("Lightmap seam smoothing: on."), queued.message());
+        require(first.message().contains("Directional Lightmaps saved: 1."), first.message());
+        require(!queued.message().contains("Directional Lightmaps saved:"), queued.message());
+        try (var files = Files.walk(work.resolve("GI/Lightmaps"))) {
+            var companions = files.filter(path -> path.toString().endsWith("-direction.j3o")).toList();
+            require(companions.size() == 1, "Expected one directional companion: " + companions);
+            var texture = (com.jme3.texture.Texture2D) new com.jme3.export.binary.BinaryImporter()
+                    .load(companions.get(0).toFile());
+            require(texture.getImage().getFormat() == com.jme3.texture.Image.Format.RGBA16F
+                    && texture.getImage().getWidth() == 64 && texture.getImage().getHeight() == 64,
+                    "Invalid directional companion image");
+        }
         try (var revisions = Files.list(work.resolve("GI/Streaming"))) {
             require(revisions.filter(Files::isDirectory).count() == 2, "Expected separate fine brick asset revisions");
         }
@@ -159,8 +183,11 @@ public final class GiInspectorBakeCheck {
             require(Integer.valueOf(2).equals(savedVolume.getUserData("jme.sdk.giBake.lightmapShadowRadius"))
                     && Integer.valueOf(5).equals(savedVolume.getUserData("jme.sdk.giBake.lightmapShadowSamplesPerAxis")),
                     "J3O round trip lost soft shadow options");
+            require(Boolean.TRUE.equals(savedVolume.getUserData("jme.sdk.giBake.bakeDirectionalIndirect")),
+                    "J3O round trip lost directional bake setting");
             var world = restored.getControl(com.jme3.post.WorldSettings.class);
             require(world.isLightmapMipEnabled(), "Round trip lost the Lightmap mipmaps switch");
+            require(world.isDirectionalLightmapEnabled(), "Round trip lost the directional playback switch");
             var settings = world.getGiStreaming();
             require(settings.getMaxFineProbes() == 2048 && settings.getPreloadDistance() == 32
                     && settings.getAtlasMiB() == 32, "Round trip lost the SceneComposer settings");
@@ -193,18 +220,24 @@ public final class GiInspectorBakeCheck {
         System.out.println("GI_INSPECTOR_BACKGROUND_PROGRESS_QUEUE_CANCEL_PASS");
     }
 
+    private static JCheckBox directionalBakeOption() {
+        return button(inspector, "Bake directional indirect Lightmaps", JCheckBox.class);
+    }
+
     private static void verifyLightmapMipPanel() throws Exception {
         Class<?> type = Class.forName("com.jme3.gde.scenecomposer.EditorLightmapPanel");
         var constructor = type.getDeclaredConstructor(Runnable.class);
         constructor.setAccessible(true);
         var clear = new java.util.concurrent.atomic.AtomicBoolean();
         var option = new java.util.concurrent.atomic.AtomicReference<JCheckBox>();
+        var directional = new java.util.concurrent.atomic.AtomicReference<JCheckBox>();
         for (boolean initial : new boolean[]{false, true, false}) {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     JPanel panel = (JPanel) constructor.newInstance((Runnable) () -> clear.set(true));
                     option.set(button(panel, "Use Lightmap mipmaps", JCheckBox.class));
-                    require(option.get() != null, "No Lightmap mipmaps checkbox");
+                    directional.set(button(panel, "Directional indirect Lightmaps", JCheckBox.class));
+                    require(option.get() != null && directional.get() != null, "Missing Lightmap playback options");
                     holder.removeAll();
                     holder.add(panel);
                     holder.revalidate();
@@ -212,18 +245,25 @@ public final class GiInspectorBakeCheck {
                     throw new IllegalStateException(error);
                 }
             });
-            waitFor(() -> option.get().isEnabled(), "Lightmap settings panel did not load");
+            waitFor(() -> option.get().isEnabled() && directional.get().isEnabled(),
+                    "Lightmap settings panel did not load");
             SwingUtilities.invokeAndWait(() -> {
                 require(option.get().isSelected() == initial, "Lightmap mipmaps checkbox did not restore its state");
+                require(directional.get().isSelected() == initial, "Could not restore directional playback state");
                 option.get().doClick(0);
+                directional.get().doClick(0);
             });
             require(app.enqueue(() -> app.getCurrentSceneRequest().getRootNode()
                     .getControl(com.jme3.post.WorldSettings.class).isLightmapMipEnabled() != initial)
                     .get(10, TimeUnit.SECONDS), "Lightmap mipmaps toggle did not reach the active scene");
+            require(app.enqueue(() -> app.getCurrentSceneRequest().getRootNode()
+                    .getControl(com.jme3.post.WorldSettings.class).isDirectionalLightmapEnabled() != initial)
+                    .get(10, TimeUnit.SECONDS), "Directional playback toggle did not reach the active scene");
         }
         require(!clear.get(), "Mipmap toggle cleared the Lightmap bindings");
         SwingUtilities.invokeAndWait(() -> require(file.isModified(), "Changed mipmaps preference was not marked for save"));
         System.out.println("LIGHTMAP_MIP_INSPECTOR_SWITCH_PASS");
+        System.out.println("DIRECTIONAL_LIGHTMAP_INSPECTOR_SWITCH_PASS");
     }
 
     private static void verifyWorldSettingsPanel() throws Exception {

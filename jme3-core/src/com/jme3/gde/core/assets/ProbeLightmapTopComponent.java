@@ -34,7 +34,8 @@ import org.openide.windows.TopComponent;
 public final class ProbeLightmapTopComponent extends TopComponent {
     public enum Channel {
         IRRADIANCE("Irradiance"), COVERAGE("Coverage"),
-        SKY_VISIBILITY("Sky Visibility"), BENT_DIRECTION("Bent Direction");
+        SKY_VISIBILITY("Sky Visibility"), BENT_DIRECTION("Bent Direction"),
+        INDIRECT_DIRECTION("Indirect Direction");
 
         private final String text;
 
@@ -128,11 +129,14 @@ public final class ProbeLightmapTopComponent extends TopComponent {
                 }
                 try {
                     ProbeLightmapAsset loaded = get();
-                    channel.addItem(Channel.IRRADIANCE);
-                    channel.addItem(Channel.COVERAGE);
-                    if (loaded.hasSkyBand()) {
-                        channel.addItem(Channel.SKY_VISIBILITY);
-                        channel.addItem(Channel.BENT_DIRECTION);
+                    Channel first = primaryChannel(file);
+                    channel.addItem(first);
+                    if (first == Channel.IRRADIANCE) {
+                        channel.addItem(Channel.COVERAGE);
+                        if (loaded.hasSkyBand()) {
+                            channel.addItem(Channel.SKY_VISIBILITY);
+                            channel.addItem(Channel.BENT_DIRECTION);
+                        }
                     }
                     asset = loaded;
                     channel.setEnabled(true);
@@ -215,12 +219,18 @@ public final class ProbeLightmapTopComponent extends TopComponent {
         }
     }
 
+    /** Selects the view for a generated directional companion or a regular Lightmap. */
+    public static Channel primaryChannel(FileObject file) {
+        return file.getName().endsWith("-direction") ? Channel.INDIRECT_DIRECTION : Channel.IRRADIANCE;
+    }
+
     public static BufferedImage renderImage(ProbeLightmapAsset asset, Channel channel, float exposure) {
         var image = asset.getTexture().getImage();
         var pixels = image.getData(0).duplicate().order(ByteOrder.nativeOrder());
         int width = image.getWidth();
         int height = image.getHeight() / (asset.hasSkyBand() ? 2 : 1);
         boolean sky = channel == Channel.SKY_VISIBILITY || channel == Channel.BENT_DIRECTION;
+        boolean signedDirection = sky || channel == Channel.INDIRECT_DIRECTION;
         if (sky && !asset.hasSkyBand()) {
             throw new IllegalArgumentException("This lightmap has no sky band");
         }
@@ -238,10 +248,10 @@ public final class ProbeLightmapTopComponent extends TopComponent {
                 if (channel == Channel.COVERAGE || channel == Channel.SKY_VISIBILITY) {
                     int value = toChannel(sky && coverage > 0 ? f16(pixels, sample + 6) : coverage);
                     color = value * 0x010101;
-                } else if (coverage > 0) {
+                } else if (coverage > 0 || channel == Channel.INDIRECT_DIRECTION) {
                     for (int c = 0; c < 3; c++) {
                         float value = f16(pixels, sample + c * 2);
-                        color = color << 8 | toChannel(sky ? value * .5f + .5f : toneMap(value * gain));
+                        color = color << 8 | toChannel(signedDirection ? value * .5f + .5f : toneMap(value * gain));
                     }
                 }
                 picture.setRGB(x, height - y - 1, color);

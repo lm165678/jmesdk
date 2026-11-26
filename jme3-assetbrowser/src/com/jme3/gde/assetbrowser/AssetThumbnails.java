@@ -232,7 +232,7 @@ final class AssetThumbnails implements AutoCloseable {
             case LIGHTMAP -> {
                 var lightmap = com.jme3.gde.core.assets.ProbeLightmapTopComponent.readLightmap(file);
                 yield fit(com.jme3.gde.core.assets.ProbeLightmapTopComponent.renderImage(lightmap,
-                        com.jme3.gde.core.assets.ProbeLightmapTopComponent.Channel.IRRADIANCE, 0));
+                        com.jme3.gde.core.assets.ProbeLightmapTopComponent.primaryChannel(file), 0));
             }
             case AUDIO -> java.util.Set.of("mp3", "mp4", "m4a", "aac", "flac")
                     .contains(file.getExt().toLowerCase(java.util.Locale.ROOT))

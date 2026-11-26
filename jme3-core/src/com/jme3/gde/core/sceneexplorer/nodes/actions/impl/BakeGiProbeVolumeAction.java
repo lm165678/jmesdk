@@ -72,6 +72,8 @@ import org.openide.util.lookup.ServiceProvider;
  * 第八步：选中 GI Light Probe Volume，在烘焙面板勾选 Smooth Lightmap seams，默认开启。
  * 点击 Bake & Apply 后，新烘焙的静态 Lightmap 会混合平滑共享边两侧的 UV2 接缝。
  * 可取消勾选并重烘焙做对照；完成提示会显示开关状态，保存场景可保留配方和贴图引用。
+ * 第九步：勾选 Bake directional indirect Lightmaps 并烘焙，可为带法线贴图的静态 PBR 表面生成独立方向数据。
+ * 该烘焙选项默认关闭，不改变现有 Lightmap；生成后在 Baked Lightmaps 中切换播放，可即时比较。
  * </pre>
  */
 @ServiceProvider(service = ToolAction.class)
@@ -244,6 +246,11 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JSpinner shadowSamples = spinner(fields, "Soft shadow samples per axis", 3, 2, 8);
         shadowSamples.setToolTipText("2 to 8 samples per axis at the same radius. Higher values increase bake time.");
         shadowSamples.setEnabled(false);
+        JCheckBox bakeDirectionalIndirect = new JCheckBox("Bake directional indirect Lightmaps", false);
+        bakeDirectionalIndirect.setToolTipText("Bake optional direction data for normal-mapped static PBR receivers. "
+                + "Enable Directional indirect Lightmaps in Baked Lightmaps to preview after the bake.");
+        fields.add(bakeDirectionalIndirect);
+        fields.add(new JLabel());
         JCheckBox compact = new JCheckBox("Normalized half precision", true);
         JCheckBox placement = new JCheckBox("Classify / relocate probes", true);
         fields.add(compact);
@@ -301,6 +308,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         bakeOptions.put("captureShadows", shadows);
         bakeOptions.put("smoothLightmapSeams", smoothLightmapSeams);
         bakeOptions.put("bakeDirectShadows", bakeDirectShadows);
+        bakeOptions.put("bakeDirectionalIndirect", bakeDirectionalIndirect);
         bakeOptions.put("lightmapShadowMapSize", lightmapShadowSize);
         bakeOptions.put("lightmapShadowRadius", shadowRadius);
         bakeOptions.put("lightmapShadowSamplesPerAxis", shadowSamples);
@@ -493,6 +501,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             quality.shadowMapSize = (Integer) shadowSize.getValue();
             boolean blendSeams = smoothLightmapSeams.isSelected();
             boolean bakeDirect = bakeDirectShadows.isSelected();
+            boolean directionalIndirect = bakeDirectionalIndirect.isSelected();
             int directShadowSize = (Integer) lightmapShadowSize.getValue();
             int radius = (Integer) shadowRadius.getValue();
             int samplesPerAxis = (Integer) shadowSamples.getValue();
@@ -503,7 +512,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             SceneRequest request = app.getCurrentSceneRequest();
             QUEUE.addLast(new PendingBake(bake,
                     () -> startBake(app, request, volume, file, quality, layout, blendSeams, bakeDirect,
-                            directShadowSize, radius, samplesPerAxis, nanos, bake)));
+                            directShadowSize, radius, samplesPerAxis, directionalIndirect, nanos, bake)));
             startNextBake();
             refreshBake.run();
         });
@@ -525,7 +534,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
     private static void startBake(SceneApplication app, SceneRequest request, GiProbeVolume volume, DataObject file,
             GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout,
             boolean blendSeams, boolean bakeDirect, int directShadowSize, int radius, int samplesPerAxis,
-            long nanos, BakeSession bake) {
+            boolean directionalIndirect, long nanos, BakeSession bake) {
         app.enqueue(() -> {
             if (request == null || request != app.getCurrentSceneRequest() || request.getDataObject() != file
                     || !isInScene(request, volume) || bake.isCancelled()) {
@@ -591,7 +600,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                         }
                         if (lightmaps == null && job.step(nanos)) {
                             lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(
-                                    app, request, volume, blendSeams, bakeDirect, directShadowSize, radius, samplesPerAxis);
+                                    app, request, volume, blendSeams, bakeDirect, directShadowSize, radius,
+                                    samplesPerAxis, directionalIndirect);
                         }
                         if (bake.isCancelled()) {
                             finish("Cancelled. Save or rebake the probe data as needed.");
