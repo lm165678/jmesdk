@@ -105,14 +105,31 @@ public final class GiInspectorBakeCheck {
             JCheckBox seams = seamOption();
             require(seams.isSelected(), "Lightmap seam smoothing must default on");
             seams.doClick(0);
+            JCheckBox direct = button(inspector, "Bake direct lighting and static shadows", JCheckBox.class);
+            JSpinner radius = bakeField("Lightmap shadow radius (texels)");
+            JSpinner samples = bakeField("Soft shadow samples per axis");
+            require(!radius.isEnabled() && !samples.isEnabled(), "Indirect bake enabled soft shadows");
+            direct.doClick(0);
+            require(radius.isEnabled() && !samples.isEnabled(), "Zero radius should disable sampling quality");
+            radius.setValue(2);
+            require(samples.isEnabled(), "Positive radius should enable sampling quality");
+            samples.setValue(5);
         });
         showVolume(volume);
         waitFor(() -> startButton().isEnabled(), "Seam settings restored");
         SwingUtilities.invokeAndWait(() -> require(!seamOption().isSelected(), "Reopened panel lost seam setting"));
+        SwingUtilities.invokeAndWait(() -> {
+            require(bakeField("Lightmap shadow radius (texels)").getValue().equals(2), "Reopened radius");
+            require(bakeField("Soft shadow samples per axis").getValue().equals(5), "Reopened sample density");
+        });
         var first = startAndHide(volume);
         showVolume(other);
         waitFor(() -> startButton().isEnabled(), "Second volume inspector initialization");
         SwingUtilities.invokeAndWait(() -> require(seamOption().isSelected(), "Seam setting leaked across volumes"));
+        SwingUtilities.invokeAndWait(() -> {
+            require(bakeField("Lightmap shadow radius (texels)").getValue().equals(0), "Other volume radius");
+            require(bakeField("Soft shadow samples per axis").getValue().equals(3), "Other volume sample density");
+        });
         var queued = startAndHide(other);
         require(queued.message().startsWith("Waiting"), "Second volume did not queue: " + queued.message());
         waitFor(() -> !first.isRunning(), "Bake while hidden");
@@ -138,6 +155,10 @@ public final class GiInspectorBakeCheck {
                     "Round trip lost an overlapping bake directory");
             require(Boolean.FALSE.equals(restored.getChild("Fixture volume").getUserData("jme.sdk.giBake.smoothLightmapSeams")),
                     "J3O round trip lost the seam smoothing setting");
+            var savedVolume = restored.getChild("Fixture volume");
+            require(Integer.valueOf(2).equals(savedVolume.getUserData("jme.sdk.giBake.lightmapShadowRadius"))
+                    && Integer.valueOf(5).equals(savedVolume.getUserData("jme.sdk.giBake.lightmapShadowSamplesPerAxis")),
+                    "J3O round trip lost soft shadow options");
             var world = restored.getControl(com.jme3.post.WorldSettings.class);
             require(world.isLightmapMipEnabled(), "Round trip lost the Lightmap mipmaps switch");
             var settings = world.getGiStreaming();
@@ -273,6 +294,19 @@ public final class GiInspectorBakeCheck {
 
     private static JButton startButton() {
         return button(inspector, com.jme3.gde.core.util.EditorMessages.text("GiBakeApply"));
+    }
+
+    private static JSpinner bakeField(String title) {
+        Container rows = seamOption().getParent();
+        Component[] cells = rows.getComponents();
+        for (int i = 0; i + 1 < cells.length; i++) {
+            if (cells[i] instanceof JLabel label && title.equals(label.getText())
+                    && cells[i + 1] instanceof JSpinner spinner) {
+                require(label.getY() == spinner.getY(), title + " wraps to another row");
+                return spinner;
+            }
+        }
+        throw new AssertionError("Missing field " + title);
     }
 
     private static JCheckBox seamOption() {

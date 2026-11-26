@@ -48,6 +48,7 @@ import org.openide.util.lookup.ServiceProvider;
  * Probe shadow map size 默认 512，控制探针捕获的临时阴影图和预算。
  * 启用 Bake direct lighting and static shadows 后，Lightmap shadow map size
  * 默认 2048，单独控制写入 UV2 直射层前的静态方向光遮挡精度。完成后保存场景。
+ * 调大 Lightmap shadow radius 后可提高 Samples per axis 细化过渡；半径 0 重烘焙恢复原效果。
  * 第四步：Surface probe layout 默认关闭；开启时按表面自由布点，使用全精度数据，
  * 不创建规则加密块。Counts 此时表示分桶尺寸和总槽位预算；橙色点表示实际表面探针。
  * 保存 J3O 及 GI 外部文件后自动恢复；关闭开关并重新烘焙恢复规则布局。
@@ -237,6 +238,12 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JSpinner lightmapShadowSize = spinner(fields, "Lightmap shadow map size", 2048, 64, 2048);
         lightmapShadowSize.setToolTipText("Shared static directional depth for baked direct Lightmaps. Default 2048. Independent of probe capture and UV2 texture size.");
         lightmapShadowSize.setEnabled(false);
+        JSpinner shadowRadius = spinner(fields, "Lightmap shadow radius (texels)", 0, 0, 8);
+        shadowRadius.setToolTipText("Filter radius in shadow map texels. Zero keeps the original edge. Rebake to apply.");
+        shadowRadius.setEnabled(false);
+        JSpinner shadowSamples = spinner(fields, "Soft shadow samples per axis", 3, 2, 8);
+        shadowSamples.setToolTipText("2 to 8 samples per axis at the same radius. Higher values increase bake time.");
+        shadowSamples.setEnabled(false);
         JCheckBox compact = new JCheckBox("Normalized half precision", true);
         JCheckBox placement = new JCheckBox("Classify / relocate probes", true);
         fields.add(compact);
@@ -295,6 +302,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         bakeOptions.put("smoothLightmapSeams", smoothLightmapSeams);
         bakeOptions.put("bakeDirectShadows", bakeDirectShadows);
         bakeOptions.put("lightmapShadowMapSize", lightmapShadowSize);
+        bakeOptions.put("lightmapShadowRadius", shadowRadius);
+        bakeOptions.put("lightmapShadowSamplesPerAxis", shadowSamples);
         bakeOptions.put("compactStorage", compact);
         bakeOptions.put("classifyProbes", placement);
         bakeOptions.put("adaptiveRefinement", adaptive);
@@ -343,7 +352,10 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             boolean editable = !busy;
             bakeOptions.values().forEach(widget -> widget.setEnabled(editable));
             shadowSize.setEnabled(editable && shadows.isSelected());
-            lightmapShadowSize.setEnabled(editable && bakeDirectShadows.isSelected());
+            boolean editDirect = editable && bakeDirectShadows.isSelected();
+            lightmapShadowSize.setEnabled(editDirect);
+            shadowRadius.setEnabled(editDirect);
+            shadowSamples.setEnabled(editDirect && (Integer) shadowRadius.getValue() > 0);
             countX.setEnabled(editable);
             countY.setEnabled(editable);
             countZ.setEnabled(editable);
@@ -356,6 +368,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         };
         shadows.addItemListener(event -> refreshBake.run());
         bakeDirectShadows.addItemListener(event -> refreshBake.run());
+        shadowRadius.addChangeListener(event -> refreshBake.run());
         refreshBake.run();
         SceneApplication.getApplication().enqueue(() -> {
             boolean surfaceMode = volume.isSurfaceLayout();
@@ -481,6 +494,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             boolean blendSeams = smoothLightmapSeams.isSelected();
             boolean bakeDirect = bakeDirectShadows.isSelected();
             int directShadowSize = (Integer) lightmapShadowSize.getValue();
+            int radius = (Integer) shadowRadius.getValue();
+            int samplesPerAxis = (Integer) shadowSamples.getValue();
             long nanos = ((Integer) budget.getValue()).longValue() * 1_000_000L;
             var bake = new BakeSession(volume.getName());
             BAKES.put(volume, bake);
@@ -488,7 +503,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
             SceneRequest request = app.getCurrentSceneRequest();
             QUEUE.addLast(new PendingBake(bake,
                     () -> startBake(app, request, volume, file, quality, layout, blendSeams, bakeDirect,
-                            directShadowSize, nanos, bake)));
+                            directShadowSize, radius, samplesPerAxis, nanos, bake)));
             startNextBake();
             refreshBake.run();
         });
@@ -509,7 +524,8 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
 
     private static void startBake(SceneApplication app, SceneRequest request, GiProbeVolume volume, DataObject file,
             GiSceneBaker.Settings quality, GiAdaptiveProbeLayout.Settings layout,
-            boolean blendSeams, boolean bakeDirect, int directShadowSize, long nanos, BakeSession bake) {
+            boolean blendSeams, boolean bakeDirect, int directShadowSize, int radius, int samplesPerAxis,
+            long nanos, BakeSession bake) {
         app.enqueue(() -> {
             if (request == null || request != app.getCurrentSceneRequest() || request.getDataObject() != file
                     || !isInScene(request, volume) || bake.isCancelled()) {
@@ -575,7 +591,7 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
                         }
                         if (lightmaps == null && job.step(nanos)) {
                             lightmaps = new com.jme3.gde.core.scene.ProbeLightmapAssets(
-                                    app, request, volume, blendSeams, bakeDirect, directShadowSize);
+                                    app, request, volume, blendSeams, bakeDirect, directShadowSize, radius, samplesPerAxis);
                         }
                         if (bake.isCancelled()) {
                             finish("Cancelled. Save or rebake the probe data as needed.");

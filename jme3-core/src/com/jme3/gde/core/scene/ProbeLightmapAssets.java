@@ -76,6 +76,8 @@ public final class ProbeLightmapAssets implements AutoCloseable {
     private final List<BakedDirectionalShadow> bakedShadows = new ArrayList<>();
     private final List<BakedDirectionalShadow> newShadows = new ArrayList<>();
     private final boolean bakeDirect;
+    private final int shadowRadius;
+    private final int shadowSamplesPerAxis;
     private String directNote;
     private boolean committed;
     private final long budget;
@@ -115,6 +117,14 @@ public final class ProbeLightmapAssets implements AutoCloseable {
      */
     public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume,
             boolean blendSeams, boolean bakeDirect, int directShadowSize) {
+        this(app, scene, volume, blendSeams, bakeDirect, directShadowSize, 0, 3);
+    }
+
+    /** Queues the submitted shadow filter for all directional UV2 bands in this bake. */
+    public ProbeLightmapAssets(SceneApplication app, SceneRequest scene, GiProbeVolume volume,
+            boolean blendSeams, boolean bakeDirect, int directShadowSize, int shadowRadius, int shadowSamplesPerAxis) {
+        this.shadowRadius = shadowRadius;
+        this.shadowSamplesPerAxis = shadowSamplesPerAxis;
         this.app = app;
         this.bakeDirect = bakeDirect;
         this.blendSeams = blendSeams;
@@ -217,7 +227,7 @@ public final class ProbeLightmapAssets implements AutoCloseable {
         try {
             for (BakedDirectionalShadow shadow : applied) {
                 bands.add(ProbeLightmapBaker.bakeDirect(app.getRenderManager(), scene.getManager(),
-                        proxy, shadow, resolution, resolution));
+                        proxy, shadow, resolution, resolution, shadowRadius, shadowSamplesPerAxis));
             }
             return ProbeLightmapAsset.withDirect(indirect, true, bands, applied);
         } catch (RuntimeException failure) {

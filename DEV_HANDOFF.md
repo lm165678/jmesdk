@@ -1,3 +1,8 @@
+## 2026-11-26 direct Lightmap soft shadow controls
+
+- Pair this SDK change with engine 2bbca552c or its descendants. In Bake & Apply, enable direct lighting and static shadows. Lightmap shadow radius is in shadow-map texels (0..8, default 0). Soft shadow samples per axis is enabled for positive radii (2..8, default 3). Rebuild with the matching engine, rebake and save the scene. Each queued volume keeps the values submitted with its job.
+- Passed the isolated GiInspectorBakeCheck on this host: row alignment, enablement, reopening, volume isolation, save/reload and queued bake checks. The paired engine GPU smoke measured the filter effect. Full SDK installation and the user scene have not been tested.
+
 ## 2026-11-26 GI bake inspector row alignment
 
 - Removed the extra cell that pushed the Lightmap shadow size spinner onto the following row. The rebake hint remains in the seam option tooltip. Verified the 23 source-defined row pairs, including Lightmap shadow size and maximum refinement bricks. Installed SDK UI verification is pending.
