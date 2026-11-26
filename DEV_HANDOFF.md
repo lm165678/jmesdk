@@ -1,3 +1,7 @@
+## 2026-11-26 GI bake inspector row alignment
+
+- Removed the extra cell that pushed the Lightmap shadow size spinner onto the following row. The rebake hint remains in the seam option tooltip. Verified the 23 source-defined row pairs, including Lightmap shadow size and maximum refinement bricks. Installed SDK UI verification is pending.
+
 ## 2026-11-26 paired direct-Lightmap and skin source checkpoint
 
 - Compatible implementation revisions: engine `a8b493ba028e374a700996fa99d86857735b0f00` on dev_fix_lightprobe_issue and SDK `1f9470e16bd8bc91d919fcedd4c7febececc6b4b` on master. Documentation-only commits may follow these revisions.

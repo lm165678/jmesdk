@@ -234,7 +234,6 @@ public final class BakeGiProbeVolumeAction implements ToolAction {
         JCheckBox bakeDirectShadows = new JCheckBox("Bake direct lighting and static shadows", false);
         bakeDirectShadows.setToolTipText("Up to four static directional lights. Dynamic casters still cast and receive.");
         fields.add(bakeDirectShadows);
-        fields.add(new JLabel("Rebake to apply"));
         JSpinner lightmapShadowSize = spinner(fields, "Lightmap shadow map size", 2048, 64, 2048);
         lightmapShadowSize.setToolTipText("Shared static directional depth for baked direct Lightmaps. Default 2048. Independent of probe capture and UV2 texture size.");
         lightmapShadowSize.setEnabled(false);
