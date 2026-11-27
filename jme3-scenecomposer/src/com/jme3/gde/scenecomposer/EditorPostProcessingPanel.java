@@ -12,12 +12,21 @@ import javax.swing.*;
  * 已保存的场景恢复原有选择；不支持 HDR 时自动使用 SDR。
  * 第二步：保存 J3O。游戏加载并挂载场景后，自动应用所选输出。
  * 第三步：Windows 兼容视口选 HDR 时直接预览。选 SDR 或跟随应用设置恢复 SDR 预览。
+ * 第四步：使用 TAA 或 FSR2 时，在 Post processing 设置 Opaque velocity pass。
+ * 默认 Base Pass，选择 Separate Pass 单独绘制不透明物体速度，切回可恢复。
+ * 保存 J3O 会记住两种时间重建方式共用的选择。
  */
 final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.core.scene.SceneListener {
     private final java.util.Map<String, JComponent> inputs = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Double> defaults = new java.util.LinkedHashMap<>();
     private boolean refreshing;
+    private boolean postProcessingSupported = true;
     private boolean upscalingSupported = true;
+    private boolean separateLegacyTaaVelocity;
+    private final JComboBox<String> opaqueVelocityPass = new JComboBox<>(new String[]{
+        EditorMessages.text("PostOpaqueVelocityPassBase"),
+        EditorMessages.text("PostOpaqueVelocityPassSeparate")
+    });
     private final JPanel aaCards = new JPanel(new java.awt.CardLayout()) {
         @Override
         public java.awt.Dimension getPreferredSize() {
@@ -48,6 +57,15 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         gameOutput.setSelectedIndex(DisplayOutput.Sdr.ordinal());
         row(global, "GameDisplayOutput", gameOutput);
         gameOutput.addActionListener(event -> send("GameDisplayOutput", gameOutput.getSelectedIndex()));
+        inputs.put("OpaqueVelocityPass", opaqueVelocityPass);
+        defaults.put("OpaqueVelocityPass", 0d);
+        row(global, "OpaqueVelocityPass", opaqueVelocityPass);
+        opaqueVelocityPass.addActionListener(event -> {
+            if (!refreshing) {
+                separateLegacyTaaVelocity = false;
+                send("OpaqueVelocityPass", opaqueVelocityPass.getSelectedIndex());
+            }
+        });
         stack.add(global);
         JPanel upscaling = section(stack, "Upscaling");
         JComboBox<String> upscaleMode = new JComboBox<>(new String[]{EditorMessages.text("PostAAOff"), "FSR1", "FSR2"});
@@ -130,7 +148,6 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         JPanel taa = new InspectorColumns("scene.postprocessing.TAA");
         aaCards.add(taa, "2");
         number(taa, "TAACurrentWeight", .1, .01, 1, .01);
-        toggle(taa, "TAABaseVelocity", true);
         toggle(taa, "TAATransparentVelocity", true);
         number(taa, "TAAAlphaThreshold", .5, 0, 1, .05);
         number(fxaa, "FXAASubPixelShift", 0.25, 0, 1, 0.01);
@@ -236,6 +253,19 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
         boolean legacy = ((JCheckBox) inputs.get("LegacyPipeline")).isSelected();
         boolean temporalUpscaling = ((JComboBox<?>) inputs.get("Upscaling")).getSelectedIndex() == 2;
         boolean anyUpscaling = ((JComboBox<?>) inputs.get("Upscaling")).getSelectedIndex() != 0;
+        boolean enabled = ((JCheckBox) inputs.get("Enabled")).isSelected();
+        opaqueVelocityPass.setEnabled(postProcessingSupported && enabled && !legacy
+                && (temporalUpscaling ? upscalingSupported : aaMode == 2));
+        int legacyPass = temporalUpscaling ? 0 : 1;
+        if (separateLegacyTaaVelocity && opaqueVelocityPass.getSelectedIndex() != legacyPass) {
+            boolean wasRefreshing = refreshing;
+            refreshing = true;
+            try {
+                opaqueVelocityPass.setSelectedIndex(legacyPass);
+            } finally {
+                refreshing = wasRefreshing;
+            }
+        }
         inputs.get("Upscaling").setEnabled(!legacy && upscalingSupported);
         inputs.get("UpscalingScale").setEnabled(!legacy && upscalingSupported && anyUpscaling);
         inputs.get("UpscalingSharpness").setEnabled(!legacy && upscalingSupported && anyUpscaling);
@@ -283,7 +313,10 @@ final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.cor
     }
 
     private void applySettings(java.util.Map<String, Double> values) {
+        postProcessingSupported = values.getOrDefault("PostProcessingSupported", 1d) != 0;
         upscalingSupported = values.getOrDefault("UpscalingSupported", 1d) != 0;
+        separateLegacyTaaVelocity = !values.containsKey("OpaqueVelocityPass")
+                && values.getOrDefault("TAABaseVelocity", 1d) == 0;
         refreshing = true;
         try {
             inputs.forEach((key, input) -> {

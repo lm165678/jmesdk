@@ -9,6 +9,7 @@ import com.jme3.post.WorldSettings.DisplayOutput;
 import com.jme3.post.filters.ColorGradingFilter;
 import com.jme3.post.filters.FXAAFilter;
 import com.jme3.post.filters.TemporalAAFilter;
+import com.jme3.post.filters.UpscalingPass;
 import com.jme3.scene.Geometry;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -30,7 +31,7 @@ public final class PostAntiAliasingSmoke {
         add.setAccessible(true);
         add.invoke(editor, "TAA", new TemporalAAFilter(), false);
         add.invoke(editor, "FXAA", new FXAAFilter(), true);
-        add.invoke(editor, "Upscaling", new com.jme3.post.filters.UpscalingPass(), false);
+        add.invoke(editor, "Upscaling", new UpscalingPass(), false);
         add.invoke(editor, "ToneMap", new ColorGradingFilter(), true);
         Geometry scene = new Geometry("AA settings");
         SceneRequest request = new SceneRequest(editor, scene, null);
@@ -81,13 +82,27 @@ public final class PostAntiAliasingSmoke {
             Geometry restored = BinaryExporter.saveAndLoad(assets, scene);
             WorldSettings settings = restored.getControl(WorldSettings.class);
             FilterPostProcessor copy = settings.createPostProcessor(assets);
-            com.jme3.post.filters.UpscalingPass upscale = copy.getFilter(com.jme3.post.filters.UpscalingPass.class);
+            UpscalingPass upscale = copy.getFilter(UpscalingPass.class);
             if (upscale.isEnabled() != (mode != 0)
+                    || !upscale.isBasePassOutputsVelocity()
                     || Math.abs(upscale.getRenderScale() - .5f) > .00001f
                     || Math.abs(upscale.getSharpness() - .4f) > .00001f
                     || (mode == 2 && !upscale.replacesAntiAliasing())
                     || !copy.getFilter(TemporalAAFilter.class).isEnabled()) {
                 throw new AssertionError("Upscaling configuration or AA preference failed J3O round-trip");
+            }
+        }
+        for (int mode : new int[]{1, 0, 1}) {
+            editor.configure("OpaqueVelocityPass", mode);
+            editor.saveSettings(request);
+            WorldSettings settings = BinaryExporter.saveAndLoad(assets, scene).getControl(WorldSettings.class);
+            FilterPostProcessor copy = settings.createPostProcessor(assets);
+            boolean basePass = mode == 0;
+            if (copy.getFilter(TemporalAAFilter.class).isBasePassOutputsVelocity() != basePass
+                    || copy.getFilter(UpscalingPass.class).isBasePassOutputsVelocity() != basePass
+                    || settings.getEditorOptions().get("OpaqueVelocityPass") != mode
+                    || settings.getEditorOptions().containsKey("TAABaseVelocity")) {
+                throw new AssertionError("Shared opaque velocity pass did not round-trip");
             }
         }
         System.out.println("POST_AA_SETTINGS_PASS");
@@ -125,6 +140,7 @@ public final class PostAntiAliasingSmoke {
             field.setAccessible(true);
             Map<String, JComponent> inputs = (Map<String, JComponent>) field.get(panel);
             JCheckBox film = (JCheckBox) inputs.get("FilmLutTonemap");
+            JComboBox<?> opaqueVelocityPass = (JComboBox<?>) inputs.get("OpaqueVelocityPass");
             JComboBox<?> output = (JComboBox<?>) inputs.get("GameDisplayOutput");
             if (output.getSelectedIndex() != DisplayOutput.Sdr.ordinal()) {
                 throw new AssertionError("The output selector must start at SDR");
@@ -133,16 +149,39 @@ public final class PostAntiAliasingSmoke {
             apply.setAccessible(true);
             apply.invoke(panel, Map.of());
             if (!film.isEnabled() || film.isSelected() || inputs.get("FilmSlope").isEnabled()
-                    || output.getSelectedIndex() != DisplayOutput.Sdr.ordinal()) {
-                throw new AssertionError("The default Film and output controls have the wrong state");
+                    || output.getSelectedIndex() != DisplayOutput.Sdr.ordinal()
+                    || opaqueVelocityPass.isEnabled() || opaqueVelocityPass.getSelectedIndex() != 0) {
+                throw new AssertionError("The default Film, output and velocity controls have the wrong state");
             }
             apply.invoke(panel, Map.of("FilmLutTonemap", 1d, "GameDisplayOutput", 2d));
             if (!film.isEnabled() || !film.isSelected() || !inputs.get("FilmSlope").isEnabled()
                     || inputs.get("FilmicCurve").isEnabled() || output.getSelectedIndex() != 2) {
                 throw new AssertionError("Restored film LUT and output controls have the wrong state");
             }
+            apply.invoke(panel, Map.of("AntiAliasing", 2d, "TAABaseVelocity", 0d));
+            verifyVelocityControl(opaqueVelocityPass, true, 1);
+            apply.invoke(panel, Map.of("Upscaling", 2d, "TAABaseVelocity", 0d));
+            verifyVelocityControl(opaqueVelocityPass, true, 0);
+            apply.invoke(panel, Map.of("Upscaling", 2d, "OpaqueVelocityPass", 1d));
+            verifyVelocityControl(opaqueVelocityPass, true, 1);
+            apply.invoke(panel, Map.of("Upscaling", 2d, "OpaqueVelocityPass", 1d, "UpscalingSupported", 0d));
+            verifyVelocityControl(opaqueVelocityPass, false, 1);
+            apply.invoke(panel, Map.of("AntiAliasing", 2d, "OpaqueVelocityPass", 1d, "LegacyPipeline", 1d));
+            verifyVelocityControl(opaqueVelocityPass, false, 1);
+            apply.invoke(panel, Map.of("AntiAliasing", 2d, "OpaqueVelocityPass", 1d, "Enabled", 0d));
+            verifyVelocityControl(opaqueVelocityPass, false, 1);
+            apply.invoke(panel, Map.of("AntiAliasing", 2d, "OpaqueVelocityPass", 1d, "PostProcessingSupported", 0d));
+            verifyVelocityControl(opaqueVelocityPass, false, 1);
+            apply.invoke(panel, Map.of("AntiAliasing", 2d, "Upscaling", 1d, "OpaqueVelocityPass", 1d));
+            verifyVelocityControl(opaqueVelocityPass, true, 1);
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError(exception);
+        }
+    }
+
+    private static void verifyVelocityControl(JComboBox<?> control, boolean enabled, int selection) {
+        if (control.isEnabled() != enabled || control.getSelectedIndex() != selection) {
+            throw new AssertionError("The opaque velocity selector has the wrong state");
         }
     }
 }

@@ -1,3 +1,9 @@
+## 2026-11-27 opaque motion-vector pass for TAA and FSR2
+
+- SceneComposer Post processing now exposes Opaque velocity pass alongside the global controls. Base Pass is the default; Separate Pass draws opaque motion separately. The selector is available with TAA or supported FSR2 and respects the global HDR/FPP and legacy-reference switches. It writes the same preference to both filters and saves it with the scene's WorldSettings.
+- Existing scenes without a shared choice keep their old TAA preference and the former FSR2 Base Pass behavior. The selector reflects the active temporal mode until the first shared edit. Other TAA controls stay in the Anti-aliasing section. Use engine implementation `4907ce1c5a5d8ca44990da4f0c7c39b437086b04` on `dev_sky_fog_sytem`, which exposes the FSR2 velocity-pass setting.
+- Targeted JDK 25 compilation and isolated PostAntiAliasingSmoke passed for shared and legacy settings, J3O round-trip and Swing selector states. Log in the engine checkout at build/sdk-opaque-velocity-check/smoke.log. No SDK build, export, install or launch.
+
 ## 2026-11-27 paired engine and SDK revisions
 
 - SDK implementation `bd1d544b8e1d7d6f3fab16a7b06325bde3170668` on `master` pairs with engine implementation `e5de03810df9a059d5c9e9b109259df2a5325fd9` on `dev_sky_fog_sytem`. Use the matching engine export for both the SDK and game libraries.
