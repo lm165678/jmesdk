@@ -43,6 +43,7 @@ public final class TransformGizmoSmoke {
         try {
             verifyDrag();
             verifyRotationDrag();
+            verifySkySelection();
             verifyAwt();
             System.out.println("TRANSFORM_GIZMO_PASS");
             System.exit(0);
@@ -197,6 +198,37 @@ public final class TransformGizmoSmoke {
                 "Right-click did not cancel the edge-on rotation");
         controller.doKeyPressed(new KeyInputEvent(KeyInput.KEY_E, '\0', false, false));
         System.out.println("GIZMO_EDGE_ON_ROTATION_AWT_PASS");
+    }
+
+    private static void verifySkySelection() {
+        var camera = new Camera(800, 600);
+        camera.setFrustumPerspective(45f, 4f / 3f, .01f, 500f);
+        camera.setLocation(new Vector3f(0f, 0f, 10f));
+        camera.lookAt(Vector3f.ZERO, Vector3f.UNIT_Y);
+        Node scene = new Node("Sky picking fixture");
+        Geometry model = new Geometry("Visible model", new Box(1f, 1f, 1f));
+        Geometry sky = new Geometry("Sky", new Box(2f, 2f, 2f));
+        sky.setQueueBucket(com.jme3.renderer.queue.RenderQueue.Bucket.Sky);
+        sky.setLocalTranslation(0f, 0f, 5f);
+        Node hidden = new Node("Hidden parent");
+        hidden.setCullHint(Spatial.CullHint.Always);
+        Geometry hiddenMesh = new Geometry("Hidden model", new Box(1f, 1f, 1f));
+        hiddenMesh.setCullHint(Spatial.CullHint.Never);
+        hidden.setLocalTranslation(0f, 0f, 3f);
+        hidden.attachChild(hiddenMesh);
+        scene.attachChild(model);
+        scene.attachChild(sky);
+        scene.attachChild(hidden);
+        scene.updateGeometricState();
+        var explorer = new JmeNode(scene, new JmeSpatialChildren(scene));
+        var center = new Vector2f(400f, 300f);
+        check(SceneEditTool.pickWorldSpatial(camera, center, explorer) == model,
+                "Sky or a hidden subtree stole the visible model hit");
+        scene.detachChild(model);
+        scene.updateGeometricState();
+        check(SceneEditTool.pickWorldSpatial(camera, center, explorer) == null,
+                "An empty view selected the background Sky");
+        System.out.println("VIEWPORT_SKIP_SKY_SELECTION_PASS");
     }
 
     private static void verifyAwt() throws Exception {

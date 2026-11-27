@@ -43,7 +43,7 @@ import java.util.Map;
  * 窗口 shader sRGB 默认由 AppSettings 开启，不依赖此处的预览开关。
  * 抗锯齿分组选择 Off / FXAA / TAA；切换保留参数，TAA 从新历史开始。
  * 选择 TAA 或 FSR2 后，在 Post processing 的 Opaque velocity pass 选择速度生成方式。
- * 默认 Base Pass；选择 Separate Pass 重新绘制不透明物体的速度，切回可恢复。
+ * 默认 GBufferPass；选择 Separate Pass 重新绘制不透明物体的速度，切回可恢复。
  * 保存场景后 TAA 和 FSR2 共用新选择；旧场景原有的 TAA 选项保留到首次切换。
  * 第八步：保存场景将 WorldSettings 写入 J3O；游戏加载并挂到 rootNode 后自动恢复。
  * 第九步：Exposure 勾选 Histogram adaptation，ToneMap 勾选 Film / combined LUT。
@@ -156,7 +156,7 @@ final class EditorPostProcessing {
             ((TemporalAAFilter) filters.get("TAA")).setBasePassOutputsVelocity(basePass);
             ((UpscalingPass) filters.get("Upscaling")).setBasePassOutputsVelocity(basePass);
         } else if (processor != null && option.equals("TAABaseVelocity")) {
-            // Old scenes used this only for TAA; FSR2 keeps the former Base Pass default.
+            // Old scenes used this only for TAA; FSR2 keeps the existing integrated opaque velocity default.
             ((TemporalAAFilter) filters.get("TAA")).setBasePassOutputsVelocity(value != 0);
         } else if (processor != null && option.equals("TAATransparentVelocity")) {
             ((TemporalAAFilter) filters.get("TAA")).setTranslucentVelocityEnabled(value != 0);

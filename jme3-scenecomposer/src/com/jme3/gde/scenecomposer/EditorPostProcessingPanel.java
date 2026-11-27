@@ -13,7 +13,7 @@ import javax.swing.*;
  * 第二步：保存 J3O。游戏加载并挂载场景后，自动应用所选输出。
  * 第三步：Windows 兼容视口选 HDR 时直接预览。选 SDR 或跟随应用设置恢复 SDR 预览。
  * 第四步：使用 TAA 或 FSR2 时，在 Post processing 设置 Opaque velocity pass。
- * 默认 Base Pass，选择 Separate Pass 单独绘制不透明物体速度，切回可恢复。
+ * 默认 GBufferPass，选择 Separate Pass 单独绘制不透明物体速度，切回可恢复。
  * 保存 J3O 会记住两种时间重建方式共用的选择。
  */
 final class EditorPostProcessingPanel extends JPanel implements com.jme3.gde.core.scene.SceneListener {

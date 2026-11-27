@@ -307,13 +307,38 @@ public abstract class SceneEditTool {
      * @return the selected spatial, or null if nothing
      */
     public static Spatial pickWorldSpatial(Camera cam, Vector2f mouseLoc, JmeNode jmeRootNode) {
-        Node rootNode = jmeRootNode.getLookup().lookup(Node.class);
-        CollisionResult cr = pick(cam, mouseLoc, rootNode);
-        if (cr != null) {
-            return cr.getGeometry();
-        } else {
-            return null;
+        CollisionResult hit = pickSceneSelection(cam, mouseLoc, jmeRootNode);
+        return hit == null ? null : hit.getGeometry();
+    }
+
+    /**
+     * Returns the nearest selectable surface and its contact point on the render thread.
+     * The sky is rendered as a background independently of its collision mesh. It can
+     * still be selected in Scene Explorer. Hidden subtrees are skipped in the viewport.
+     * <pre>
+     * 第一步：在 3DViewer 左键点击模型，选择会忽略挡在射线前面的天空网格。
+     * 第二步：需要编辑天空时，在 Scene Explorer 中选中 Sky。
+     * </pre>
+     */
+    protected static CollisionResult pickSceneSelection(Camera camera, Vector2f pointer, JmeNode root) {
+        Node scene = root.getLookup().lookup(Node.class);
+        for (CollisionResult hit : pickResults(camera, pointer, scene)) {
+            Geometry geometry = hit.getGeometry();
+            if (geometry.getQueueBucket() != com.jme3.renderer.queue.RenderQueue.Bucket.Sky
+                    && !isHiddenForSelection(geometry)) {
+                return hit;
+            }
         }
+        return null;
+    }
+
+    private static boolean isHiddenForSelection(Spatial spatial) {
+        for (Spatial ancestor = spatial; ancestor != null; ancestor = ancestor.getParent()) {
+            if (ancestor.getLocalCullHint() == Spatial.CullHint.Always) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -486,10 +511,6 @@ public abstract class SceneEditTool {
             }
         }
         return null;
-    }
-
-    private static CollisionResult pick(Camera cam, Vector2f mouseLoc, Node node) {
-        return pickResults(cam, mouseLoc, node).getClosestCollision();
     }
 
     private static CollisionResults pickResults(Camera cam, Vector2f mouseLoc, Node node) {

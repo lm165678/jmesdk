@@ -1,8 +1,8 @@
 ## 2026-11-27 opaque motion-vector pass for TAA and FSR2
 
-- SceneComposer Post processing now exposes Opaque velocity pass alongside the global controls. Base Pass is the default; Separate Pass draws opaque motion separately. The selector is available with TAA or supported FSR2 and respects the global HDR/FPP and legacy-reference switches. It writes the same preference to both filters and saves it with the scene's WorldSettings.
-- Existing scenes without a shared choice keep their old TAA preference and the former FSR2 Base Pass behavior. The selector reflects the active temporal mode until the first shared edit. Other TAA controls stay in the Anti-aliasing section. Use engine implementation `4907ce1c5a5d8ca44990da4f0c7c39b437086b04` on `dev_sky_fog_sytem`, which exposes the FSR2 velocity-pass setting.
-- Targeted JDK 25 compilation and isolated PostAntiAliasingSmoke passed for shared and legacy settings, J3O round-trip and Swing selector states. Log in the engine checkout at build/sdk-opaque-velocity-check/smoke.log. No SDK build, export, install or launch.
+- SceneComposer Post processing now exposes Opaque velocity pass alongside the global controls. GBufferPass is the default. Separate Pass draws opaque motion separately. In JME discussions, the user also uses BasePass to mean GBufferPass. The selector is available with TAA or supported FSR2 and respects the global HDR/FPP and legacy-reference switches. It writes the same preference to both filters and saves it with the scene's WorldSettings.
+- Existing scenes without a shared choice keep their old TAA preference and the original FSR2 integrated opaque velocity behavior. The selector reflects the active temporal mode until the first shared edit. Other TAA controls stay in the Anti-aliasing section. Use engine implementation `4907ce1c5a5d8ca44990da4f0c7c39b437086b04` on `dev_sky_fog_sytem`, which exposes the FSR2 velocity-pass setting.
+- Targeted JDK 25 compilation and isolated PostAntiAliasingSmoke passed for shared and legacy settings, J3O round-trip and Swing selector states. Log in the engine checkout at build/sdk-opaque-velocity-check/smoke.log. No SDK build, export, install or launch. The subsequent GBufferPass wording update was verified against the bundle and selector wiring.
 
 ## 2026-11-27 paired engine and SDK revisions
 
@@ -1210,3 +1210,18 @@ $env:JAVA_HOME='C:/path/to/jdk-25'
 - [ ] 开发植被画刷，支持选择植被资产、刷入和擦除、密度与坡度约束、随机旋转与缩放。验收成组撤销/重做、J3O 重载和大面积实例化预览。
 - [ ] 开发 Scene Explorer 和 3DViewer 多选后的右键 Merge → Instance，沿用本文已有 Merge 待办。按兼容网格和材质分组，保留世界变换，支持整组撤销/重做及 J3O 重载。
 - 后续继续 SkyLight、天空大气或体积雾时，验收全部前置功能后再提醒这三项。当前仅登记计划。
+
+## 2026-11-27 Default new J3M material
+
+- SDK New File / Material / Empty Material file now creates a J3M that references Common/MatDefs/Light/PBRLighting.j3md. The template does not set material parameter overrides.
+- Isolated JDK 25 loaded the registered template with J3MLoader and confirmed the PBRLighting asset key on SDK 88dcc1a8 plus this edit with engine fc130fc5f. No SDK build or launch.
+
+## 2026-11-27 Sky meshes no longer intercept viewport selection
+
+- The recording showed a click on a visible sphere selecting Sky. SceneComposer now ignores the Sky bucket and explicitly hidden subtrees during viewport picking. Object selection and orbit pivot use the same eligible hit. Select Sky through Scene Explorer to edit it.
+- Isolated JDK 25 TransformGizmoSmoke passed the collision fixture (visible model behind sky and hidden geometry, and sky-only empty click) and existing native AWT/OpenGL interaction regressions. Full SDK was not built or launched and the original scene was not modified.
+
+## 2026-11-27 paired local source checkpoint
+
+- Use engine implementation 00aec2ab7 on dev_sky_fog_sytem with this SDK checkpoint on master. It includes the shared opaque velocity pass and the SkyLight/LightProbe mip layout fix. Later engine documentation commits describe validation and the sky/probe comparison.
+- This SDK checkpoint includes GBufferPass wording, PBRLighting for new J3M assets and viewport selection that skips sky and hidden meshes. Targeted validations are recorded in the corresponding entries. SDK builds remain user-owned.

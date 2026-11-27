@@ -104,11 +104,12 @@ public class SelectTool extends SceneEditTool {
     }
 
     private boolean pickSelection(Vector2f point, JmeNode root) {
-        Spatial hit = pickWorldSpatial(camera, point, root);
-        if (hit == null) {
+        var collision = pickSceneSelection(camera, point, root);
+        if (collision == null) {
             toolController.recordOrbitPick(null, null);
             return true;
         }
+        Spatial hit = collision.getGeometry();
         if (!toolController.isSelectTerrain() && isTerrain(hit)) {
             return false;
         }
@@ -116,7 +117,7 @@ public class SelectTool extends SceneEditTool {
                 : findModelNodeParent(hit, root.getLookup().lookup(Spatial.class));
         if (target != null) {
             Spatial selected = findAssetLinkNode(target);
-            toolController.recordOrbitPick(selected, pickWorldLocation(camera, point, root));
+            toolController.recordOrbitPick(selected, collision.getContactPoint());
             boolean additive = toolController.isAdditiveSelection();
             java.awt.EventQueue.invokeLater(() -> publishSelection(root, selected, additive));
         }
